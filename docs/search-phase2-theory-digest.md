@@ -2,12 +2,19 @@
 
 **Status:** analysed, **not built**. This note is the design
 [search-and-embeddings-roadmap.md](search-and-embeddings-roadmap.md) §Phase 2
-describes in thirty-one lines and does not specify. Its conclusions are that the
-phase is really **two** phases with very different readiness, that the equational
-half has a **prerequisite nobody has designed** — a system cannot say which of its
-productions means equality — and that the definitional half is nearly buildable
-but is blocked on a smaller thing the roadmap does not mention: the definitional
-rewrite relation is acyclic but **not confluent**.
+describes in thirty-one lines and does not specify. Three conclusions, in
+descending order of how much they change the plan:
+
+1. The phase is really **two** phases with very different readiness, and the
+   equational one has a **prerequisite nobody has designed** — a system cannot say
+   which of its productions means equality.
+2. **Congruence is not free.** A congruence closure merges `f(a)` with `f(b)`
+   whenever `a = b`, by construction; in an arbitrary declared logic that step is a
+   *theorem schema*, not a given, and set.mm proves it one position at a time. An
+   e-graph would assume for free what a corpus spends its bulk establishing.
+3. The definitional half is nearly buildable but is blocked on a smaller thing the
+   roadmap does not mention: the definitional rewrite relation is acyclic but
+   **not confluent**.
 
 Phase 1 shipped ([search-phase1-fingerprint.md](search-phase1-fingerprint.md)).
 This is what comes next, and what has to be settled first.
@@ -125,6 +132,92 @@ which property, and what it licenses:
 **Until this is designed, the equational half cannot start.** That is the single
 most important finding in this note.
 
+## What rolls in automatically, and what does not
+
+A natural question once the declaration exists: as a library grows and proves
+associativity, commutativity, reflexivity, transitivity for its operators, do those
+facts fold into the digest on their own, or does each need handling? They separate
+into three kinds, and only the first is digest material.
+
+**Equations between terms — automatic, with no per-property code.** Commutativity,
+associativity, idempotence, unit laws, distributivity: each is a theorem whose two
+sides are terms related by the declared equality. The canonicaliser never learns
+the word "commutative"; it ingests `a + b = b + a` exactly as it ingests any other
+proven equation. So the answer for this whole family is that recognising an
+equation is the only step that needs designing, and it is the declaration above.
+Naming comm and assoc *specifically* is worth doing — both are cheap to detect by
+matching `f(x, y) = f(y, x)` and `f(f(x, y), z) = f(x, f(y, z))` over distinct
+metavariables — but the reason is **performance, not semantics**: AC is the
+pathological case for e-class growth, and knowing an equation is AC lets a
+saturating structure use AC-matching instead of exploding. Nothing about
+correctness turns on it.
+
+**Reflexivity and transitivity of other relations — not digest material at all.**
+This is a category error, and it is worth writing down so nobody attempts it. `x ≤
+x` is a *theorem*, not an equation: it does not assert that two terms are equal, so
+there is nothing to merge and no class to form. Transitivity is an implication, not
+an equation. These are valuable — for proof search and for ranking a retrieved
+candidate — but they belong to Phase 4, and a canonical form is the wrong place to
+look for them. The distinction is that an equation relates two *terms*, while
+reflexivity and transitivity are properties of a *relation*; only the first
+partitions the term space.
+
+**Reflexivity, symmetry and transitivity of the declared equality itself — neither
+of the above.** They are not content to roll in; they are the preconditions that
+make the declaration meaningful. Merging on a relation that is not an equivalence
+is unsound before any term is hashed. Which raises the question of what evidence
+the engine should want for them, and that is the next section, because the same
+question has a much sharper form.
+
+## The second prerequisite: congruence is not free
+
+Everything above assumes that knowing `a = b` licenses replacing `a` by `b`
+*anywhere*. That is the congruence property, and a congruence closure provides it
+by construction — merging `f(a)` with `f(b)` the moment `a` and `b` land in one
+class is not an extra feature of the algorithm, it is the algorithm.
+
+In a system whose logic is declared rather than built in, that step is a **theorem
+schema, not a given**. The repo has already measured what it costs to have it
+spelled out: [metamath-import-roadmap.md](metamath-import-roadmap.md) lists among
+the reasons a set.mm proof is long —
+
+> **Congruence spelled out** — Rewriting inside a term needs a position-specific
+> lemma: `oveq1d`, `oveq2d`, `fveq2d`, `breq2`, `eleq1d`, plus `eqtr*` glue
+
+So set.mm establishes congruence one operator and one position at a time, by hand,
+and the glue is a visible fraction of the corpus. An e-graph dropped on top of that
+library would assume for free precisely what the library spends its bulk proving —
+and, worse, would assume it for operators nobody has proved it for. Terms would
+merge that the system cannot prove equal. That is an unsound digest feeding dedup,
+which is the consequence the next section argues is the expensive one.
+
+Three ways to supply congruence, and this is a decision:
+
+1. **Trust it.** One global declaration that the equality is a congruence, in the
+   `denotes_constant` idiom. Cheap, and wrong invisibly.
+2. **Discharge it per operator, as a proof obligation.** The repo already has this
+   machinery and this idiom: `SystemRelationObligationRow` records one obligation
+   per source primitive, discharged either by a target primitive or by *a theorem
+   the target has proved*, with a `status` saying whether it has been. Declaring
+   congruence for `f` would incur an obligation discharged by citing `f`'s
+   congruence lemma. Nothing new is invented; an existing pattern gains a second
+   caller.
+3. **Restrict propagation to operators that have one.** The closure pushes equality
+   through a constructor only where the library supplies the lemma, and declines
+   elsewhere.
+
+**Prefer 3, mechanised by 2.** It fails closed, it needs no global act of trust,
+and it has a property worth stating plainly: the theory then **grows as the library
+proves congruence lemmas**. Retrieval merges exactly what the corpus has earned and
+never more. That is the "evolving" character the roadmap wants from Phase 3's
+embedding, arriving here instead — and arriving as a soundness argument rather than
+an aspiration.
+
+Note what this does *not* touch. An unfold is licensed by the kernel's own
+definitional step at a specific position, not by congruence propagation, so the
+**definitional half needs none of this**. That is a third independent reason the
+split below is the right shape.
+
 ## Not confluent: the definitional half's real blocker
 
 The roadmap treats definitional normalisation as straightforward. It nearly is,
@@ -166,8 +259,29 @@ Three ways out, and the choice is a decision rather than a consequence:
    worth stating, because the key is then an e-class id and e-class ids are not
    stable across rebuilds unless something makes them so.
 
-Option 3 is probably right and has the largest unstated consequence, which is the
-next section.
+Option 3 is probably right and has two unstated consequences: the extraction
+problem immediately below, and the cost of a false merge two sections down.
+
+## Extraction: a digest needs a representative
+
+"Normalise to a canonical class representative before hashing" hides a step. A
+congruence closure yields **e-classes**, not terms; turning one into a digest means
+choosing a member, which is *extraction*, and extraction needs a total order or
+cost function that does not fall out of the structure. Nor can it be dodged by
+hashing the class itself: e-class ids are allocation artefacts and are not stable
+across a rebuild, so a digest keyed on one would change when nothing about the
+theory did.
+
+For the AC case — the one that makes extraction sound hard — there is a clean
+answer already in the codebase. An AC-normal form is "the arguments in a canonical
+order", and a canonical order is available for free: **sort by the children's
+existing `digest`.** Those are computed bottom-up over the interned DAG, are
+already stored, and are stable by construction. So AC normalisation needs no term
+order invented for it, and no Knuth-Bendix-style orientation machinery — which is
+the usual reason this looks expensive.
+
+The general case is harder and should be scoped separately; the point here is that
+"then hash it" is not the trivial tail of the sentence it reads as.
 
 ## What a false merge costs, and why the bar went up
 
@@ -257,14 +371,22 @@ commutativity changes the digest of terms already stored. So:
 - *What invalidates.* A new definition, a newly proven equational lemma, or an
   imported theorem changes the equivalence classes. The roadmap discusses re-folding
   for Phase 3's embedding and says nothing about re-hashing stored digests.
-- *What scope.* Recomputing every term in a system on each new equality is the
-  simple answer and is `O(corpus)` per proof; dependency tracking (which classes a
-  new fact touches) is the roadmap's own suggestion for Phase 3 and applies here.
+- *What scope.* Narrower than it first looks, and the existing storage is why. A new
+  definition can only change the digest of terms that **mention its defined form**,
+  and a new equation only terms mentioning that operator — so the question is
+  "which stored terms contain constructor `X`", which the interned DAG answers as a
+  query rather than a scan: `term_children` is the edge table the subgraph sweep
+  already walks downward, and its `child_id` is indexed, so the upward closure
+  invalidation wants is the same table recursed the other way. Incremental
+  invalidation is therefore tractable, which matters most for the *common* case —
+  introducing notation is frequent, proving commutativity is rare and has the wider
+  blast radius.
 - *Whether it persists at all.* The alternative is to hold the e-graph in memory per
-  request and never store a theory digest — sound, always current, and probably too
-  slow for the retrieval path, but it should be measured rather than assumed. Phase
-  1's measurements are the precedent: the candidate-set numbers are what justified
-  W7, and an equivalent number should justify this.
+  request and never store a theory digest — sound and always current, but paying
+  saturation on the retrieval path. Given the invalidation point above, storing it
+  now looks the better bet rather than the risky one; either way Phase 1's
+  measurements are the precedent, since the candidate-set numbers are what justified
+  W7 and an equivalent number should justify this.
 
 A stored digest also needs the "which generation" guard Phase 1's fingerprint has
 (`POSITIONS_KEY`, refusing a comparison across a change to the position set). The
@@ -274,20 +396,27 @@ anything.
 
 ## Decisions to take before any code
 
-1. **How a system declares equality.** The blocking one. A declared property on a
-   production, following `denotes_constant`; parameterised by the sort it relates
-   (set.mm needs `wb` *and* `wceq`); defaulted off; validated where the grammar can
-   contradict it. Settle this against the Metamath importer as the first caller,
-   which already holds the knowledge in `EQUIVALENCES` and would stop needing to.
+1. **How a system declares equality, and how congruence is evidenced.** The blocking
+   one, and it is two halves rather than one. The declaration follows
+   `denotes_constant`: a declared property on a production, parameterised by the
+   sort it relates (set.mm needs `wb` *and* `wceq`), defaulted off, validated where
+   the grammar can contradict it. The congruence half is separate and should not be
+   folded into the same tick — prefer per-operator obligations over a global act of
+   trust, per that section. Settle both against the Metamath importer as first
+   caller: it already holds the equality knowledge in `EQUIVALENCES`, and set.mm
+   already contains the congruence lemmas an obligation would cite.
 2. **Fold, refuse, or e-graph** for the shared-defined-form case, per the
    non-confluence section. This decides whether the canonical key is a term or an
    e-class.
-3. **Whether a match must explain itself.** If retrieval returns the definitional
+3. **How a representative is extracted**, given that e-class ids are not stable.
+   Sorting AC arguments by the children's existing `digest` handles the case that
+   looks hardest; the general case needs scoping.
+4. **Whether a match must explain itself.** If retrieval returns the definitional
    bridge, the structure must be proof-producing, which is a stronger requirement
    than hashing and should be chosen up front.
-4. **Conditional definitions.** Carry the proviso into the merge, or exclude
+5. **Conditional definitions.** Carry the proviso into the merge, or exclude
    conditional definitions from normalisation. The safe default is to exclude.
-5. **Whether `theory_digest` is stored at all**, and if so what invalidates it and
+6. **Whether `theory_digest` is stored at all**, and if so what invalidates it and
    what guards a stale one.
 
 ## Recommendation
@@ -295,38 +424,62 @@ anything.
 **Split the phase, and build the definitional half first.**
 
 The two halves are presented as one and are not comparable. The definitional half
-has its input in structured form, its termination argument already proven by the
-conservativity check, its binder canonicalisation already solved by `Bound` and
-`alpha_digest`, a soundness argument available in terms of the kernel's own
-definitional step, and it delivers the roadmap's own motivating example (`df-ss`,
-the `⊆`/`∀` merge that Phase 1's boundary section holds up as the thing syntactic
-search cannot do). Its blockers are two decisions — non-confluence and whether a
-match explains itself — neither of which needs new engine concepts.
+has its input in structured form — a `Definition` **is** an oriented equation in
+the data, so it needs no equality declaration at all — its termination argument
+already proven by the conservativity check, its binder canonicalisation already
+solved by `Bound` and `alpha_digest`, no dependence on congruence (an unfold is
+licensed at a position by the kernel's own definitional step), a soundness argument
+available in those same terms, and it delivers the roadmap's own motivating example
+(`df-ss`, the `⊆`/`∀` merge that Phase 1's boundary section holds up as the thing
+syntactic search cannot do). Its blockers are decisions 2 and 4 — non-confluence
+and whether a match explains itself — neither of which needs a new engine concept.
 
-The equational half has no input at all until a system can declare what equality
-is, no termination without a saturation budget, and a soundness story that rests on
-an unvalidated declaration. It is a phase of its own and its first deliverable is
-decision 1, not code.
+The equational half needs two prerequisites the tree does not have: a way for a
+system to declare what equality is, and evidence that the equality is a congruence
+for the operators being merged through. It also has no termination without a
+saturation budget. It is a phase of its own and its first deliverable is decision 1,
+not code.
 
 Doing them together means the definitional merge — the valuable, defensible,
 nearly-ready piece — waits on an unsolved representation question it does not need.
 
 **What would change this recommendation:** a caller that wants `a + b` and `b + a`
 merged specifically. The set.mm corpus is the obvious one to check, and the check
-is cheap: count the proven theorems whose root is a declared equivalence and whose
-two sides differ only by argument order. If that number is large the equational
-half earns its own priority; if it is small, the definitional half is Phase 2 and
-the rest is Phase 2b. That measurement should be taken **before** decision 1, since
-it is the evidence that decides how much the declaration has to support.
+is cheap — two counts over theorems whose root is a declared equivalence (`wb`,
+`wceq`, which the importer already knows):
+
+- how many have two sides differing only by argument order, which sizes the *demand*
+  for the equational half;
+- how many are **congruence lemmas** — one side an application whose arguments are
+  related by the equality (`oveq1`, `fveq2`, `eleq1` and their kin) — which sizes
+  the *evidence available* to discharge decision 1's second half, and says whether
+  obligation-based congruence would be mostly auto-dischargeable on a real corpus or
+  mostly undischarged.
+
+If the first number is large the equational half earns its own priority; if it is
+small, the definitional half is Phase 2 and the rest is Phase 2b. Take both
+measurements **before** decision 1: together they say how much the declaration has
+to support and whether the obligation route is viable rather than merely principled.
 
 ## What I could not settle
 
-The non-confluence finding came from reading the non-circularity check's docstring,
-not from reasoning about the design — the same lesson
+Both of the findings that changed the plan arrived the same way, and neither came
+from reasoning about the design. Non-confluence came from reading the
+non-circularity check's docstring. Congruence came from being asked a question this
+note had not thought to ask — *what happens when a library later proves
+associativity, or reflexivity, for an operator?* — which is how the category split
+above got written and how the assumption underneath congruence closure became
+visible at all. That is the same lesson
 [scope-aware-definitional-steps.md](scope-aware-definitional-steps.md) records
-about `IsAtom`, that the gaps are found by enumerating cases rather than by
-reasoning from the design. One pass of enumeration is not enough, and this is one
-pass.
+about `IsAtom`: the gaps are found by enumerating cases rather than by reasoning
+from the design. Two passes have now each found something, which is evidence that a
+third would too, not that the enumeration is complete.
+
+The enumeration that would most likely repay a third pass is over the rest of the
+**algebraic vocabulary** an author might expect to matter — idempotence, units,
+absorption, distributivity, involution. Each is an equation and so should fall out
+automatically by the section above, but "should fall out" is exactly the claim the
+congruence finding punctured once already.
 
 The specific enumeration still owed is over the **side-condition vocabulary**,
 which that note shows is where definitional transparency goes wrong. `Occurs`
