@@ -64,9 +64,16 @@ def psycopg_url(raw: str | URL) -> URL:
     and ``postgres://`` — the scheme Neon, Vercel and Heroku hand out — resolves to
     no dialect at all. Either dies inside `create_engine`.
 
-    Query params are deliberately left as they came, which is the whole
-    difference from :func:`asyncpg_url`: psycopg speaks libpq, so ``sslmode`` and
-    ``channel_binding`` already mean there exactly what they mean in the URL.
+    A libpq param survives untouched — psycopg *is* libpq, so ``sslmode`` and
+    ``channel_binding`` already mean there what they mean in the URL. What does
+    not survive untouched is asyncpg's own spelling: ``ssl`` is the keyword
+    :func:`asyncpg_url` translates ``sslmode`` *into*, and libpq has no such
+    option, so a URL that has already been through that translation — or one an
+    operator wrote as ``postgresql+asyncpg://…?ssl=require`` because that is what
+    the app takes — would otherwise reach psycopg as
+    ``invalid connection option "ssl"``. Translate it back, so the two functions
+    are inverses over the URLs either of them accepts rather than only over the
+    ones a platform happens to hand out (raised in review).
 
     Here rather than in a script because this and `asyncpg_url` are two halves of
     one fact about platform URLs, and a copy kept somewhere else is a copy that
@@ -74,7 +81,12 @@ def psycopg_url(raw: str | URL) -> URL:
     end to end, and driving it through the async engine costs it the event loop
     (see `scripts/import_metamath.py`).
     """
-    return make_url(raw).set(drivername="postgresql+psycopg")
+    url = make_url(raw).set(drivername="postgresql+psycopg")
+    query = dict(url.query)
+    ssl = query.pop("ssl", None)
+    if ssl is not None and "sslmode" not in query:
+        query["sslmode"] = ssl
+    return url.set(query=query)
 
 
 def _configured_url() -> str:
@@ -142,5 +154,23 @@ def get_sync_engine() -> Engine:
     Deliberately not the pool the async engine uses: `NullPool` is there because
     a serverless function should hold no idle connections, and a batch job that
     runs for an hour on one session wants the ordinary pool.
+
+    **psycopg is a dev-group dependency, not a runtime one**, and stays that way:
+    a deployment runs the API and never a batch script, so shipping it a second
+    Postgres driver would put a binary wheel in the function bundle to be used by
+    nothing. What that costs is a legible failure when someone does reach here
+    without it — SQLAlchemy's own is a bare `ModuleNotFoundError: psycopg` from
+    inside `create_engine`, which says nothing about which install is short
+    (raised in review).
     """
-    return create_engine(psycopg_url(_configured_url()))
+    try:
+        return create_engine(psycopg_url(_configured_url()))
+    except ModuleNotFoundError as missing:  # pragma: no cover - install-shaped
+        if missing.name != "psycopg":
+            raise
+        raise RuntimeError(
+            "A synchronous engine needs psycopg, which this project declares in "
+            "its dev dependency group rather than at runtime (the API only ever "
+            "uses asyncpg). Run `uv sync` from a checkout, or install "
+            "`psycopg[binary]`."
+        ) from missing
