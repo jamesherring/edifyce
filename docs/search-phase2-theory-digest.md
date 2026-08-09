@@ -36,16 +36,23 @@ they moved the recommendation rather than confirming it. In short:
   e-graph and undercuts "build the definitional half first".
 - **Congruence is 99.84% harvestable**, so decision 1's hard half is derivation
   rather than declaration.
-- A **definition-aware compositional fold works**: exact invariance on 147
-  definitions, α-invariant against the corpus's own ground truth, nesting free by
-  compositionality, discrimination intact, linear cost. It is the roadmap's Phase 3
-  mechanism serving Phase 2's purpose.
+- A **definition-aware compositional fold works** as a construction — exact
+  invariance on 147 definitions, α-invariant, nesting free, discrimination intact —
+  **but loses to the unranked Phase 1 bucket at citation search** (E8). Cosine
+  similarity ranks *general* schemas last, and generality is what makes a citation
+  useful: similarity is not subsumption. It belongs to dedup and related-lemma
+  browsing, not goal-directed retrieval.
+- **Definitional reach is worth 40% more matches** (E8), so the phase's premise
+  holds — collected by **bounded expansion** over the shipped index, which is exact,
+  costs 2.5 ms, and keeps the subsumption semantics.
 - The intended use is **retrieval, not dedup**, which removes the need for a stored
   canonical digest and the three decisions that come with it.
 
-The revised recommendation is in "Recommendation": build the fold, then **forward
-search** — the dual question, *where could this result be used*, whose substrate
-(15,900 antecedent and hypothesis terms) already exists unindexed.
+The recommendation was revised twice by measurement — first away from the
+definitional half (E3), then away from the fold (E8). What it lands on is in
+"Recommendation": extend Phase 1 with bounded definitional expansion, then build
+**forward search** — the dual question, *where could this result be used*, whose
+substrate (15,900 antecedent and hypothesis terms) already exists unindexed.
 
 Phase 1 shipped ([search-phase1-fingerprint.md](search-phase1-fingerprint.md)).
 This is what comes next.
@@ -676,7 +683,70 @@ So a proved result finds the 123 theorems whose antecedent it discharges exactly
 by one indexed lookup on machinery that already shipped. See "Forward search"
 below.
 
-### What the seven settle
+### E8. Retrieval quality against a matching oracle — and the fold fails it
+
+The oracle has to be chosen carefully. A *syntactic* match oracle is the wrong
+ground truth: Phase 1's filter achieves 100% recall against it by construction, and
+the definitional matches this phase exists to find are not in it at all. So the
+oracle is **match after full definitional unfolding**:
+
+```
+GT(goal) = { thm : match(unfold*(thm.conclusion), unfold*(goal)) }
+```
+
+matching one-directionally, as a citation is checked — the theorem's conclusion is
+the schema whose variables bind, the goal is rigid. 60 sampled goals against all
+2,656 conclusions.
+
+**First, the premise is confirmed.** Definitional unfolding adds **40% more
+matches** (1,883 syntactic → 2,631 up-to-definitions). The value this phase is
+chasing is real.
+
+**Second, the fold does not deliver it.** Precision at k — of what you would put in
+front of a model, how much actually applies:
+
+| | embedding-ranked | Phase 1 head bucket, unranked | random |
+|---|---|---|---|
+| @10 | 38.7% | **46.3%** | 6.2% |
+| @25 | 35.9% | **40.3%** | 7.0% |
+
+And ranking *within* the Phase 1 bucket — the only way the fold could earn a place
+in goal-directed retrieval — does not help either:
+
+| | embedding-ranked | unranked |
+|---|---|---|
+| precision@5 | 43.1% | 39.0% |
+| precision@10 | 39.2% | **46.3%** |
+| rank of first applicable theorem | median 0, **mean 42.0** | median 4, **mean 2.5** |
+
+**Third, the diagnostic says why, and it is structural rather than a tuning
+problem:**
+
+```
+least general quartile (few variables / size):   mean rank    509
+most  general quartile (many variables / size):  mean rank  1,555
+```
+
+**Generality pushes a true match down the ranking threefold — and generality is
+exactly what makes a citation useful.** A schema like `( φ → ψ )` applies to a huge
+number of goals precisely because its metavariables stand for anything; in the fold
+those metavariables contribute *random vectors*, so the schema is structurally
+dissimilar to any particular goal. The embedding is bimodal: rank 0 when a
+near-identical statement exists, buried when the useful citation is a general
+schema.
+
+The root cause in one line: **similarity is not subsumption.** Goal-directed
+retrieval asks which theorem's conclusion *generalises* my goal — an asymmetric,
+order-theoretic relation. Cosine distance is symmetric and measures likeness. The
+fingerprint gets this right by construction (a variable at a sampled position is
+compatible with *everything*), which is why it beats the fold on its own task.
+
+If an embedding is ever wanted for subsumption, the fix is not a better combiner
+but a different geometry: **asymmetric embeddings** — order, box, or cone
+embeddings — are designed for entailment hierarchies. Cosine is the wrong tool and
+no amount of combiner tuning repairs it.
+
+### What the eight settle
 
 - **Congruence is harvestable** (E2), so decision 1's second half is derivation, not
   declaration, and obligations demote to a 0.12% formality.
@@ -688,7 +758,13 @@ below.
 - **Bounded expansion is affordable** (E4), so the exponential objection does not
   apply at this index depth — but it lands in crowded buckets.
 - **The embedding delivers exactly the invariance hypothesised** (E5/E6), is
-  α-invariant, handles nesting for free, and keeps discrimination.
+  α-invariant, handles nesting for free, and keeps discrimination — **and is still
+  the wrong mechanism for goal-directed retrieval** (E8), because similarity is not
+  subsumption. It belongs to the similarity tasks: dedup, "have we got this",
+  related-lemma browsing.
+- **Definitional reach is worth 40% more matches** (E8), so the phase's premise
+  holds; what changes is which mechanism collects it — bounded expansion, which
+  preserves subsumption semantics, rather than the fold, which inverts them.
 - **The equational half's demand is thin on set.mm** (E1) — 57 conclusion pairs —
   though that is corpus-specific and mathlib would very likely differ.
 ## The shape the measurements suggest: retrieval, not a stored digest
@@ -709,14 +785,17 @@ extraction has nothing to extract for, nothing new is stored, and nothing goes
 stale when someone proves something. It also suits a corpus under constant
 LLM-driven growth, where a stored digest would be re-hashing continuously.
 
-Two mechanisms serve it, and E4–E6 measured both:
+Two mechanisms could serve it, and E4–E6 measured both — then **E8 settled which**:
 
-- **The definition-aware fold (E5/E6)** — linear, α-invariant, nesting-free,
-  returns a *ranked* neighbourhood, and therefore does not inherit the
-  crowded-bucket skew that expansion does (E4). Approximate.
-- **Bounded query expansion (E4)** — exact, cheap at this index depth, and the
-  natural home for general equations the fold cannot absorb. Inherits the bucket
-  skew, so it wants a size threshold.
+- **Bounded query expansion (E4)** — exact, 2.5 ms at mean branching, and it keeps
+  the subsumption semantics goal-directed retrieval depends on, because a variable
+  at a sampled position is fingerprint-compatible with everything. Inherits the
+  crowded-bucket skew, so it wants a size threshold. **This is the one to build.**
+- **The definition-aware fold (E5/E6)** — linear, α-invariant, nesting-free, exact
+  invariance on 147 definitions. But E8 measured it against a matching oracle and it
+  **loses to the unranked Phase 1 bucket** (39.2% vs 46.3% precision@10), because
+  cosine similarity ranks *general* schemas last and generality is what makes a
+  citation useful. It belongs to similarity tasks, not citation search.
 
 ## General equations: the ceiling, and the ways round it
 
@@ -892,29 +971,39 @@ equational half is a Phase 3 idea that should be argued for on its own evidence.
 
 ## Recommendation
 
-**Build the definition-aware fold as the retrieval mechanism, and forward search
-beside it.** The seven experiments moved this from the split the note originally
-proposed. What changed:
+**Extend Phase 1 with bounded definitional expansion, and build forward search
+beside it. Do not use the embedding for citation search.**
 
-1. **The definitional half has no `Definition` rows to work on** (E3) — the table is
-   empty deployment-wide, and the corpus's definitional content is equational
-   axioms. The clean "definitions are already structured, already terminating"
-   story holds for *authored* systems, of which there are currently none.
-2. **The fold does the job the split was reaching for** (E5/E6), measured: exact
-   invariance on 147 definitions, α-invariant against the corpus's own ground
-   truth, nesting free by compositionality, discrimination intact, linear cost.
-3. **Retrieval, not dedup, is the use** — so a stored canonical digest, and the
-   three decisions it drags in, are avoidable.
+This is the second revision, and the second one the data forced. The note first
+recommended building the definitional half; E3 undercut that (no `Definition` rows
+exist). It then recommended the definition-aware fold as the retrieval mechanism;
+**E8 refutes that too** — the fold loses to the unranked Phase 1 bucket on the very
+task it was proposed for. What survives:
+
+1. **The premise holds.** Definitional reach is worth **40% more matches** (E8), so
+   there is real value here and it is worth collecting.
+2. **Bounded expansion collects it and the fold does not** (E4/E8). Expansion is
+   exact, costs 2.5 ms at mean branching, and preserves the subsumption semantics
+   citation search depends on. The fold inverts them: cosine ranks general schemas
+   last, and general schemas are the useful citations.
+3. **The fold is still worth having — for other work.** Its measured invariance
+   (E5/E6) is real: exact on 147 definitions, α-invariant, nesting free. That makes
+   it right for **dedup, "have we got this", clustering, related-lemma browsing** —
+   symmetric similarity tasks — and wrong for asymmetric subsumption.
 4. **Forward search is cheap and unbuilt** (E7): 15,900 indexable input positions
    already carry terms, and the α-key alone finds 123 exact consumers for a sample
-   result. For an agent-driven workflow this is plausibly the highest value per
-   unit of work anywhere in the phase.
+   result. For an agent-driven workflow this is plausibly the highest value per unit
+   of work anywhere in the phase.
+5. **Retrieval, not dedup, is the use** — so a stored canonical digest, and the
+   three decisions it drags in, remain avoidable.
 
-Order: the fold (with cyclic heads opaque and a discrimination test from day one),
-then forward search over antecedents and hypotheses, then bounded expansion where
-exactness is needed, and the harvester (E2) whenever the equational path is taken
-up. The e-graph is settled as the *structure* for that path (decision 2) but is not
-the first thing to build.
+Order: bounded expansion over the Phase 1 index (cyclic heads opaque, bucket-size
+threshold), then forward search over antecedents and hypotheses, then the harvester
+(E2) whenever the equational path is taken up. The e-graph is settled as the
+*structure* for that path (decision 2) but is not the first thing to build. The
+fold is a separate, later feature aimed at similarity, and if it is ever wanted for
+subsumption it needs an asymmetric geometry (order/box embeddings), not a better
+combiner.
 
 The original split argument follows, for the authored-systems case where it still
 holds.
