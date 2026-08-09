@@ -70,7 +70,12 @@ from app.db.notations_mapping import (
 )
 from app.db.retrieval import conclusion_candidates
 from app.db.terms import TermRow
-from app.db.terms_mapping import prefetch_terms, term_digests, walk_subgraph
+from app.db.terms_mapping import (
+    delete_system_terms,
+    prefetch_terms,
+    term_digests,
+    walk_subgraph,
+)
 from app.db.side_conditions import SideConditionRow
 from app.db.side_conditions_mapping import (
     definition_provisos_list,
@@ -1361,6 +1366,13 @@ async def delete_system(
     # reached (found in review — the delete is the one way an edge disappears
     # that the relations router never sees).
     await _invalidate_relation_targets(session, system_id)
+
+    # The term graph goes first, and by hand. Everything else here rides its
+    # `ON DELETE CASCADE` FKs, but the citations *into* `terms` are `NO ACTION` on
+    # purpose — a shared subterm must not vanish from under the rows that name it —
+    # and a cascade runs those checks in no particular order, so the system's own
+    # cascade trips its own guard (`terms_mapping.delete_system_terms`).
+    await session.run_sync(lambda sync: delete_system_terms(sync, system_id))
 
     # One owner-scoped Core DELETE; the folders/proofs/parts go via their
     # ON DELETE CASCADE foreign keys, so nothing is loaded here.

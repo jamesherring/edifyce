@@ -101,9 +101,11 @@ class TermChildRow(Base):
     slot: Mapped[str] = mapped_column(String(128), primary_key=True)
     position: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     # Deliberately NOT ondelete=CASCADE: an edge must never outlive its child,
-    # but deleting a shared child out from under other parents must fail. The
-    # default NO ACTION checks at statement end, so a whole-system cascade
-    # (which removes parents, edges, and children together) still passes.
+    # but deleting a shared child out from under other parents must fail. A
+    # whole-system teardown removes parents, edges and children together and so
+    # has nothing for the guard to catch — but it must issue them in that order
+    # itself (`terms_mapping.delete_system_terms`); a cascade runs the check
+    # against a row before the sibling cascade that clears its edges.
     child_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("terms.id"), index=True
     )

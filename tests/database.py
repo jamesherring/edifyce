@@ -64,12 +64,15 @@ def create_tables(url: str, tables: list[Table]) -> None:
     part that actually breaks — a table it created may hold a foreign key *into*
     one of these, which then refuses to drop. SQLite gets a fresh file per test
     and does not care either way.
+
+    Deduped, because a suite naming one of the `_always` tables itself is not an
+    error — it is a suite whose own list is honest about what it uses.
     """
     engine = create_engine(url)
     try:
         metadata = tables[0].metadata
         metadata.drop_all(engine)
-        metadata.create_all(engine, tables=[*tables, *_always()])
+        metadata.create_all(engine, tables=list(dict.fromkeys([*tables, *_always()])))
     finally:
         engine.dispose()
 
@@ -90,7 +93,13 @@ def _always() -> list[Table]:
     same read reports what the corpus says a proof does without. So does
     `theorem_assumptions`: promoting a theorem records what it rests on that
     nobody proved, so the table is written on a path no test has to know about
-    (and `assumptions` is read beside it). Added here rather than to each
+    (and `assumptions` is read beside it). `proof_lines` and `theorems` join them
+    for the delete side: tearing a system down clears everything that cites its
+    term graph before the terms themselves (`terms_mapping.delete_system_terms`),
+    so both tables are named by a statement every system delete issues, empty or
+    not. `theorems` carries a pgvector column, which SQLite stores as a plain
+    declared type — only the HNSW index is Postgres-specific, and that rides a
+    `postgresql_using` other dialects ignore. Added here rather than to each
     module's own list because "what a system minimally needs" is one fact, and
     ten copies of it drift.
     """
@@ -108,6 +117,8 @@ def _always() -> list[Table]:
         SourceDocumentRow,
     )
     from app.db.avoidances import LabelAvoidanceRow
+    from app.db.models import Theorem
+    from app.db.proof_lines import ProofLineAntecedentRow, ProofLineRow
     from app.db.descriptions import (
         LabelAttributionRow,
         LabelDescriptionRow,
@@ -139,6 +150,9 @@ def _always() -> list[Table]:
         SourceDocumentRow.__table__,
         FormalizationRow.__table__,
         GlossaryEntryRow.__table__,
+        ProofLineRow.__table__,
+        ProofLineAntecedentRow.__table__,
+        Theorem.__table__,
     ]
 
 

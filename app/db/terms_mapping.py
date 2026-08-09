@@ -23,8 +23,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from sqlalchemy import bindparam, or_, select
+from sqlalchemy import delete as sa_delete
 from sqlalchemy.orm import Session
 
+from app.db.formalizations import FormalizationRow
+from app.db.models import Proof as ProofRow
+from app.db.models import Theorem
+from app.db.proof_lines import ProofLineRow
 from app.db.terms import (
     TERM_KIND_BOUND,
     TERM_KIND_NODE,
@@ -413,6 +418,49 @@ def store_terms(
         rows[digest] = row
 
     return [rows[digest_term(term, digest_memo)] for term in terms]
+
+
+def delete_system_terms(session: Session, system_id: uuid.UUID) -> None:
+    """Drop ``system_id``'s term graph, and first everything that cites it.
+
+    A term row is deliberately not deletable out from under a citation: every
+    foreign key into ``terms`` that must not lose its referent is ``NO ACTION``
+    (``term_children.child_id``, ``proof_lines.term_id``,
+    ``theorems.statement_term_id``, ``formalizations.statement_term_id``), so
+    removing one shared subterm fails rather than silently emptying the parents
+    that share it.
+
+    Deleting a whole system removes the citations and the terms together, so that
+    guard has nothing to catch — but only if they go in that order, and a cascade
+    provides no order. Postgres runs each deleted ``terms`` row's ``NO ACTION``
+    check as the cascade reaches that row, which is before the cascade that would
+    have cleared the row citing it (an edge's parent is a *different* ``terms``
+    row, a proof line's proof a different cascade entirely). So the FK fires and
+    the delete fails on any system whose graph is actually referenced. Hence the
+    order is written out here rather than left to ``ON DELETE CASCADE``.
+
+    Every table named below is itself scoped to the system — directly, or through
+    its proofs — so this deletes exactly what the system's own cascade was going
+    to. What survives is the guard: a citation from *outside* the system is not
+    swept up here, and the final delete still refuses.
+
+    Unsynchronised, which the size of a term graph makes worth saying: a criteria
+    the session cannot evaluate in Python otherwise falls back to fetching every
+    deleted id back, and an imported corpus has millions. Nothing here needs the
+    identity map — the objects it might hold are about to go with the system.
+    """
+    proofs = select(ProofRow.id).where(ProofRow.formal_system_id == system_id)
+    terms = select(TermRow.id).where(TermRow.formal_system_id == system_id)
+    for statement in (
+        sa_delete(ProofLineRow).where(ProofLineRow.proof_id.in_(proofs)),
+        sa_delete(Theorem).where(Theorem.formal_system_id == system_id),
+        sa_delete(FormalizationRow).where(
+            FormalizationRow.formal_system_id == system_id
+        ),
+        sa_delete(TermChildRow).where(TermChildRow.parent_id.in_(terms)),
+        sa_delete(TermRow).where(TermRow.formal_system_id == system_id),
+    ):
+        session.execute(statement, execution_options={"synchronize_session": False})
 
 
 @dataclass(frozen=True)

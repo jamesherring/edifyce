@@ -473,8 +473,9 @@ class Theorem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     statement: Mapped[str] = mapped_column(Text)
     # Root of the statement's structure in the terms graph. Not CASCADE/SET NULL:
-    # a term row must not be deletable out from under a theorem (NO ACTION checks
-    # at statement end, so the whole-system cascade — which removes both — passes).
+    # a term row must not be deletable out from under a theorem. Deleting the
+    # system removes both, but in an order it has to set itself — see
+    # `terms_mapping.delete_system_terms`.
     statement_term_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("terms.id"), index=True
     )
