@@ -129,7 +129,7 @@ def test_a_scope_opener_takes_no_citation(client, db):
         },
     )
     assert res.status_code == 422
-    assert "assumed rather than justified" in res.json()["detail"]
+    assert "granted rather than proved" in res.json()["detail"]
 
 
 def test_spelling_the_default_rule_out_loud_is_not_a_citation(client, db):
@@ -626,23 +626,29 @@ def test_an_opener_that_declares_a_reference_gets_its_own_citation(client, db):
     # line number is named, so no dependency is invented.
     assert default.json()["display"] == "    assume a ∈ b [?]"
 
-    # And because the field exists, the caller may write the system's own idiom.
-    spelled = client.post(
-        f"/api/proofs/{created['id']}/lines",
-        json={
-            "statement": {
-                "constructor": "membership",
-                "slots": {
-                    "s": {"constructor": "variable", "literal": "a"},
-                    "t": {"constructor": "variable", "literal": "b"},
+    # And the field existing is *not* an invitation to fill it. Nothing resolves
+    # an opener's reference, so accepting one would report `accepted: true` on
+    # the strength of the opener's own validity — which says nothing about the
+    # citation — and a line number in it would then be treated as a real
+    # dependency by renumbering and removal. `/cite` refuses the same request on
+    # the same rows, and this is the write path's half of that position.
+    for citation in ({"rule": "NOPE"}, {"antecedents": [1]}):
+        refused = client.post(
+            f"/api/proofs/{created['id']}/lines",
+            json={
+                "statement": {
+                    "constructor": "membership",
+                    "slots": {
+                        "s": {"constructor": "variable", "literal": "a"},
+                        "t": {"constructor": "variable", "literal": "b"},
+                    },
                 },
+                "line_type": "assume",
+                **citation,
             },
-            "line_type": "assume",
-            "rule": "HYP",
-        },
-    )
-    assert spelled.status_code == 200, spelled.text
-    assert spelled.json()["display"] == "    assume a ∈ b [HYP]"
+        )
+        assert refused.status_code == 422, refused.text
+        assert "granted rather than proved" in refused.json()["detail"]
 
 
 # ---------------------------------------------------------------------------
@@ -678,6 +684,38 @@ def test_a_removal_that_would_move_a_valid_line_into_a_subproof_is_refused(clien
     assert [l["scope"] is None for l in structure(client, proof_id)][3]
 
     res = client.post(f"/api/proofs/{proof_id}/lines/remove", json={"line": 3})
+
+    assert res.status_code == 409, res.text
+    assert "different subproof" in res.json()["detail"]
+    assert lines_of(client, proof_id) == before
+
+
+def test_removing_a_nested_opener_is_refused_though_its_number_shifts_onto_its_parent(
+    client, db
+):
+    # The shift arithmetic's sharp edge. Removing opener 2 maps the old scope `2`
+    # to `1` — and for the ordinary nesting shape, where a subproof opens
+    # immediately inside its parent, `1` *is* the parent. So a line reparented
+    # from subproof 2 to subproof 1 compares equal to itself and sails through,
+    # which is the one thing this guard exists to stop.
+    #
+    # Neither opener is cited here, so the citation guard has nothing to say and
+    # this is the only thing in the way.
+    owner = _register_login(client, "ada@example.com")
+    proof_id = _proof(
+        client,
+        db,
+        owner,
+        "assume x ∈ y\n"
+        "    assume a ∈ b\n"
+        "        x ∈ y [R, 1]",
+    )
+    before = lines_of(client, proof_id)
+    assert [n for n, _, _ in before] == [1, 2, 3]
+    # Line 3 is a step of subproof 2, the inner one.
+    assert structure(client, proof_id)[2]["scope"] is not None
+
+    res = client.post(f"/api/proofs/{proof_id}/lines/remove", json={"line": 2})
 
     assert res.status_code == 409, res.text
     assert "different subproof" in res.json()["detail"]

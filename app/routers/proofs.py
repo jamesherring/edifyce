@@ -2391,33 +2391,35 @@ async def propose_line(
     compiled = built.compiled
 
     opener_kind, takes_citation = _line_kind(built, shape.line_type)
-    # **Opening a scope and carrying a citation are two questions**, and it took
-    # review to see that fusing them was wrong twice over. A scope opener is
-    # granted by fiat, so the checker never resolves its reference — but whether
-    # there is a reference *field* to write in is the line type's business, and
-    # some declare one (`tests.test_proofs_api._scoped_with_reference_spec`, whose
-    # comment records that nothing forbids it).
+    # **Whether a scope opener is justified and whether it has room to write
+    # something are two questions**, and both rounds of review landed on this
+    # line. It is never justified — `ProofLine.execute` grants an opener by fiat
+    # and never resolves its reference — but a line type is free to declare a
+    # reference field anyway (`tests.test_proofs_api._scoped_with_reference_spec`
+    # records that nothing forbids it).
     #
-    # So the citation is refused only where the type has nowhere to put it, and
-    # written wherever it does. Skipping the write for every opener meant a new
-    # `assume` spliced out of an old one silently kept *the old one's* citation —
-    # a phantom dependency this layer does treat as real, blocking a removal and
-    # shifting under a renumber, and invisible to every round trip below because
-    # the term, the type and the scope are all exactly as asked.
-    if opener_kind is not None and not takes_citation:
+    # So no citation is *accepted* for an opener, which is `/cite`'s settled
+    # position on the same rows and for the same reason: the opener is valid
+    # whatever its reference says, so its validity is no evidence about the
+    # citation, and writing an unresolved one would mint a dependency this layer
+    # does treat as real. But where the field exists it is still *written*, as
+    # the hole keyword — because the alternative, leaving it alone, meant a new
+    # opener spliced out of an old one silently kept **the old one's** citation,
+    # invisible to every round trip below since the term, the type and the scope
+    # all come back exactly as asked.
+    if opener_kind is not None and (payload.antecedents or payload.rule != HOLE_KEY):
         # By value rather than by `model_fields_set`: `rule` defaults to the hole
         # keyword, which says "nothing justifies this" — the very thing an opener
         # means — so a client spelling the default out loud is asking for what it
         # would have got anyway and must not be refused for saying so.
-        if payload.antecedents or payload.rule != HOLE_KEY:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=(
-                    f"Line type {shape.line_type!r} opens a subproof and declares "
-                    "no reference field, so it is assumed rather than justified "
-                    "and takes no rule or antecedents."
-                ),
-            )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Line type {shape.line_type!r} opens a subproof, which is "
+                "granted rather than proved, so it takes no rule or antecedents "
+                "— nothing would resolve them."
+            ),
+        )
 
     term, context = await resolve_proposal(
         session, payload.statement, system.id, compiled
@@ -3056,6 +3058,14 @@ def _rescoped_by_removal(
     return _rescoped(before, checked, at, by=-1, dropped=at)
 
 
+# The scope a removed opener used to name. Not a number, because the whole point
+# is that it corresponds to nothing after the edit: shifting it like any other
+# number lands it on the line before it — which, for the ordinary nesting shape
+# where a subproof opens immediately inside its parent, *is* the parent, so a
+# reparented line would compare equal to itself and pass (found in review).
+_GONE = object()
+
+
 def _rescoped(
     before: Sequence[ProofLineRow],
     checked: EngineProof | None,
@@ -3074,9 +3084,13 @@ def _rescoped(
         line.number: line for line in checked.proof_lines if line.number is not None
     }
 
-    def shifted(number: int | None) -> int | None:
+    def shifted(number: int | None) -> object:
         if number is None:
             return None
+        if number == dropped:
+            # The subproof this named is gone with its opener, so every line that
+            # was in it has been reparented — which is exactly what to report.
+            return _GONE
         return number + by if number >= at else number
 
     for row in before:

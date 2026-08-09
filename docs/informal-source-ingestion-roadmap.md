@@ -557,15 +557,24 @@ the engine's mechanic rather than a limit of the route, it is the thing a caller
 will hit first, and it is caught by the scope round trip above with a message that
 says so.
 
-**Opening a scope and carrying a citation are two questions**, and review caught
-them fused. A scope opener is granted by fiat, so the checker never resolves its
-reference — but whether there is a reference *field* to write in is the line
-type's business, and some declare one. Skipping the citation for every opener
-meant a new opener spliced out of an old one silently kept **the old one's**: a
-phantom dependency this layer does treat as real, blocking a removal and shifting
-under a renumber, and invisible to every round trip because the term, the type and
-the scope all come back exactly as asked. The citation is now refused only where
-the type has nowhere to put it, and written wherever it does.
+**Whether an opener is justified and whether it has room to write something are
+two questions**, and both rounds of review landed on that one line. A scope opener
+is never justified — the checker grants it by fiat and never resolves its
+reference — but a line type is free to declare a reference field anyway, and some
+do. Skipping the citation for every opener meant a new opener spliced out of an
+old one silently kept **the old one's**: a phantom dependency this layer does
+treat as real, blocking a removal and shifting under a renumber, and invisible to
+every round trip because the term, the type and the scope all come back exactly as
+asked.
+
+The first fix was to let the caller write one where the field exists, and the
+second round showed that was a step too far: nothing resolves an opener's
+reference, so an accepted citation would be reported `accepted` on the strength of
+the opener's own validity — which is no evidence about it — and a line number in
+it would become a dependency that justified nothing. `/cite` already refuses
+exactly this on exactly these rows. So no citation is *accepted* for an opener,
+and where the field exists it is still *written*, as the hole keyword, which names
+no line. That is both halves: nothing is inherited, and nothing is invented.
 
 **The guard needed the other invariant, not a wider version of the same one.** The
 section asks for the renumbering guard extended over scope boundaries under *no
@@ -587,6 +596,15 @@ everything after it inside the block it used to end — still checking, still ci
 what it cited, and a step of something else. Both edits move scopes, so both
 guard it; `_rescoped_by_insert` and `_rescoped_by_removal` are one function with
 the shift as its argument.
+
+**A removed opener has no number to shift to**, which is the one place that shared
+arithmetic does not work and took a second round to see. Shifting the removed
+line's number like any other lands it on the line before it — and for the ordinary
+nesting shape, where a subproof opens immediately inside its parent, that *is* the
+parent. So a line reparented out of the removed subproof and into its parent
+compared equal to itself and passed, in precisely the case the guard exists for. A
+scope whose opener is gone corresponds to nothing afterwards, and is compared as
+such.
 
 ## 5. What stays out
 
