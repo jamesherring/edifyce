@@ -4,8 +4,9 @@
     uv run python scripts/rebuild_markup.py --dry-run
     uv run python scripts/rebuild_markup.py
 
-An import written before cross-references and the discouragement markers were
-understood stored the prose with both still *in* it: `~ ax-13` as punctuation, and
+An import written before cross-references, bibliography citations and the
+discouragement markers were understood stored the prose with all of them still
+*in* it: `~ ax-13` as punctuation, and
 `(New usage is discouraged.)` as a sentence. The migration that adds
 ``label_references`` cannot fix that — it adds empty columns and an empty table,
 and nothing re-reads the text afterwards (raised in review), so a corpus imported
@@ -40,7 +41,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import delete, func, select  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
-from app.db.descriptions import LabelDescriptionRow, LabelReferenceRow  # noqa: E402
+from app.db.descriptions import (  # noqa: E402
+    LabelCitationRow,
+    LabelDescriptionRow,
+    LabelReferenceRow,
+)
 from app.db.session import get_engine, get_sessionmaker  # noqa: E402
 from website.logical.metamath.comments import read_comment  # noqa: E402
 
@@ -65,7 +70,10 @@ async def rebuild(session: AsyncSession, dry_run: bool) -> dict[str, int]:
     total = await session.scalar(
         select(func.count()).select_from(LabelDescriptionRow)
     )
-    tally = {"read": 0, "rewritten": 0, "references": 0, "usage": 0, "modification": 0}
+    tally = {
+        "read": 0, "rewritten": 0, "references": 0, "citations": 0,
+        "usage": 0, "modification": 0,
+    }
 
     for offset in range(0, total or 0, CHUNK):
         rows = (
@@ -86,12 +94,14 @@ async def rebuild(session: AsyncSession, dry_run: bool) -> dict[str, int]:
             redone = read_comment(row.text)
             changed = redone.text != row.text
             gained = list(redone.references)
-            if not (changed or gained or redone.discouraged_usage
+            cited = list(redone.citations)
+            if not (changed or gained or cited or redone.discouraged_usage
                     or redone.discouraged_modification):
                 continue
 
             tally["rewritten"] += changed
             tally["references"] += len(gained)
+            tally["citations"] += len(cited)
             tally["usage"] += redone.discouraged_usage and not row.discouraged_usage
             tally["modification"] += (
                 redone.discouraged_modification and not row.discouraged_modification
@@ -121,6 +131,26 @@ async def rebuild(session: AsyncSession, dry_run: bool) -> dict[str, int]:
                 )
                 for position, reference in enumerate(gained)
             )
+            # Replaced outright for the same reason the references are:
+            # re-extraction from the same prose is exact, and a citation changes
+            # no text — it is punctuation the reader now indexes rather than a
+            # marker it removes, so this half is idempotent on its own.
+            await session.execute(
+                delete(LabelCitationRow).where(
+                    LabelCitationRow.description_id == row.id
+                )
+            )
+            session.add_all(
+                LabelCitationRow(
+                    description_id=row.id,
+                    position=position,
+                    work=citation.work,
+                    page=citation.page,
+                    start_offset=citation.start,
+                    end_offset=citation.end,
+                )
+                for position, citation in enumerate(cited)
+            )
         if not dry_run:
             await session.commit()
 
@@ -137,6 +167,7 @@ async def main() -> int:
     print(f"  descriptions read     {tally['read']}")
     print(f"  prose rewritten       {tally['rewritten']}")
     print(f"  references stored     {tally['references']}")
+    print(f"  citations stored      {tally['citations']}")
     print(f"  newly usage-flagged   {tally['usage']}")
     print(f"  newly modif.-flagged  {tally['modification']}")
     return 0

@@ -46,7 +46,7 @@ from app.db import (
     term_context,
 )
 from app.db.system_relations import SystemRelationRow
-from app.routers._documentation import documentation_out
+from app.routers._documentation import documentation_out, resolve_labels
 from app.routers._invalidation import invalidate_library_reach
 from app.routers._common import (
     MAX_PAGE_SIZE,
@@ -57,7 +57,7 @@ from app.routers._common import (
     unique_slug,
 )
 from app.db.descriptions import LabelDescriptionRow
-from app.db.descriptions_mapping import load_description
+from app.db.descriptions_mapping import citing_labels, load_description, works_cited
 from app.db.label_search import search_labels
 from app.db.lineage import spine_ids
 from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
@@ -114,7 +114,10 @@ from app.schemas import (
     Justification,
     LabelDescription,
     LabelHit,
+    LabelMention,
     LabelSearch,
+    WorkCitations,
+    WorkCited,
     LibraryEntry,
     LinePart,
     LineType,
@@ -1228,6 +1231,77 @@ async def search_label_descriptions(
         offset=offset,
         documented=found.documented,
         searched=found.searched,
+    )
+
+
+# How many statements a work's listing carries. Larger than a back-reference's 20
+# because this is the page a reader lands on to browse a source, rather than a
+# sidebar beside something else.
+WORK_LABEL_LIMIT = 50
+
+
+@router.get("/{system_id}/works", response_model=list[WorkCited])
+async def list_works_cited(
+    system_id: uuid.UUID,
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> list[WorkCited]:
+    """The literature this system's prose cites, most-cited first.
+
+    A corpus's bibliography keys answer a question no single statement can: what
+    the library rests on, and how heavily. `set.mm` names 135 works and leans on a
+    few of them hard — `[Crawley]` from 520 statements — so the distribution is
+    itself a description of what kind of library it is.
+
+    Keys only. The bibliography they index lives outside the `.mm` file, in
+    whatever page the `$t` block's `htmlbibliography` names, so there is no title
+    or author to serve and inventing a table of them for one library's keys is a
+    presumption this importer is careful not to make elsewhere.
+
+    Spine-wide, since a layered import spreads one corpus's sources across its
+    layers.
+    """
+    system = await _get_readable_or_404(session, system_id, user)
+    spine = await spine_ids(session, system.id)
+    return [
+        WorkCited(work=work, citations=count)
+        for work, count in await works_cited(session, spine)
+    ]
+
+
+@router.get("/{system_id}/works/{work}", response_model=WorkCitations)
+async def list_labels_citing(
+    system_id: uuid.UUID,
+    work: str,
+    limit: int = Query(WORK_LABEL_LIMIT, ge=1, le=MAX_PAGE_SIZE),
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> WorkCitations:
+    """Which of this system's statements came from one work.
+
+    The direction that makes a citation a row rather than punctuation — "what else
+    is from Takeuti-Zaring" — and the one a reader following a source actually
+    asks. Capped with the true count beside it, since the head is large: `set.mm`
+    cites `[Crawley]` from 520 statements.
+
+    Each label resolves to a page where there is one and the viewer may read it,
+    which is most of them here and none of the `$a`s.
+    """
+    system = await _get_readable_or_404(session, system_id, user)
+    spine = await spine_ids(session, system.id)
+    labels, total = await citing_labels(session, spine, work, limit)
+    linkable = await resolve_labels(session, spine, labels, user)
+    return WorkCitations(
+        work=work,
+        cited_by=[
+            LabelMention(
+                label=label,
+                proof_id=linkable.get(label, (None, None))[0],
+                title=linkable.get(label, (None, None))[1],
+            )
+            for label in labels
+        ],
+        cited_by_total=total,
     )
 
 

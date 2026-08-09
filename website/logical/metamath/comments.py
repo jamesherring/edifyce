@@ -47,6 +47,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # How long each part of an attribution may be. These are the widths of the
 # columns it is stored into (`app/db/descriptions.py`), restated as part of the
@@ -97,6 +101,44 @@ _REFERENCE = re.compile(r"(?<!~)~(?!~)\s*(?P<target>\S+)")
 # and a marker the file plainly meant should count.
 _DISCOURAGED = re.compile(r"\((?P<what>[A-Z][A-Za-z ]{0,40}?) is discouraged\.\)")
 
+# How long a work key may be — the width of the column it is stored into, restated
+# here for the reason `KIND_MAX` is: an over-long capture is prose that happened to
+# fit the shape, not a key. `set.mm`'s longest is 22.
+WORK_MAX, PAGE_MAX = 64, 32
+
+# A bibliography citation: ``Theorem 3.1 of [Monk1] p. 22``.
+#
+# `set.mm` documents this form itself, in the `conventions` comment: a keyword, an
+# optional identifier, noisewords, the bracketed key, then `p.` and a page. Only
+# the last three are matched, and the omission is deliberate — the keyword list is
+# closed and would have to be maintained against a file free to add to it, while
+# `[key] p. N` already identifies the citation and its span. 70 of set.mm's carry
+# no keyword at all.
+#
+# **The page is required**, and it is what separates a citation from Metamath's
+# substitution notation. `[ y / x ] ph` is a *term*, and the corpus writes far more
+# of those than it does citations. The backtick rule below excludes most; requiring
+# a page excludes the rest, and costs only the bare `[Author]` that heading comments
+# are allowed (a reference to a whole work rather than a place in one).
+#
+# The comma before `p.` is a deviation set.mm's own conventions forbid — "there
+# should be no comma between the author reference and the `p.`" — and which 103 of
+# its citations use anyway, `[Shapiro], p. 199` among them. Admitted, because a
+# reader's job is to read the file rather than to grade it.
+#
+# `[[` is Metamath's escape for a literal bracket, as `~~` is for a tilde: it opens
+# no citation. 12 of set.mm's are, `"ex falso [[sequitur]] quodlibet"` among them.
+#
+# The page ends at a non-alphanumeric, which is what makes the bound a *refusal*
+# rather than a truncation — the same contract `KIND_MAX` states. Without it an
+# over-long locator matched its first 32 characters and left the span ending
+# mid-token, so a renderer sliced half a page and spilled the rest into the prose
+# beside it (found in review). `work` needed no such guard: a `]` must follow it.
+_CITATION = re.compile(
+    rf"(?<!\[)\[(?P<work>[A-Za-z][A-Za-z0-9]{{0,{WORK_MAX - 1}}})\]"
+    rf"\s*,?\s*p\.\s*(?P<page>[A-Za-z0-9]{{1,{PAGE_MAX}}})(?![A-Za-z0-9])"
+)
+
 
 @dataclass(frozen=True)
 class Attribution:
@@ -134,6 +176,31 @@ class Reference:
 
 
 @dataclass(frozen=True)
+class Citation:
+    """One ``[Monk1] p. 22`` bibliography citation, and the span it occupies.
+
+    ``work`` is the key as the file writes it — a named anchor in whatever page the
+    ``$t`` block's ``htmlbibliography`` points at, `mmset.html` for `set.mm`. The
+    bibliography itself is **not in the `.mm` file**, so a key is all there is to
+    store: no title, no author, no year. What it buys even so is the question the
+    corpus cannot otherwise be asked — *what does this library rest on, and which
+    of its statements come from Takeuti–Zaring?*
+
+    ``page`` is alphanumeric rather than a number: `set.mm` cites Roman-numbered
+    front matter (`[Lang] p. ix`) as well as ordinary pages.
+
+    ``start``/``end`` index :attr:`Description.text`, for the reason
+    :class:`Reference`'s do — the markup rule is Metamath's, it lives here, and a
+    second implementation of it downstream is a second thing to get wrong.
+    """
+
+    work: str
+    page: str
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
 class Description:
     """A statement's comment, split into prose and authorship."""
 
@@ -149,6 +216,10 @@ class Description:
     # `(Proof modification is discouraged.)` — the proof is the way it is on
     # purpose. 1,744 carry it.
     discouraged_modification: bool = False
+    # What the prose cites from outside the corpus. `set.mm` writes 5,271 of these
+    # across 4,901 comments, and they are the only record of where a statement
+    # came from: the bibliography they key into lives in a separate HTML file.
+    citations: tuple[Citation, ...] = ()
 
     @property
     def contributors(self) -> tuple[str, ...]:
@@ -267,8 +338,58 @@ def read_comment(raw: str) -> Description:
         # index what is stored. Anything else would need the reader to redo the
         # unwrapping to make sense of them.
         references=_references(text),
+        citations=_citations(text),
         discouraged_usage=any("usage" in what for what in discouraged),
         discouraged_modification=any("modification" in what for what in discouraged),
+    )
+
+
+def _in_math(text: str) -> Callable[[int], bool]:
+    """Whether an offset falls inside a `` ` … ` `` span.
+
+    The same walk :attr:`Description.title` makes, and for a related reason: a math
+    span is ASCII Metamath, and ASCII Metamath is full of characters that mean
+    something else in prose. Here it is the brackets — `[ y / x ] ph` is proper
+    substitution, and 966 of set.mm's bracketed spans are that rather than a
+    citation. A doubled backtick is an escaped one and does not open a span.
+
+    Returns a predicate over a prebuilt span list rather than scanning per match:
+    a comment is read once and may carry a dozen citations.
+    """
+    spans: list[tuple[int, int]] = []
+    index = opened = 0
+    inside = False
+    while index < len(text):
+        if text[index] != "`":
+            index += 1
+            continue
+        if text[index + 1: index + 2] == "`":
+            index += 2
+            continue
+        if inside:
+            spans.append((opened, index))
+        else:
+            opened = index
+        inside = not inside
+        index += 1
+    # An unclosed span runs to the end —
+    if inside:
+        spans.append((opened, len(text)))
+    return lambda at: any(start <= at < stop for start, stop in spans)
+
+
+def _citations(text: str) -> tuple[Citation, ...]:
+    """Every ``[work] p. page`` in ``text`` that is prose rather than mathematics."""
+    inside = _in_math(text)
+    return tuple(
+        Citation(
+            work=match["work"],
+            page=match["page"],
+            start=match.start(),
+            end=match.end(),
+        )
+        for match in _CITATION.finditer(text)
+        if not inside(match.start())
     )
 
 

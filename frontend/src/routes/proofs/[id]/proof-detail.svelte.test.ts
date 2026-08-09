@@ -120,6 +120,7 @@ function documentation(over: Partial<LabelDescription> = {}): LabelDescription {
 		text: '',
 		attributions: [],
 		references: [],
+		citations: [],
 		mentioned_by: [],
 		mentioned_by_total: 0,
 		discouraged_usage: false,

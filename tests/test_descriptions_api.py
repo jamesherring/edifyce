@@ -462,3 +462,124 @@ def test_a_hypothesis_is_invisible_without_the_proof_that_may_cite_it(client, db
     assert (
         client.get(f"/api/formal-systems/{system_id}/library/mp2.1").status_code == 404
     )
+
+
+# ---------------------------------------------------------------------------
+# Bibliography citations
+#
+# Where a cross-reference points inside the corpus, these point outside it — at
+# the literature a statement was taken from, which is the only provenance a
+# `.mm` file records.
+# ---------------------------------------------------------------------------
+
+CITING = r"""
+$c |- wff ( ) -> $.
+$v ph ps $.
+wph $f wff ph $.
+wps $f wff ps $.
+$( Wff builder. $)
+wi $a wff ( ph -> ps ) $.
+$( Axiom _Simp_.  Axiom A1 of [Margaris] p. 49. $)
+ax-1 $a |- ( ph -> ( ps -> ph ) ) $.
+$( Principle of identity.  Theorem 3.1 of [Margaris] p. 50 and, for the
+   substitution ` [ y / x ] ph ` , Lemma 2 of [Monk1], p. 22. $)
+id $p |- ( ph -> ( ps -> ph ) ) $= ( ax-1 ) ABC $.
+"""
+
+
+def seed_citing(db_path) -> tuple[str, str]:
+    engine = create_engine(db_path)
+    try:
+        with Session(engine) as session:
+            report = import_corpus(session, parse(CITING), name="c")
+            session.commit()
+            proof = session.scalars(select(Proof)).one()
+            proof.published_at = proof.created_at
+            proof.formal_system.published_at = proof.created_at
+            session.commit()
+            return str(report.system_id), str(proof.id)
+    finally:
+        engine.dispose()
+
+
+def test_a_proof_carries_the_works_its_prose_cites(client, db):
+    _, proof_id = seed_citing(db)
+
+    body = client.get(f"/api/proofs/{proof_id}").json()
+
+    citations = body["documentation"]["citations"]
+    assert [(c["work"], c["page"]) for c in citations] == [
+        ("Margaris", "50"),
+        ("Monk1", "22"),
+    ]
+
+
+def test_a_citation_comes_back_with_the_span_it_occupies(client, db):
+    # The contract the spans exist for: a renderer slices the stored prose rather
+    # than re-implementing Metamath's markup rule.
+    _, proof_id = seed_citing(db)
+
+    body = client.get(f"/api/proofs/{proof_id}").json()["documentation"]
+    first = body["citations"][0]
+
+    assert body["text"][first["start"] : first["end"]] == "[Margaris] p. 50"
+
+
+def test_substitution_notation_is_not_served_as_a_citation(client, db):
+    # `id`'s prose contains ` [ y / x ] ph `, which is a term rather than a source.
+    _, proof_id = seed_citing(db)
+
+    body = client.get(f"/api/proofs/{proof_id}").json()["documentation"]
+
+    assert all(c["work"] != "y" for c in body["citations"])
+
+
+def test_a_system_lists_the_works_it_cites_most_first(client, db):
+    system_id, _ = seed_citing(db)
+
+    body = client.get(f"/api/formal-systems/{system_id}/works").json()
+
+    assert body == [
+        {"work": "Margaris", "citations": 2},
+        {"work": "Monk1", "citations": 1},
+    ]
+
+
+def test_a_work_lists_the_statements_that_came_from_it(client, db):
+    system_id, proof_id = seed_citing(db)
+
+    body = client.get(f"/api/formal-systems/{system_id}/works/Margaris").json()
+
+    assert body["work"] == "Margaris"
+    assert [entry["label"] for entry in body["cited_by"]] == ["ax-1", "id"]
+    assert body["cited_by_total"] == 2
+    # `id` is a proof and opens; `ax-1` is a `$a` and has no page of its own.
+    by_label = {entry["label"]: entry for entry in body["cited_by"]}
+    assert by_label["id"]["proof_id"] == proof_id
+    assert by_label["ax-1"]["proof_id"] is None
+
+
+def test_a_work_nothing_cites_is_an_empty_list_rather_than_a_404(client, db):
+    # A work is not an entity the system declares — it is a key someone's prose
+    # used — so "nobody cites it" is an answer, not a missing resource.
+    system_id, _ = seed_citing(db)
+
+    body = client.get(f"/api/formal-systems/{system_id}/works/Nobody").json()
+
+    assert body["cited_by"] == []
+    assert body["cited_by_total"] == 0
+
+
+def test_a_system_citing_nothing_lists_nothing(client, db):
+    # `MARKED` documents its statements and cites no literature at all, which is
+    # every hand-authored system and plenty of imported ones.
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            report = import_corpus(session, parse(MARKED), name="m")
+            session.commit()
+            system_id = str(report.system_id)
+    finally:
+        engine.dispose()
+
+    assert client.get(f"/api/formal-systems/{system_id}/works").json() == []

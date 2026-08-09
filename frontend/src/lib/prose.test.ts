@@ -13,6 +13,7 @@ function description(over: Partial<LabelDescription> = {}): LabelDescription {
 		text: '',
 		attributions: [],
 		references: [],
+		citations: [],
 		mentioned_by: [],
 		mentioned_by_total: 0,
 		discouraged_usage: false,
@@ -46,7 +47,7 @@ describe('splitting prose at its cross-references', () => {
 			]
 		});
 
-		expect(renderProse(doc).map((s) => (s.kind === 'text' ? s.text : s.reference.target))).toEqual(
+		expect(renderProse(doc).map((s) => (s.kind === 'text' ? s.text : s.kind === 'citation' ? s.citation.work : s.reference.target))).toEqual(
 			['From ', 'ax-1', ' and ', 'ax-2', ' .']
 		);
 	});
@@ -79,7 +80,7 @@ describe('splitting prose at its cross-references', () => {
 			]
 		});
 
-		expect(renderProse(doc).map((s) => (s.kind === 'text' ? s.text : s.reference.target))).toEqual(
+		expect(renderProse(doc).map((s) => (s.kind === 'text' ? s.text : s.kind === 'citation' ? s.citation.work : s.reference.target))).toEqual(
 			['Uses ', 'ax-1', ' here.']
 		);
 	});
@@ -102,5 +103,98 @@ describe('where a reference points', () => {
 		// a draft's id is deliberately withheld.
 		expect(referenceHref(reference({ target: 'df-un' }))).toBeNull();
 		expect(referenceHref(reference({ target: 'mmset.html#class' }))).toBeNull();
+	});
+});
+
+describe('citations interleaved with references', () => {
+	it('slices both kinds in the order they appear', () => {
+		const doc = description({
+			text: 'Theorem 1 of [Monk1] p. 22; see also ~ ax-1 .',
+			citations: [{ work: 'Monk1', page: '22', start: 13, end: 26 }],
+			references: [reference({ target: 'ax-1', start: 37, end: 43 })]
+		});
+
+		expect(
+			renderProse(doc).map((s) =>
+				s.kind === 'text' ? s.text : s.kind === 'citation' ? s.citation.work : s.reference.target
+			)
+		).toEqual(['Theorem 1 of ', 'Monk1', '; see also ', 'ax-1', ' .']);
+	});
+
+	it('handles a reference before a citation just as readily', () => {
+		const doc = description({
+			text: 'From ~ ax-1 , as in [Monk1] p. 9.',
+			citations: [{ work: 'Monk1', page: '9', start: 20, end: 32 }],
+			references: [reference({ target: 'ax-1', start: 5, end: 11 })]
+		});
+
+		expect(renderProse(doc).map((s) => s.kind)).toEqual([
+			'text',
+			'reference',
+			'text',
+			'citation',
+			'text'
+		]);
+	});
+
+	it('drops a citation that would overlap a reference', () => {
+		// Nothing produces one — a `~` and a `[` are different characters — but a
+		// stale row must degrade to plain prose rather than to scrambled prose.
+		const doc = description({
+			text: 'Uses ~ ax-1 here.',
+			references: [reference({ start: 5, end: 11 })],
+			citations: [{ work: 'Bad', page: '1', start: 7, end: 14 }]
+		});
+
+		expect(renderProse(doc).map((s) => s.kind)).toEqual(['text', 'reference', 'text']);
+	});
+
+	it('carries the span verbatim, not a reconstruction of it', () => {
+		const doc = description({
+			text: 'Lemma 6.1C.2 of [Shapiro], p. 199.',
+			citations: [{ work: 'Shapiro', page: '199', start: 16, end: 33 }]
+		});
+
+		const [, citation] = renderProse(doc);
+		expect(citation.kind === 'citation' && citation.text).toBe('[Shapiro], p. 199');
+	});
+
+	it('keeps prose whole when there are no citations', () => {
+		expect(renderProse(description({ text: 'Just prose.' }))).toEqual([
+			{ kind: 'text', text: 'Just prose.' }
+		]);
+	});
+});
+
+describe('a span the prose cannot hold', () => {
+	it('drops it without taking the spans after it down too', () => {
+		// The per-list ordering pass advances a cursor, so an out-of-range span that
+		// moved it would silently swallow every later span in its list — a worse
+		// failure than the scrambling the guard exists for (found in review).
+		const doc = description({
+			text: 'Uses ~ ax-1 and ~ ax-2 now.',
+			references: [
+				reference({ target: 'ax-1', start: 5, end: 999 }),
+				reference({ target: 'ax-2', start: 16, end: 22 })
+			]
+		});
+
+		expect(
+			renderProse(doc).map((s) =>
+				s.kind === 'text' ? s.text : s.kind === 'citation' ? s.citation.work : s.reference.target
+			)
+		).toEqual(['Uses ~ ax-1 and ', 'ax-2', ' now.']);
+	});
+
+	it('does the same for a citation', () => {
+		const doc = description({
+			text: 'From [A] p. 1 and [B] p. 2.',
+			citations: [
+				{ work: 'A', page: '1', start: 5, end: 999 },
+				{ work: 'B', page: '2', start: 18, end: 26 }
+			]
+		});
+
+		expect(renderProse(doc).map((s) => s.kind)).toEqual(['text', 'citation', 'text']);
 	});
 });

@@ -4,7 +4,10 @@
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import Lock from '@lucide/svelte/icons/lock';
 
-	let { documentation }: { documentation: LabelDescription } = $props();
+	let {
+		documentation,
+		systemId = null
+	}: { documentation: LabelDescription; systemId?: string | null } = $props();
 
 	const segments = $derived(renderProse(documentation));
 	// The head of the list is what a reader follows; the rest is a count. See
@@ -46,7 +49,27 @@
 	     than a parse (see `$lib/prose`). -->
 	<p class="whitespace-pre-line text-sm leading-relaxed">
 		{#each segments as segment, i (i)}
-			{#if segment.kind === 'text'}{segment.text}{:else}
+			{#if segment.kind === 'text'}{segment.text}{:else if segment.kind === 'citation'}
+				<!-- Where the prose points *outside* the corpus. The key indexes a
+				     bibliography that lives in a separate file, so there is no work to
+				     open — what there is is the rest of this library that came from the
+				     same book, which is what the link goes to.
+				     Rendered from the *span*, not rebuilt from the key and page: 103 of
+				     set.mm's citations put a comma before the `p.` and a reconstruction
+				     silently drops it. -->
+				{#if systemId}
+					<a
+						href={`/systems/${systemId}/works/${encodeURIComponent(segment.citation.work)}`}
+						class="text-[0.9em] underline decoration-dotted underline-offset-2 hover:decoration-solid"
+						title={`Other statements from ${segment.citation.work}`}
+						>{segment.text}</a
+					>
+				{:else}
+					<span class="text-[0.9em] text-muted-foreground"
+						>{segment.text}</span
+					>
+				{/if}
+			{:else if segment.kind === 'reference'}
 				{@const href = referenceHref(segment.reference)}
 				{#if href}
 					<a
