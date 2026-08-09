@@ -23,12 +23,32 @@ descending order of how much they change the plan:
    **not confluent**.
 
 The first of those makes the definitional half's soundness argument *settled*
-rather than merely available, which is the single most useful thing in this note:
-a definitional merge is sound **iff** the checker would accept the corresponding
-chain of definitional steps, and that is discharged by reading code that exists.
+rather than merely available: a definitional merge is sound **iff** the checker
+would accept the corresponding chain of definitional steps, discharged by reading
+code that exists.
+
+**Then seven experiments were run against the corpus** ("Measured", below), and
+they moved the recommendation rather than confirming it. In short:
+
+- The `definitions` table is **empty deployment-wide** — the definitional half has
+  no input on the only substantial corpus, whose definitional content is 152
+  primitive *axioms*, and those are **cyclic**. That forces decision 2 to the
+  e-graph and undercuts "build the definitional half first".
+- **Congruence is 99.84% harvestable**, so decision 1's hard half is derivation
+  rather than declaration.
+- A **definition-aware compositional fold works**: exact invariance on 147
+  definitions, α-invariant against the corpus's own ground truth, nesting free by
+  compositionality, discrimination intact, linear cost. It is the roadmap's Phase 3
+  mechanism serving Phase 2's purpose.
+- The intended use is **retrieval, not dedup**, which removes the need for a stored
+  canonical digest and the three decisions that come with it.
+
+The revised recommendation is in "Recommendation": build the fold, then **forward
+search** — the dual question, *where could this result be used*, whose substrate
+(15,900 antecedent and hypothesis terms) already exists unindexed.
 
 Phase 1 shipped ([search-phase1-fingerprint.md](search-phase1-fingerprint.md)).
-This is what comes next, and what has to be settled first.
+This is what comes next.
 
 ## The proposal, as the roadmap states it
 
@@ -489,61 +509,310 @@ earlier phrasing here said the key "changes whenever anyone proves anything",
 which was both wrong and inconsistent with the invalidation scope directly above:
 the two must agree that the *only* interesting events are theory-changing ones.
 
-## Measured: what the corpus says
+## Measured: seven experiments against the corpus
 
-The two measurements this note asks for below have now been taken, against the
-layered set.mm import in the deployment database — **10,101 indexed theorems**,
-207k terms. It reproduces the Phase 1 figures exactly (`wi` 63.7% of conclusions,
-141 `wss`-headed), so the numbers are comparable to that work. Read-only, by
-shape-matching over stored terms; no parsing and no engine involved.
+Everything below was measured against the layered set.mm import in the deployment
+database — **10,101 indexed theorems**, 207k terms — read-only, over Neon's
+SQL-over-HTTPS endpoint (port 5432 is closed to the sandbox). It reproduces the
+Phase 1 figures exactly (`wi` 63.7% of conclusions, 141 `wss`-headed), so the
+numbers are comparable to that work.
 
-**Demand — what the equational half would buy:**
+### E1. Demand — what the equational half would buy
 
 | | count |
 |---|---|
 | equational-rooted conclusions (`wb` / `wceq`) | 2,605 |
-| … with the same operator on both sides | 716 |
 | **commutativity laws proven** (`ancom`, `orcom`, `uncom`, `incom`, …) | **13** |
 | **associativity laws proven** | **8** |
-| interned subterm pairs that are argument-swaps of each other | **2,217** |
+| interned subterm pairs that are argument-swaps | **2,217** |
 | **theorem-conclusion pairs that are root-level swaps** | **57** (0.56%) |
 
 The 57 are real near-duplicates the corpus keeps deliberately — `bitri`/`bitr2i`,
-`3bitri`/`3bitrri`: set.mm's `r`-suffix reversed-conclusion convention.
+set.mm's `r`-suffix reversed-conclusion convention.
 
-**Supply — whether congruence can be derived rather than declared:**
+### E2. Supply — congruence is harvestable
 
 | | count |
 |---|---|
-| congruence lemmas harvested, closed form (`oveq1`, `fveq2`, `ineq1`) | **157** |
-| congruence lemmas harvested, inference form (`oveq1i`, `fveq2i`) | **91** |
+| congruence lemmas, closed form (`oveq1`, `fveq2`, `ineq1`) | **157** |
+| congruence lemmas, inference form (`oveq1i`, `fveq2i`) | **91** |
 | operators covered | **99 / 110 (90%)** |
-| **coverage weighted by actual node usage** | **99.84%** |
+| **coverage weighted by node usage** | **99.84%** |
 
 Every high-frequency operator is covered — `wi` (85,753 uses), `wb`, `wceq`, `wa`,
 `wcel`, `wss`, `wex`, `wn`, `wal`, `cfv`, `co`, `wo`. The uncovered tail is ten
-rare operators totalling ~250 uses (0.12%): `crio`, `cseqom`, `wcdeq`, `wif`,
-`cfrecs` and a few from hand-built test systems.
+rare operators totalling ~250 uses (0.12%).
 
-**What this settles.**
+### E3. The definitional graph — and a finding that reshapes the phase
 
-- **Congruence is harvestable, decisively.** Shape-matching alone recovers 99.84%
-  of what a real corpus needs, with no authoring burden. The obligation route is a
-  formality over a 0.12% tail rather than a mechanism anyone will lean on.
-- **The equality declaration is far cheaper than assumed** — *two* entries for the
-  whole import (`wb`, `wceq`), not one per operator. Most of the objection to
-  declaring it dissolves.
-- **The equational half's demand is thin.** 57 conclusion pairs is not much dedup
-  for a 10,101-theorem corpus. The retrieval value is plausibly larger — 2,217
-  subterm swap-pairs are places a goal written the other way round would miss —
-  but that is a *proxy*, not a measurement of retrieval, and the distinction is
-  worth keeping honest.
+**The `definitions` table is empty across the entire deployment.** No stored system
+uses the `Definition` machinery at all. set.mm's definitional content is **152
+primitive axioms** rooted at an equivalence (99 `wceq`, 52 `wb`), e.g.
+`df-ss  ( A ⊆ B ↔ ∀x ( x ∈ A → x ∈ B ) )`.
 
-One cheap idea considered and **rejected** on the way: AC-normalising the Phase 1
-*fingerprint* alone. It is recall-safe, since a filter only ever widens — but
-pointless, because the `unify` confirm is syntactic, so the extra candidates yield
-no extra matches. AC retrieval needs AC-unification, which is a far larger
-commitment than this phase.
+That matters because axioms get none of the guarantees a `Definition` row gets. And
+the corpus's own content violates them:
+
+| | |
+|---|---|
+| definitional axioms with a compound defined form | 151 over 150 heads |
+| **cyclic heads** | **3** — `wcel`, `wceq`, `wsb` |
+| cycles found | `wceq → wcel → wceq`, `wceq → wcel → wsb → wceq`, `wcel → wcel` |
+| defined heads carrying two axioms | `wcel` (`df-clab`, `df-clel`) |
+| **acyclic heads that fold** | **147 (147 axioms)** |
+
+It is set.mm's class bootstrap: `df-cleq` defines `=` via `∈`, `df-clel` defines
+`∈` via `=` and `∈`. Mutually recursive, sound by a metatheoretic virtual-class
+argument rather than a structural one — and `_require_a_non_circular_definition`
+would refuse it outright, which is very likely *why* this content lives as axioms.
+
+**Consequence for decision 2.** Rewriting-based normalisation is blocked on the
+real corpus: fold and refuse both assume an acyclicity the data violates. Only a
+congruence closure is unbothered by cycles — it merges classes to a fixpoint and
+never orients a rewrite. The shared-head case (`wcel`) dissolves the same way.
+
+The containment is small: **3 heads opaque out of 150**, and they are membership,
+equality and substitution — exactly the primitives one would want atomic anyway.
+
+### E4. Bounded query expansion — tractable, and priced
+
+Phase 1's key samples seven positions, so a rewrite below depth 2 cannot change it.
+Expansion for indexing therefore only branches at those positions:
+
+| | mean variants | p99 | worst |
+|---|---|---|---|
+| **cyclic heads opaque** | **7.59** | 64 | 128 |
+| cyclic heads included | 20.90 | 144 | 324 |
+
+The opacity fix is a ~3× branching reduction as well as a correctness necessity,
+because `wcel` (3,986) and `wceq` (3,410) are the 2nd and 3rd most common heads at
+sampled positions. 14% of goals have *no* rewritable position at all.
+
+Server-side cost, via `EXPLAIN ANALYZE`: one Phase 1-shaped lookup is **0.33 ms**
+warm, so mean expansion is **2.5 ms**, p99 **21 ms**, worst **43 ms**. Negligible
+next to model latency. **Naive enumeration of equivalent whole terms is
+exponential; this is not, because the index key is shallow.**
+
+One caveat the numbers surfaced: unfolding moves a goal *toward primitives*, and
+primitives are the crowded buckets. `df-or` expands a `wo` goal (43 theorems) into
+`wi` (6,433 — 63.7% of the corpus). Reach is gained and head selectivity is lost,
+so "expand everything" is the wrong policy; a bucket-size threshold is the knob.
+
+### E5. The definition-aware embedding — it works
+
+A deterministic compositional fold where an acyclic defined head's combiner returns
+the embedding of its *defining* form (the roadmap's Phase 3 mechanism, applied for
+Phase 2's purpose). Cyclic heads stay opaque per E3.
+
+| | definitions | invariance |
+|---|---|---|
+| propositional + FOL | 16 | **16/16 at cos = 1.000** |
+| ZF (700-conclusion sample, 2,976-term closure) | 131 | **131/131 at cos = 1.000** |
+
+Including the flagship: `df-ss` scores **−0.112 blind, +1.000 aware**. And
+discrimination survives — random ZF theorem pairs sit at median **+0.011**, p99
++0.789, with only **0.376%** above 0.9 (definition-blind: 0.125%). Signal 1.000
+against noise 0.011.
+
+**A methodological finding worth more than the numbers.** The first run showed
+total collapse — 50% of random pairs above 0.9 — which read as "the approach does
+not discriminate". It was the combiner: an unnormalised constructor bias with norm
+~√D times the child contributions, so every embedding degenerated into a function
+of its head symbol alone. Norm-preserving binding (permute + sign-flip) with a
+small bias fixed it completely. **Collapse is the default failure mode of a
+compositional fold and it fails silently** — plausible vectors encoding almost
+nothing. Any implementation needs a discrimination test from day one.
+
+### E6. α-invariance and nesting
+
+Variable leaves numbered by first occurrence in a canonical walk, as `alpha_digest`
+does. Tested against the corpus's own ground truth — 94 groups of conclusions the
+`alpha_digest` column marks as α-variants:
+
+```
+worst similarity within an alpha-variant group:   +1.0000
+groups failing (<0.999):                           0
+definitional invariance, still:                    16/16
+```
+
+**Nesting is free, and proven rather than argued.** Building the fully unfolded
+tree in memory for each conclusion and folding it definition-*blind*:
+
+```
+aware-fold(T) == blind-fold(fully-unfolded T):   1200 match, 0 differ
+```
+
+and for the `(a → X)` shape specifically, with `X` a defined form at depth 1:
+`pm3.22`, `ancomd`, `jca`, `jca31`, `jca32`, `jcai` all at **cos = +1.0000**. This
+is compositionality doing the work: once `emb(b ⊆ c) == emb(∀z(…))`, every
+enclosing context sees identical inputs, at any depth and in any number of
+positions at once. It is exactly the combinatorial cost expansion pays and the fold
+does not.
+
+One production cost this exposes: the α-numbering is *statement-relative*, so a
+shared subterm carries different indices under different roots and **the memo
+cannot be shared across statements**. Sharing survives within a statement, not
+across the corpus — which the roadmap's "O(#distinct subterms)" claim assumes.
+
+### E7. Forward search — the substrate already exists
+
+"Where could this result be *used*?" is the dual of Phase 1's question, and the
+rows to index are already there:
+
+| | count |
+|---|---|
+| explicit hypotheses carrying a term (`promoted_theorem_premises.term_id`) | **9,453 / 9,639 (98%)** |
+| implication-rooted conclusions, each with an antecedent | **6,433** |
+| distinct α-shapes among those antecedents | 1,428 (mean 4.5 theorems per shape) |
+
+Worked example — `pm3.2i` establishes `( φ ∧ ψ )`:
+
+| | |
+|---|---|
+| antecedents sharing its head (`wa`) — the head filter | 1,690 |
+| **antecedents α-identical to it** — the α-digest key | **123** |
+
+So a proved result finds the 123 theorems whose antecedent it discharges exactly,
+by one indexed lookup on machinery that already shipped. See "Forward search"
+below.
+
+### What the seven settle
+
+- **Congruence is harvestable** (E2), so decision 1's second half is derivation, not
+  declaration, and obligations demote to a 0.12% formality.
+- **The equality declaration is two entries**, not one per operator (E1/E2).
+- **Decision 2 is forced to the e-graph** (E3) — the corpus is cyclic, and fold and
+  refuse both assume otherwise.
+- **The cyclic containment is cheap and helps twice** (E3/E4): 3 heads opaque, and a
+  3× branching reduction.
+- **Bounded expansion is affordable** (E4), so the exponential objection does not
+  apply at this index depth — but it lands in crowded buckets.
+- **The embedding delivers exactly the invariance hypothesised** (E5/E6), is
+  α-invariant, handles nesting for free, and keeps discrimination.
+- **The equational half's demand is thin on set.mm** (E1) — 57 conclusion pairs —
+  though that is corpus-specific and mathlib would very likely differ.
+## The shape the measurements suggest: retrieval, not a stored digest
+
+The phase has been framed around producing one canonical form per statement, which
+serves **dedup** — "do we already have this?". The stated use is different:
+LLM-driven ingestion, authoring on top of an imported corpus, and search over it.
+That is **retrieval**, and retrieval wants recall: a model can discard an
+irrelevant suggestion, but cannot recover a lemma it was never shown.
+
+Under that reading the design changes shape:
+
+> Use the theory at **query time**, and let the Phase 1 index stay the lookup
+> layer. Do not compute and store a canonical digest for every theorem.
+
+That dissolves three of the open questions below rather than answering them —
+extraction has nothing to extract for, nothing new is stored, and nothing goes
+stale when someone proves something. It also suits a corpus under constant
+LLM-driven growth, where a stored digest would be re-hashing continuously.
+
+Two mechanisms serve it, and E4–E6 measured both:
+
+- **The definition-aware fold (E5/E6)** — linear, α-invariant, nesting-free,
+  returns a *ranked* neighbourhood, and therefore does not inherit the
+  crowded-bucket skew that expansion does (E4). Approximate.
+- **Bounded query expansion (E4)** — exact, cheap at this index depth, and the
+  natural home for general equations the fold cannot absorb. Inherits the bucket
+  skew, so it wants a size threshold.
+
+## General equations: the ceiling, and the ways round it
+
+The fold absorbs definitions because a definition is a **local edit to one
+combiner**: `f(a,b) ≝ RHS` is served by redefining `C_f` to fold the RHS. Nothing
+else changes, which is why nesting is free (E6).
+
+A general equation is not a redefinition but a **constraint**. Distributivity
+`A ∪ (B ∩ C) = (A ∪ B) ∩ (A ∪ C)` would require
+
+```
+C_∪(a, C_∩(b,c))  =  C_∩(C_∪(a,b), C_∪(a,c))     for all a, b, c
+```
+
+a functional equation binding two combiners jointly, with `∪` on both sides in
+different arrangements. There is no substitution for `C_∪` that satisfies it.
+
+And the general case is not merely hard. The equivalence generated by an arbitrary
+equational theory is **undecidable**; a fold is a total, terminating, local
+function that decides equality by computing a value. A total computable function
+cannot decide an undecidable relation, so **exact coverage is impossible in
+principle**.
+
+The boundary is crisp, and worth designing against:
+
+> A fold can absorb a law that is a property of **one** operator. It cannot absorb
+> a law relating the **arrangement of two**.
+
+| law | achievable | how |
+|---|---|---|
+| definitions | ✓ *measured* | redefine that combiner (E5) |
+| commutativity | ✓ | symmetric combiner (sum/max pooling) |
+| associativity | ✓ | flatten to n-ary, associative combiner |
+| AC together | ✓ | multiset pooling |
+| idempotence | ✓ | dedupe before pooling |
+| unit laws | ✓ | combiner drops the identity argument |
+| distributivity, absorption, De Morgan | ✗ | no local rule exists |
+| most of mathlib's `simp` set | ✗ | same reason |
+
+Five ways round it, in rough order of cost:
+
+1. **Restrict scope honestly.** Cover definitions + AC + units exactly; document the
+   rest as out of scope. Given E1 (13 commutativity, 8 associativity laws on
+   set.mm), this may be sufficient until another corpus arrives.
+2. **Hybrid.** Fold for recall, exact machinery beside it. Uncovered equations
+   simply do not improve recall; nothing breaks. Costs nothing extra.
+3. **Bounded equation-aware expansion.** Rewrite the goal a few `simp`-style steps
+   and embed each variant. Partial coverage, bounded cost, composes with the fold.
+4. **Normalise, then embed.** An e-graph handles the global theory; the fold
+   vectorises its representative. Principled, and reintroduces the e-graph's cost
+   and its extraction decision.
+5. **Learned combiners under a hard invariance constraint.** Keep the proven
+   invariances architecturally and *learn* the residual, contrastively — **the
+   corpus self-labels**, since every `wb`/`wceq` theorem is a positive pair. This is
+   realistically the only route by which thousands of heterogeneous `simp` rules
+   ever reach the geometry; nobody hand-encodes those into combiners.
+
+**Recommended: 1 now, 2 always, 5 when a curated rewrite corpus (mathlib) lands.**
+
+## Forward search: where could an established result be used?
+
+Phase 1 answers *backward* — which theorems could conclude my goal. The **forward**
+question is the one an author or an agent asks after proving something: *I have
+established a formula of this shape; where does it get me?* It matters for the
+stated intent, because attacking an open problem is forward chaining, and "what
+does this unlock" is how a proved lemma earns its place.
+
+**It is the same machinery pointed at a different column**, and E7 shows the rows
+are already there: 9,453 explicit hypotheses carry a term (98% of them), and 6,433
+implication-rooted conclusions each carry an antecedent. Together that is ~15,900
+indexable *input* positions beside the 10,101 output positions Phase 1 indexes.
+
+The three layers already built or designed answer three strengths of the question:
+
+| question | mechanism | status |
+|---|---|---|
+| which theorems take **exactly** this, up to renaming? | `alpha_digest` on the antecedent | Phase 0, shipped |
+| which take something this is an **instance** of? | fingerprint filter + `match` confirm, on antecedents | Phase 1 machinery, new column |
+| which take something this is **definitionally** equal to? | the definition-aware fold (E5) | this phase |
+
+E7's worked example makes the middle column concrete. `pm3.2i` proves `( φ ∧ ψ )`;
+1,690 antecedents share its head, and **123 are α-identical to it** — one indexed
+lookup finds the theorems it discharges outright. Across the corpus the α-key is
+selective: 6,433 antecedents fall into 1,428 distinct shapes, 4.5 theorems apiece.
+
+Two cautions the measurement raises. **27.5% of antecedents are a bare
+metavariable** — they match anything, so they are in every candidate set and rank
+last on informativeness. And the forward direction wants *matching*, not equality:
+the theorem's antecedent must be **more general than** the established result, a
+one-directional test `unify.match` already performs and the fingerprint already
+filters soundly for.
+
+Nothing here needs a new index type — it needs the existing fingerprint written for
+antecedent and hypothesis terms, and a route that reads it. That makes forward
+search a materially cheaper follow-on than the rest of this phase, and arguably the
+highest-value one for an agent-driven workflow.
 
 ## Decisions to take before any code
 
@@ -571,19 +840,30 @@ commitment than this phase.
    congruence for", which proof search will want and an importer can validate
    against. Neither commits to building the equational half, which the demand
    figures argue against doing yet.
-2. **Fold, refuse, or e-graph** for the shared-defined-form case, per the
-   non-confluence section. This decides whether the canonical key is a term or an
-   e-class.
-3. **How a representative is extracted**, given that e-class ids are not stable.
-   Sorting AC arguments by the children's existing `digest` handles the case that
-   looks hardest; the general case needs scoping.
+2. ~~**Fold, refuse, or e-graph**~~ **Settled by E3: e-graph, and it is forced.**
+   The corpus's definitional axioms are genuinely cyclic (`wceq → wcel → wceq`), so
+   fold and refuse both assume an acyclicity the data violates; only a congruence
+   closure is indifferent to cycles. The shared-head case (`wcel`, two axioms)
+   dissolves the same way. **With one containment that does most of the work:**
+   leave the 3 cyclic heads opaque — cheap (3 of 150), defensible (they are
+   membership, equality, substitution), and worth a 3× branching reduction on top
+   (E4). If the scope ever narrows to authored systems with `Definition` rows, the
+   engine enforces acyclicity there and the cheaper options return.
+3. **How a representative is extracted** — *deferred, and possibly moot.* It only
+   arises if a canonical digest is stored, which the retrieval framing above
+   argues against. Should a digest be wanted, sorting AC arguments by the
+   children's existing `digest` handles the case that looks hardest.
 4. **Whether a match must explain itself.** If retrieval returns the definitional
    bridge, the structure must be proof-producing, which is a stronger requirement
-   than hashing and should be chosen up front.
+   than hashing and should be chosen up front. Still open, and now the *first*
+   question for whichever mechanism is built: the fold gives a similarity with no
+   witness, so if an agent needs the connecting steps, that is an argument for
+   expansion over embedding on those queries.
 5. **Conditional definitions.** Carry the proviso into the merge, or exclude
    conditional definitions from normalisation. The safe default is to exclude.
-6. **Whether `theory_digest` is stored at all**, and if so what invalidates it and
-   what guards a stale one.
+6. ~~**Whether `theory_digest` is stored at all**~~ — *recommend not*, per the
+   retrieval framing. Query-time use keeps the theory always-current and removes
+   invalidation entirely. Revisit only if exact dedup becomes a requirement.
 
 ## The option that makes congruence moot
 
@@ -611,6 +891,33 @@ a stepping stone toward the equational half — it is the finished feature, and 
 equational half is a Phase 3 idea that should be argued for on its own evidence.
 
 ## Recommendation
+
+**Build the definition-aware fold as the retrieval mechanism, and forward search
+beside it.** The seven experiments moved this from the split the note originally
+proposed. What changed:
+
+1. **The definitional half has no `Definition` rows to work on** (E3) — the table is
+   empty deployment-wide, and the corpus's definitional content is equational
+   axioms. The clean "definitions are already structured, already terminating"
+   story holds for *authored* systems, of which there are currently none.
+2. **The fold does the job the split was reaching for** (E5/E6), measured: exact
+   invariance on 147 definitions, α-invariant against the corpus's own ground
+   truth, nesting free by compositionality, discrimination intact, linear cost.
+3. **Retrieval, not dedup, is the use** — so a stored canonical digest, and the
+   three decisions it drags in, are avoidable.
+4. **Forward search is cheap and unbuilt** (E7): 15,900 indexable input positions
+   already carry terms, and the α-key alone finds 123 exact consumers for a sample
+   result. For an agent-driven workflow this is plausibly the highest value per
+   unit of work anywhere in the phase.
+
+Order: the fold (with cyclic heads opaque and a discrimination test from day one),
+then forward search over antecedents and hypotheses, then bounded expansion where
+exactness is needed, and the harvester (E2) whenever the equational path is taken
+up. The e-graph is settled as the *structure* for that path (decision 2) but is not
+the first thing to build.
+
+The original split argument follows, for the authored-systems case where it still
+holds.
 
 **Split the phase, and build the definitional half first.**
 
