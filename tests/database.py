@@ -90,8 +90,8 @@ def _always() -> list[Table]:
     proof read consults for the corpus's record of that proof's label — and, since
     that record carries its cross-references, its bibliography citations and what
     points back at it, for both directions of the reference graph.
-    `label_avoidances` rides along with it: the same read reports what the corpus
-    says a proof does without. So does
+    `label_claims` rides along with it: the same read reports what the corpus's
+    `$j` markup asserts about that label. So does
     `theorem_assumptions`: promoting a theorem records what it rests on that
     nobody proved, so the table is written on a path no test has to know about
     (and `assumptions` is read beside it). `proof_lines` and `theorems` join them
@@ -117,7 +117,7 @@ def _always() -> list[Table]:
         GlossaryEntryRow,
         SourceDocumentRow,
     )
-    from app.db.avoidances import LabelAvoidanceRow
+    from app.db.claims import LabelClaimRow
     from app.db.models import Theorem
     from app.db.proof_lines import ProofLineAntecedentRow, ProofLineRow
     from app.db.descriptions import (
@@ -147,7 +147,7 @@ def _always() -> list[Table]:
         LabelAttributionRow.__table__,
         LabelReferenceRow.__table__,
         LabelCitationRow.__table__,
-        LabelAvoidanceRow.__table__,
+        LabelClaimRow.__table__,
         AssumptionRow.__table__,
         TheoremAssumptionRow.__table__,
         SourceDocumentRow.__table__,

@@ -18,13 +18,14 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from app.db.avoidances_mapping import avoided_by
+from app.db.claims_mapping import claims_about
 from app.db.descriptions_mapping import mentions_of
 from app.db.label_search import nearest, proofs_named
 from app.db.lineage import spine_ids
 from app.schemas import (
     Attribution,
     BibliographyCitation,
+    LabelClaim,
     LabelDescription,
     LabelMention,
     LabelReference,
@@ -96,34 +97,56 @@ async def documentation_out(
     proof created through the API carries its own title and description instead.
 
     Nothing is not the same as no prose, which is why ``label`` is an argument
-    rather than read off ``row``. A `$j usage … avoids …` names a label whether or
-    not the file also comments on it — that being why `label_avoidances` is a
-    separate table — so a record with avoidances and no description is a record,
-    and returning None for it would put the two facts back together (found in
-    review).
+    rather than read off ``row``. A `$j` directive names a label whether or not
+    the file also comments on it — that being why `label_claims` is a separate
+    table — so a record with claims and no description is a record, and returning
+    None for it would put the two facts back together (found in review).
     """
     # Once for the whole read. Three questions below want the same chain, and
     # each walking it themselves cost a dozen sequential round trips per proof
     # page on a layered corpus (found in review).
     spine = await spine_ids(session, system_id)
-    avoids = await avoided_by(session, spine, label)
-    if row is None:
-        if not avoids:
-            return None
-        return LabelDescription(label=label, avoids=avoids)
+    claimed = await claims_about(session, spine, label)
+    if row is None and not claimed:
+        return None
 
-    mentioned, total = await mentions_of(session, spine, row.label, MENTION_LIMIT)
-    # One lookup for both directions, since a label mentioning this one is as
-    # likely to be a proof as a label this one mentions.
+    mentioned, total = (
+        await mentions_of(session, spine, row.label, MENTION_LIMIT)
+        if row is not None
+        else ([], 0)
+    )
+    # One lookup for all three, since a claim's object is as likely to be a proof
+    # as a reference's target: `restatement 'ax-sep' of 'axsep'` points at one.
+    # Made before the `row is None` return as well, because a record can be claims
+    # and nothing else and its objects still want pages (found in review, where
+    # the objects reached this call on neither path).
     linkable = await resolve_labels(
         session,
         spine,
-        [*(reference.target for reference in row.references), *mentioned],
+        [
+            *(reference.target for reference in (row.references if row else ())),
+            *mentioned,
+            *(found for _, found in claimed if found),
+        ],
         viewer,
     )
 
     def link(name: str) -> tuple[uuid.UUID | None, str | None]:
         return linkable.get(name, (None, None))
+
+    def claims() -> list[LabelClaim]:
+        return [
+            LabelClaim(
+                kind=kind,
+                object=found,
+                object_proof_id=link(found)[0] if found else None,
+                object_title=link(found)[1] if found else None,
+            )
+            for kind, found in claimed
+        ]
+
+    if row is None:
+        return LabelDescription(label=label, claims=claims())
 
     return LabelDescription(
         label=row.label,
@@ -156,7 +179,7 @@ async def documentation_out(
             )
             for citation in row.citations
         ],
-        avoids=avoids,
+        claims=claims(),
         discouraged_usage=row.discouraged_usage,
         discouraged_modification=row.discouraged_modification,
     )

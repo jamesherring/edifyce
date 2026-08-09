@@ -184,3 +184,79 @@ def markup_of(comments: Sequence[str]) -> tuple[Directive, ...]:
 def by_keyword(directives: Sequence[Directive], keyword: str) -> Iterator[Directive]:
     """Those of ``directives`` with this keyword, in order."""
     return (directive for directive in directives if directive.keyword == keyword)
+
+
+# Keywords whose values are not names, and so make no claim about a label.
+#
+# A deny-list rather than an allow-list, so a keyword some future file invents
+# lands as data rather than being dropped in silence. What it excludes is the four
+# shapes measured over `set.mm` whose arguments are something other than a name:
+# two colour tables for Metamath's own site (the same reason `htmldef` is skipped
+# — presentation built for a renderer that is not this one), the `garden_path`
+# hints written in bare math tokens, and `unambiguous`, whose argument names a
+# parsing algorithm (`klr 5`). `type_conversions` carries no argument at all.
+_NOT_NAMES = frozenset(
+    {
+        "varcolorcode",
+        "altvarcolorcode",
+        "garden_path",
+        "unambiguous",
+        "type_conversions",
+    }
+)
+
+
+@dataclass(frozen=True)
+class Claim:
+    """One ``$j`` assertion about a label, flattened to a triple.
+
+    The shape every name-carrying directive reduces to, which is what makes them
+    storable as one thing rather than as a table per keyword. Two forms produce
+    it, and the distinction is the presence of a preposition:
+
+    - ``usage 'X' avoids 'Y' 'Z';`` — a *subject* and its objects, one claim each.
+      ``kind`` joins the keyword to the preposition (``usage_avoids``), since the
+      preposition is what says which relation it is: `equality … from` and
+      `notfree … from` are different claims that share a word.
+    - ``primitive 'wn' 'wi';`` — no preposition, so every argument is a subject
+      making the same claim about itself, and ``object`` is None. This is how
+      `set.mm` declares its primitives and how the natural-deduction tables list
+      the theorems playing each role.
+    """
+
+    subject: str
+    kind: str
+    object: str | None = None
+
+
+def claims_of(directives: Sequence[Directive]) -> tuple[Claim, ...]:
+    """Every directive that names labels, as claims, in file order.
+
+    Deliberately not a reading of what each keyword *means*: `restatement_of` and
+    `congruence` are recorded as the file states them, and what they are worth is
+    the reader's to decide. That is the same choice `comments` makes for an
+    attribution's ``kind`` — a closed vocabulary here would have to be maintained
+    against a file free to add to it, and would drop whatever it had not heard of.
+    """
+    claims: list[Claim] = []
+    for directive in directives:
+        if directive.keyword in _NOT_NAMES:
+            continue
+        if not directive.clauses:
+            claims.extend(
+                Claim(subject=argument, kind=directive.keyword)
+                for argument in directive.arguments
+            )
+            continue
+        subject = directive.subject
+        if subject is None:
+            # A preposition with nothing before it claims about nothing. None of
+            # set.mm's do; a malformed block should be skipped rather than stored
+            # under an empty subject.
+            continue
+        claims.extend(
+            Claim(subject=subject, kind=f"{directive.keyword}_{preposition}", object=value)
+            for preposition, values in directive.clauses.items()
+            for value in values
+        )
+    return tuple(claims)

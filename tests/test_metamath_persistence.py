@@ -53,7 +53,7 @@ from app.db.promoted_theorems_mapping import LibraryChain, read_theorems
 from app.db import metamath_store
 from app.db.metamath_store import import_corpus
 from app.db.models import FormalSystem, Proof, ProofFolder
-from app.db.avoidances import LabelAvoidanceRow
+from app.db.claims import LabelClaimRow
 from app.db.descriptions import (
     LabelAttributionRow,
     LabelDescriptionRow,
@@ -155,7 +155,7 @@ _TABLES = [
         # And what the file says about each label it names.
         LabelDescriptionRow, LabelAttributionRow, LabelReferenceRow,
         LabelCitationRow,
-        LabelAvoidanceRow,
+        LabelClaimRow,
     )
 ]
 
@@ -920,16 +920,52 @@ def test_an_avoids_declaration_is_stored_against_the_label_it_names(session):
     declaring = PROPOSITIONAL + "$( $j usage 'a1i' avoids 'ax-2'; $)\n"
     report = import_corpus(session, parse(declaring), name="Declaring")
 
-    assert report.avoidances == 1
-    (row,) = session.scalars(select(LabelAvoidanceRow)).all()
-    assert (row.label, row.avoided) == ("a1i", "ax-2")
+    assert report.claims == 1
+    (row,) = session.scalars(select(LabelClaimRow)).all()
+    assert (row.subject, row.kind, row.object) == ("a1i", "usage_avoids", "ax-2")
+
+
+def test_a_directive_with_no_preposition_claims_about_each_argument(session):
+    # `primitive 'wn' 'wi';` says the same thing about both and names no object,
+    # which is the second of the two shapes a `$j` directive takes.
+    declaring = PROPOSITIONAL + "$( $j primitive 'a1i' 'mp2'; $)\n"
+    report = import_corpus(session, parse(declaring), name="Primitive")
+
+    assert report.claims == 2
+    rows = session.scalars(select(LabelClaimRow).order_by(LabelClaimRow.subject)).all()
+    assert [(r.subject, r.kind, r.object) for r in rows] == [
+        ("a1i", "primitive", None),
+        ("mp2", "primitive", None),
+    ]
+
+
+def test_a_restatement_is_stored_as_the_relation_the_file_writes(session):
+    # The 29 that pair an axiom with the theorem deriving it — `ax-sep` restates
+    # `axsep` — and the reason the kind keeps its preposition.
+    declaring = PROPOSITIONAL + "$( $j restatement 'a1i' of 'mp2'; $)\n"
+    import_corpus(session, parse(declaring), name="Restating")
+
+    (row,) = session.scalars(select(LabelClaimRow)).all()
+    assert (row.subject, row.kind, row.object) == ("a1i", "restatement_of", "mp2")
+
+
+def test_a_directive_whose_values_are_not_names_is_skipped(session):
+    # `varcolorcode` is a colour table for Metamath's own site, and `garden_path`
+    # is written in bare math tokens. Neither claims anything about a label.
+    declaring = (
+        PROPOSITIONAL
+        + "$( $j varcolorcode 'wff' as '0000FF'; garden_path ( A => ( ph ; $)\n"
+    )
+    report = import_corpus(session, parse(declaring), name="Presentation")
+
+    assert report.claims == 0
 
 
 def test_a_file_declaring_none_stores_none(session, imported):
     # The mechanism is optional and most `.mm` files carry no `$j` at all, so an
     # import of one behaves exactly as it did before this existed.
-    assert imported.avoidances == 0
-    assert session.scalars(select(LabelAvoidanceRow)).all() == []
+    assert imported.claims == 0
+    assert session.scalars(select(LabelClaimRow)).all() == []
 
 
 def test_a_declaration_about_a_label_past_the_horizon_is_not_stored(session):
@@ -938,7 +974,17 @@ def test_a_declaration_about_a_label_past_the_horizon_is_not_stored(session):
     declaring = PROPOSITIONAL + "$( $j usage 'a2i' avoids 'ax-1'; $)\n"
     report = import_corpus(session, parse(declaring), limit=2, name="Prefix")
 
-    assert report.avoidances == 0
+    assert report.claims == 0
+
+
+def test_a_claim_about_an_object_past_the_horizon_is_still_stored(session):
+    # Only the *subject* is filtered. An object is frequently not an assertion at
+    # all — `primitive 'wn'` names a syntax constructor — and what the claim says
+    # about its subject is true whether or not the object came along.
+    declaring = PROPOSITIONAL + "$( $j usage 'mp2' avoids 'a2i'; $)\n"
+    report = import_corpus(session, parse(declaring), limit=1, name="Object")
+
+    assert report.claims == 1
 
 
 def test_a_declaration_naming_a_label_the_file_lacks_is_ignored(session):
@@ -947,4 +993,19 @@ def test_a_declaration_naming_a_label_the_file_lacks_is_ignored(session):
     declaring = PROPOSITIONAL + "$( $j usage 'nosuchlabel' avoids 'ax-1'; $)\n"
     report = import_corpus(session, parse(declaring), name="Stray")
 
-    assert report.avoidances == 0
+    assert report.claims == 0
+
+
+def test_a_claim_about_a_typecode_rather_than_a_label_is_not_stored(session):
+    """`syntax 'wff';` and `bound 'setvar';` name sorts, and a subject is a label.
+
+    Five of set.mm's 3,364 claims are these, and nothing is lost by excluding
+    them: they restate what the built system already models structurally, and
+    `tests/test_setmm_against_its_markup.py` checks those declarations against
+    what the grammar derives. Pinned so the exclusion stays deliberate rather
+    than becoming an accident of the horizon filter (found in review).
+    """
+    declaring = PROPOSITIONAL + "$( $j syntax 'wff'; bound 'setvar'; $)\n"
+    report = import_corpus(session, parse(declaring), name="Sorts")
+
+    assert report.claims == 0

@@ -36,8 +36,8 @@ from app.db.models import (
     Theorem,
     User,
 )
-from app.db.avoidances import LabelAvoidanceRow
-from app.db.avoidances_mapping import avoided_by, store_avoidances
+from app.db.claims import LabelClaimRow
+from app.db.claims_mapping import claims_about, store_claims
 from app.db.descriptions import (
     LabelAttributionRow,
     LabelDescriptionRow,
@@ -198,9 +198,9 @@ __all__ = [
     "SymbolRow",
     # What a system says about its labels (app/db/descriptions.py).
     "LabelAttributionRow",
-    "LabelAvoidanceRow",
-    "avoided_by",
-    "store_avoidances",
+    "LabelClaimRow",
+    "claims_about",
+    "store_claims",
     "LabelReferenceRow",
     "LabelDescriptionRow",
     "contributions",

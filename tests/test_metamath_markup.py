@@ -20,6 +20,7 @@ from website.logical.metamath.markup import (
     PREPOSITIONS,
     Directive,
     by_keyword,
+    claims_of,
     markup_of,
     parse_markup,
 )
@@ -144,3 +145,68 @@ def test_directives_can_be_taken_by_keyword() -> None:
     assert [d.subject for d in by_keyword(found, "primitive")] == ["wn", "wi"]
     assert [d.subject for d in by_keyword(found, "usage")] == ["a"]
     assert list(by_keyword(found, "nothing")) == []
+
+
+# ---------------------------------------------------------------------------
+# Directives flattened to claims
+#
+# The shape that makes 24 kinds one table rather than 24: a subject, a kind and
+# at most one object.
+# ---------------------------------------------------------------------------
+
+
+def test_a_directive_with_a_preposition_claims_once_per_value() -> None:
+    (claims) = claims_of(parse_markup("usage 'a1i' avoids 'ax-11' 'ax-12';"))
+
+    assert [(c.subject, c.kind, c.object) for c in claims] == [
+        ("a1i", "usage_avoids", "ax-11"),
+        ("a1i", "usage_avoids", "ax-12"),
+    ]
+
+
+def test_a_directive_with_no_preposition_claims_about_each_argument() -> None:
+    # `primitive 'wn' 'wi';` says the same thing about both and names no object.
+    claims = claims_of(parse_markup("primitive 'wn' 'wi';"))
+
+    assert [(c.subject, c.kind, c.object) for c in claims] == [
+        ("wn", "primitive", None),
+        ("wi", "primitive", None),
+    ]
+
+
+def test_the_preposition_is_part_of_the_kind() -> None:
+    # `equality … from` and `notfree … from` share a word and mean different
+    # things, so the keyword alone would collapse two relations into one.
+    claims = claims_of(
+        parse_markup("equality 'wb' from 'biid'; notfree 'wnf' from 'nfcdeq';")
+    )
+
+    assert [c.kind for c in claims] == ["equality_from", "notfree_from"]
+
+
+def test_a_directive_with_several_prepositions_claims_under_each() -> None:
+    claims = claims_of(parse_markup("natded_true 'wtru' with 'mptru' 'tru';"))
+
+    assert [(c.kind, c.object) for c in claims] == [
+        ("natded_true_with", "mptru"),
+        ("natded_true_with", "tru"),
+    ]
+
+
+def test_a_colour_table_claims_nothing() -> None:
+    # `varcolorcode` is presentation for Metamath's own site — the same reason
+    # `htmldef` is skipped — and its values are hex, not names.
+    assert claims_of(parse_markup("varcolorcode 'wff' as '0000FF';")) == ()
+
+
+def test_a_garden_path_hint_claims_nothing() -> None:
+    # Written in bare math tokens rather than labels.
+    assert claims_of(parse_markup("garden_path ( A => ( ph ;")) == ()
+
+
+def test_an_unrecognised_keyword_is_still_a_claim() -> None:
+    # A deny-list, not an allow-list: a keyword some future file invents lands as
+    # data rather than being dropped in silence.
+    claims = claims_of(parse_markup("someday 'x' of 'y';"))
+
+    assert [(c.subject, c.kind, c.object) for c in claims] == [("x", "someday_of", "y")]

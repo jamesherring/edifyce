@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { renderProse, referenceHref } from '$lib/prose';
-	import type { LabelDescription } from '$lib/api';
+	import type { LabelClaim, LabelDescription } from '$lib/api';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import Lock from '@lucide/svelte/icons/lock';
 
@@ -14,6 +14,45 @@
 	// `MENTION_LIMIT` in `app/routers/_documentation.py` on why it is capped —
 	// set.mm points at `ax-13` from 656 statements.
 	const hidden = $derived(documentation.mentioned_by_total - documentation.mentioned_by.length);
+
+	// The `$j` claims, gathered by kind and kept in the order the file wrote them.
+	// A Map preserves insertion order, so the first kind seen leads.
+	const grouped = $derived.by(() => {
+		const byKind = new Map<string, LabelClaim[]>();
+		for (const claim of documentation.claims) {
+			const found = byKind.get(claim.kind);
+			if (found) found.push(claim);
+			else byKind.set(claim.kind, [claim]);
+		}
+		return [...byKind];
+	});
+
+	// The kinds worth a sentence rather than a label. Everything else falls back
+	// to the file's own word with its underscores opened out, deliberately: the
+	// vocabulary is Metamath's and is open, so a kind this does not know must
+	// still render as something a reader can look up.
+	// A Map rather than an object literal: the `$j` vocabulary is open, so a kind
+	// could be spelled `constructor` or `valueOf` — and a plain lookup would then
+	// return an `Object.prototype` member and render function source (found in
+	// review).
+	const HEADINGS = new Map<string, string>([
+		['usage_avoids', 'Proved without'],
+		['restatement_of', 'Restatement of'],
+		['justification_for', 'Justification for'],
+		['definition_for', 'Definition for'],
+		['equality_from', 'Equality from'],
+		['notfree_from', 'Not-free from'],
+		['primitive', 'Primitive'],
+		['congruence', 'Congruence'],
+		['bound', 'Bound']
+	]);
+
+	function claimHeading(kind: string): string {
+		const known = HEADINGS.get(kind);
+		if (known) return known;
+		const opened = kind.replace(/_/g, ' ');
+		return opened.charAt(0).toUpperCase() + opened.slice(1);
+	}
 </script>
 
 {#if documentation.discouraged_usage || documentation.discouraged_modification}
@@ -93,20 +132,43 @@
 	</p>
 {/if}
 
-{#if documentation.avoids.length > 0}
+{#if grouped.length > 0}
 	<div class="border-t pt-3">
-		<h3 class="mb-1.5 text-xs font-medium text-muted-foreground">Proved without</h3>
-		<!-- A result about the *proof* rather than the theorem: this one is derivable
-		     without those. Nowhere else to read it from — an avoided statement is
-		     usually nowhere in the citation graph, that being the point. Presented as
-		     the corpus's claim, since nothing here re-derives the dependencies. -->
-		<ul class="flex flex-wrap items-center gap-x-2 gap-y-1">
-			{#each documentation.avoids as avoided (avoided)}
-				<li>
-					<code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">{avoided}</code>
-				</li>
+		<!-- What the corpus's `$j` markup asserts about this label. Grouped by kind
+		     because the kinds are unrelated claims that happen to share a shape: a
+		     proof that does without `ax-12` and a statement that restates `axsep`
+		     belong under different headings, not in one list. -->
+		<dl class="flex flex-col gap-2">
+			{#each grouped as [kind, claims] (kind)}
+				<div>
+					<dt class="mb-1.5 text-xs font-medium text-muted-foreground">
+						{claimHeading(kind)}
+					</dt>
+					<dd class="flex flex-wrap items-center gap-x-2 gap-y-1">
+						{#each claims as claim, i (i)}
+							{#if claim.object === null}
+								<!-- A directive with no preposition claims about the subject
+								     alone: `primitive 'wn';` names nothing else. The heading
+								     is the whole of it. -->
+								<span class="text-xs text-muted-foreground">declared</span>
+							{:else if claim.object_proof_id}
+								<a
+									href={`/proofs/${claim.object_proof_id}`}
+									class="font-mono text-xs underline decoration-dotted underline-offset-2 hover:decoration-solid"
+									title={claim.object_title ?? undefined}>{claim.object}</a
+								>
+							{:else}
+								<!-- Named, but with no page to open: an axiom or a definition
+								     is claimed about and was never proved. -->
+								<code class="rounded bg-muted px-1 py-0.5 font-mono text-xs"
+									>{claim.object}</code
+								>
+							{/if}
+						{/each}
+					</dd>
+				</div>
 			{/each}
-		</ul>
+		</dl>
 	</div>
 {/if}
 

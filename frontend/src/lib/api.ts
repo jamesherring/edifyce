@@ -1067,10 +1067,10 @@ export interface LabelDescription {
 	discouraged_usage: boolean;
 	/** `(Proof modification is discouraged.)` — the proof is as it is on purpose. */
 	discouraged_modification: boolean;
-	/** What the corpus declares this proof does *without* — set.mm's `$j usage …
-	 *  avoids …`, its record that a theorem is derivable from less. The file's
-	 *  claim; nothing re-derives the proof's dependencies to check it. */
-	avoids: string[];
+	/** What the corpus's `$j` markup asserts about this label — that its proof
+	 *  does without `ax-12`, that it restates `axsep`, that it is primitive. The
+	 *  file's claims; nothing re-derives a proof's dependencies to check them. */
+	claims: LabelClaim[];
 }
 
 /** One label a prose search matched, and where in it the words landed.
@@ -1131,6 +1131,20 @@ export interface LabelReference {
 	end: number;
 	proof_id: string | null;
 	title: string | null;
+}
+
+/** One `$j` assertion about a label — mirrors the backend's `LabelClaim`.
+ *
+ * `kind` is the file's own word: the directive's keyword joined to its
+ * preposition (`usage_avoids`, `restatement_of`, `primitive`). Deliberately not
+ * mapped to a closed vocabulary, so a client that recognises a kind can render it
+ * specially and one that does not can still show it. `object` is null for a
+ * directive with no preposition, where the claim is about the subject alone. */
+export interface LabelClaim {
+	kind: string;
+	object: string | null;
+	object_proof_id: string | null;
+	object_title: string | null;
 }
 
 /** One `[Monk1] p. 22` in a label's prose — mirrors `BibliographyCitation`.
