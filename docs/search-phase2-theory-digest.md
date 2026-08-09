@@ -239,13 +239,27 @@ canonical key. Terminating is not confluent, and the roadmap conflates them.
 Three ways out, and the choice is a decision rather than a consequence:
 
 1. **Fold rather than unfold.** Normalise toward the *defined* form (`lower` →
-   `higher`) instead of away from it. Attractive because it is the direction that
-   shrinks a term, and because the shared-form case merges rather than diverges —
-   `A` and `B` both fold to `S`, which is the answer we wanted. But folding is not
-   terminating for free: the relation's acyclicity was established in the
-   unfolding direction, and a `lower` that contains its own `higher` as a subterm
-   is exactly what non-circularity permits when the defined form is a declared
-   production.
+   `higher`) instead of away from it. Attractive because the shared-form case
+   merges rather than diverges — `A` and `B` both fold to `S`, which is the answer
+   we wanted.
+
+   Folding still needs its own termination argument, and cannot borrow the one
+   above. Acyclicity bounds *unfolding*, where each step replaces a defined form
+   with material strictly earlier in the "is defined using" DAG — a descending
+   measure. Folding runs those edges backwards and inherits no measure, because it
+   *introduces* a defined form. (An earlier draft of this note claimed the gap was
+   a `lower` containing its own `higher`; that is wrong, and
+   `_require_a_non_circular_definition` refuses exactly that — found in review on
+   #211.)
+
+   The measure folding actually wants is **term size**, and it works precisely
+   when every definition's `higher` is strictly smaller than its `lower` — which
+   is what "a definition abbreviates" means informally. Nothing in `declarative.py`
+   enforces it: a definition whose defined form is *larger* than its defining form
+   would fold forever, each fold creating a new site. So the fold option is viable
+   and its termination reduces to one checkable condition nobody currently checks.
+   That is a much better place to be than a vague warning, and if this option is
+   taken, the size condition is the first thing to add.
 2. **Confluence as a check, not an assumption.** Keep unfolding, and *refuse* (or
    simply decline to merge) where a shared defined form's definitions do not
    join. This is the conservative option and fits the repo's habit of failing
@@ -390,9 +404,17 @@ commutativity changes the digest of terms already stored. So:
 
 A stored digest also needs the "which generation" guard Phase 1's fingerprint has
 (`POSITIONS_KEY`, refusing a comparison across a change to the position set). The
-analogous key here is the identity of the theory a digest was computed under, and
-it is more volatile than a position set: it changes whenever anyone proves
-anything.
+analogous key here is the identity of the theory a digest was computed under.
+
+**It must advance only on facts that change the equivalence relation** — a new
+definition, a newly accepted equation, a newly harvested congruence fact — and not
+on every proof. An ordinary non-equational theorem (a typing lemma, a closure
+condition: most of any corpus) adds no rewrite and moves no class, so bumping the
+generation for it would invalidate every stored digest on every insert and turn a
+corpus import into repeated system-wide rehashing (found in review on #211). The
+earlier phrasing here said the key "changes whenever anyone proves anything",
+which was both wrong and inconsistent with the invalidation scope directly above:
+the two must agree that the *only* interesting events are theory-changing ones.
 
 ## Decisions to take before any code
 
