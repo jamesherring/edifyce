@@ -1,9 +1,41 @@
 name: Tests
 
+# The backend suite. The frontend's lives in frontend.yml, split out so each only
+# runs when its own side changed — two thirds of PRs here touch both, but a
+# backend-only change should not spend a runner rebuilding the SPA.
+#
+# The paths below are "what pytest reads", which is wider than app/ + website/:
+# five test modules import from scripts/ (check_layering, import_metamath,
+# rebuild_markup, restore_proofs), so a change there must re-run the suite. What
+# is deliberately absent is deliberately untested — benchmarks/ is measured
+# rather than asserted, tools/ is Atlas's model loader and rides migrations.yml.
+
 on:
   pull_request:
+    paths:
+      - "app/**"
+      - "website/**"
+      - "tests/**"
+      - "scripts/**"
+      # The Vercel entrypoint, which imports app.main.
+      - "api/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "pytest.ini"
+      - ".github/workflows/tests.yml"
   push:
     branches: [develop]
+    paths:
+      - "app/**"
+      - "website/**"
+      - "tests/**"
+      - "scripts/**"
+      # The Vercel entrypoint, which imports app.main.
+      - "api/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "pytest.ini"
+      - ".github/workflows/tests.yml"
 
 # A push that supersedes an earlier one on the same branch cancels its run. The
 # older commit's verdict is not one anybody acts on, and the suite is the bulk of
@@ -37,31 +69,3 @@ jobs:
       # xdist interleaves them across workers anyway.
       - name: Run tests
         run: uv run pytest -n auto --dist loadfile
-
-  frontend:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Type-check
-        run: npm run check
-
-      - name: Run tests
-        run: npm run test
-
-      - name: Build
-        run: npm run build

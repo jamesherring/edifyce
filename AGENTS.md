@@ -234,7 +234,12 @@ wherever you run it:
 
 - **Run the tests before and after any change to the engine.** The engine is
   large, largely untyped in its internals, and interconnected — tests are the
-  safety net. CI runs `uv run pytest -n auto --dist loadfile` on every PR.
+  safety net. CI runs `uv run pytest -n auto --dist loadfile` on every PR that
+  touches the backend — `tests.yml` is path-filtered, and its list is *what
+  pytest reads*, which is wider than `app/` + `website/`: five test modules
+  import from `scripts/`. Add to that list when you add a directory the suite
+  reads, or the suite silently stops running for changes to it. The frontend's
+  checks are `frontend.yml`, filtered the same way on `frontend/**`.
 - **Keep the API layer thin.** New behaviour belongs in `website/logical/`;
   `app/` should stay a translation layer between HTTP/Pydantic and the engine.
 - **Keep the frontend a thin client.** It renders and calls the API; proof and
