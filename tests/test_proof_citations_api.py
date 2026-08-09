@@ -283,6 +283,81 @@ def test_a_citation_resolves_into_a_layer_below(client, db):
     assert body["cites"][0]["proof_id"] == ids["pc-thm"]
 
 
+def test_a_shadowed_label_resolves_to_the_nearest_layer(client, db):
+    """A label declared twice is shadowed, not ambiguous (`LibraryChain`).
+
+    Given the whole spine and a dictionary keyed by label, the winner was
+    whichever row the database returned last — which could be an ancestor's entry,
+    or a *descendant's*, neither of which a verify would ever resolve to (found in
+    review).
+    """
+    ids = seed_layered(db)
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            zf = session.scalars(
+                select(Proof).where(Proof.name == "zf-cites-pc")
+            ).one()
+            # Restate `pc-thm`'s label in the *citing* proof's own layer, which is
+            # the nearest one and so must win over the propositional root's.
+            near = session.scalars(
+                select(PromotedTheoremRow).where(PromotedTheoremRow.label == "pc-thm")
+            ).one()
+            session.add(
+                PromotedTheoremRow(
+                    system_id=zf.formal_system_id,
+                    label="pc-thm",
+                    statement=near.statement,
+                    primitive=near.primitive,
+                )
+            )
+            session.commit()
+    finally:
+        engine.dispose()
+
+    cites = citations(client, ids["zf-cites-pc"])["cites"]
+    # The nearer entry has no proof behind it, so the citation shows unlinked
+    # rather than pointing at the root's proof.
+    assert [entry["label"] for entry in cites] == ["pc-thm"]
+    assert cites[0]["proof_id"] is None
+
+
+def test_a_shadowed_label_does_not_borrow_the_ancestors_dependents(client, db):
+    """The reverse of the same confusion, and the one that reads as wrong.
+
+    Once the ZF layer restates `pc-thm`, a ZF proof citing `pc-thm` means *its*
+    entry. Matching the stored label string across the whole spine reported that
+    proof as a dependent of the propositional root's theorem, which it does not
+    cite (found in review).
+    """
+    ids = seed_layered(db)
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            zf = session.scalars(
+                select(Proof).where(Proof.name == "zf-cites-pc")
+            ).one()
+            near = session.scalars(
+                select(PromotedTheoremRow).where(PromotedTheoremRow.label == "pc-thm")
+            ).one()
+            session.add(
+                PromotedTheoremRow(
+                    system_id=zf.formal_system_id,
+                    label="pc-thm",
+                    statement=near.statement,
+                    primitive=near.primitive,
+                )
+            )
+            session.commit()
+    finally:
+        engine.dispose()
+
+    # Asked of the *root's* `pc-thm`, whose entry the ZF proof no longer resolves.
+    body = citations(client, ids["pc-thm"])
+    assert body["cited_by"] == []
+    assert body["cited_by_total"] == 0
+
+
 def test_dependents_reach_the_layers_above(client, db):
     ids = seed_layered(db)
 

@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import and_, func, or_, select
 
-from app.db.models import Proof
+from app.db.models import FormalSystem, Proof
 from app.db.proof_lines import ProofLineRow
 from app.db.promoted_theorems import PromotedTheoremRow
 
@@ -78,16 +78,25 @@ def _readable(viewer: User | None) -> ColumnElement[bool]:
 async def cited_theorems(
     session: AsyncSession,
     proof_id: uuid.UUID,
-    spine: Sequence[uuid.UUID],
+    chain: Sequence[uuid.UUID],
     viewer: User | None,
 ) -> list[Citation]:
     """The theorems this proof's lines cite, in the order they first appear.
+
+    ``chain`` is the citing system and its **ancestors, nearest first** — the
+    order a citation actually resolves in (`LibraryChain`), not the whole spine.
+    Two reasons it is not the spine. A descendant's library is not citable from
+    here at all, so including one lets a citation resolve to an entry no verify
+    would ever reach; and where a label is declared twice, the nearest layer wins
+    and the ancestor's entry is shadowed rather than ambiguous. Given the spine
+    and a dictionary keyed by label, the winner is whichever row the database
+    returned last (found in review).
 
     Not capped: a proof cites what it cites, and the distribution has no head to
     speak of — `set.mm`'s longest proof names a few hundred distinct statements
     where the reverse direction runs to five figures for a single axiom.
 
-    Restricted to labels a ``promoted_theorems`` row in this spine actually names,
+    Restricted to labels a ``promoted_theorems`` row in this chain actually names,
     which is what makes it a citation of a *theorem* rather than of a rule: a
     hand-authored proof's ``rule`` is as often ``MP`` — a rule of the system, with
     no entry and no page to open — and listing those under "cites" would answer a
@@ -104,7 +113,7 @@ async def cited_theorems(
                 PromotedTheoremRow,
                 and_(
                     PromotedTheoremRow.label == ProofLineRow.rule,
-                    PromotedTheoremRow.system_id.in_(spine),
+                    PromotedTheoremRow.system_id.in_(chain),
                 ),
             )
             .where(
@@ -133,29 +142,106 @@ async def cited_theorems(
     # only `theorem_id` (see the note on the column). Keyed on `proved_by_id`,
     # every citation in an imported corpus resolves to nothing, which is every
     # citation this exists for.
+    #
+    # Collapsed nearest-first, and in two steps rather than one. The nearest
+    # *entry* is chosen first, over every layer that declares the label — then
+    # that entry alone is resolved to a page. Choosing among only the entries that
+    # happen to have a readable proof gets it backwards: where the nearest layer
+    # restates a label as a primitive, the answer is "no page", not the ancestor's
+    # proof of a statement this citation did not resolve to (caught by the test
+    # written for the review finding).
+    rank = {system_id: position for position, system_id in enumerate(chain)}
+    nearest: dict[str, tuple[int, uuid.UUID]] = {}
+    for label, system_id, entry in await session.execute(
+        select(
+            PromotedTheoremRow.label,
+            PromotedTheoremRow.system_id,
+            PromotedTheoremRow.id,
+        ).where(
+            PromotedTheoremRow.system_id.in_(chain),
+            PromotedTheoremRow.label.in_(labels),
+        )
+    ):
+        found = nearest.get(label)
+        if found is None or rank[system_id] < found[0]:
+            nearest[label] = (rank[system_id], entry)
+
     pages = {
-        label: (found, title)
-        for label, found, title in await session.execute(
-            select(PromotedTheoremRow.label, Proof.id, Proof.title)
-            .join(Proof, Proof.theorem_id == PromotedTheoremRow.id)
-            .where(
-                PromotedTheoremRow.system_id.in_(spine),
-                PromotedTheoremRow.label.in_(labels),
+        theorem_id: (found, title)
+        for theorem_id, found, title in await session.execute(
+            select(Proof.theorem_id, Proof.id, Proof.title).where(
+                Proof.theorem_id.in_([entry for _, entry in nearest.values()]),
                 _readable(viewer),
             )
         )
     }
     return [
-        Citation(label=label, proof_id=pages.get(label, (None, None))[0],
-                 title=pages.get(label, (None, None))[1])
+        Citation(
+            label=label,
+            proof_id=pages.get(nearest[label][1], (None, None))[0],
+            title=pages.get(nearest[label][1], (None, None))[1],
+        )
         for label in labels
     ]
+
+
+async def _resolving_systems(
+    session: AsyncSession, spine: Sequence[uuid.UUID], label: str, owner: uuid.UUID
+) -> list[uuid.UUID] | None:
+    """Which systems of ``spine`` read ``label`` as ``owner``'s entry.
+
+    None when nothing shadows it — one layer declares the label, so every system
+    that can see it resolves the same way and the caller needs no filter. That is
+    the ordinary case and always the imported one: a `.mm` file's labels are
+    unique across the whole corpus, so a layered import puts each in exactly one
+    layer.
+
+    Where a label *is* declared twice, a citation of it is two different theorems
+    depending on who wrote it, and matching the stored string alone reports a
+    child's proofs as dependents of the ancestor's entry (found in review). The
+    chains are walked in Python off one parent map: a spine is at most
+    `MAX_INHERITANCE_DEPTH` systems, against which a query per candidate proof
+    would be absurd.
+    """
+    declaring = {
+        system_id
+        for (system_id,) in await session.execute(
+            select(PromotedTheoremRow.system_id).where(
+                PromotedTheoremRow.system_id.in_(spine),
+                PromotedTheoremRow.label == label,
+            )
+        )
+    }
+    if len(declaring) < 2:
+        return None
+
+    parents = {
+        system_id: parent
+        for system_id, parent in await session.execute(
+            select(FormalSystem.id, FormalSystem.inherits_from_id).where(
+                FormalSystem.id.in_(spine)
+            )
+        )
+    }
+    resolving: list[uuid.UUID] = []
+    for system_id in spine:
+        current: uuid.UUID | None = system_id
+        # Nearest first, exactly as `LibraryChain` resolves: the first ancestor
+        # that declares the label is the one this system's citations mean.
+        while current is not None:
+            if current in declaring:
+                if current == owner:
+                    resolving.append(system_id)
+                break
+            current = parents.get(current)
+    return resolving
 
 
 async def citing_proofs(
     session: AsyncSession,
     spine: Sequence[uuid.UUID],
     label: str,
+    owner: uuid.UUID,
     viewer: User | None,
     limit: int,
 ) -> tuple[list[Citation], int]:
@@ -183,13 +269,22 @@ async def citing_proofs(
     this reads a whole spine, so two layers may each hold a `1p1e2` and
     collapsing them would both undercount the total and point the entry at
     whichever row sorted first.
+
+    ``owner`` is the system holding the entry being asked about, which is what
+    lets a shadowed label be told apart from the entry it shadows — see
+    :func:`_resolving_systems`.
     """
     cites = (
         select(ProofLineRow.id)
         .where(ProofLineRow.proof_id == Proof.id, ProofLineRow.rule == label)
         .exists()
     )
-    where = (Proof.formal_system_id.in_(spine), _readable(viewer), cites)
+    within = await _resolving_systems(session, spine, label, owner)
+    where = (
+        Proof.formal_system_id.in_(spine if within is None else within),
+        _readable(viewer),
+        cites,
+    )
     rows = (
         await session.execute(
             select(Proof.id, Proof.name, Proof.title)

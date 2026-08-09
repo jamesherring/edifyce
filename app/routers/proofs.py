@@ -87,7 +87,7 @@ from app.db import (
 from app.db.citations_mapping import Citation, cited_theorems, citing_proofs
 from app.db.descriptions import LabelDescriptionRow
 from app.db.descriptions_mapping import load_description
-from app.db.lineage import spine_ids
+from app.db.lineage import ancestor_ids, spine_ids
 from app.db.models import User
 from app.db.notations_mapping import load_notation, render_stored
 from app.db.proofs_mapping import failure_from_row
@@ -2063,8 +2063,13 @@ async def read_proof_citations(
     it.
     """
     proof = await _get_readable_or_404(session, proof_id, user)
+    # Two different reaches, because the two questions have different answers.
+    # *Outgoing* resolves the way a verify does — this system then its ancestors,
+    # nearest first — since a descendant's library is not citable from here.
+    # *Incoming* is the whole spine: a dependent is usually a layer above.
+    chain = await ancestor_ids(session, proof.formal_system_id)
     spine = await spine_ids(session, proof.formal_system_id)
-    cites = await cited_theorems(session, proof.id, spine, user)
+    cites = await cited_theorems(session, proof.id, chain, user)
     # A proof is cited under its *library label*, which is not its name: promotion
     # defaults to the slug, so "My Lemma" is cited as `my-lemma`. An entry-less
     # proof has no label and therefore no dependents — there is nothing to cite it
@@ -2073,18 +2078,20 @@ async def read_proof_citations(
     #
     # Read through `theorem_id`, the link an import sets, rather than the
     # `proved_by_id` a promotion sets: an imported entry has only the former.
-    label = (
-        await session.scalar(
-            select(PromotedTheoremRow.label).where(
-                PromotedTheoremRow.id == proof.theorem_id
+    entry = (
+        (
+            await session.execute(
+                select(PromotedTheoremRow.label, PromotedTheoremRow.system_id).where(
+                    PromotedTheoremRow.id == proof.theorem_id
+                )
             )
-        )
+        ).first()
         if proof.theorem_id is not None
         else None
     )
     cited_by, total = (
-        await citing_proofs(session, spine, label, user, CITATION_LIMIT)
-        if label is not None
+        await citing_proofs(session, spine, entry[0], entry[1], user, CITATION_LIMIT)
+        if entry is not None
         else ([], 0)
     )
 
