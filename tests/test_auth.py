@@ -98,6 +98,19 @@ def test_auth_secret_is_not_a_checked_in_literal():
     assert len(AUTH_SECRET) >= 32
 
 
+def test_this_module_hashes_passwords_the_way_the_deployment_does():
+    # `tests/conftest.py` turns argon2's work factor down for every other module,
+    # because several hundred tests register a user only to have someone own a
+    # system, and the shipped parameters cost ~160ms a login. This module is the
+    # exemption — the flow below is the one place the real hasher is exercised,
+    # so the exemption failing quietly (a rename, a moved test) would leave the
+    # shipped configuration untested everywhere. Assert it is in force here.
+    from fastapi_users import manager
+    from fastapi_users.password import PasswordHelper
+
+    assert manager.PasswordHelper is PasswordHelper
+
+
 # ---------------------------------------------------------------------------
 # Full flow
 # ---------------------------------------------------------------------------

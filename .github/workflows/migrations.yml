@@ -23,6 +23,13 @@ on:
       - "uv.lock"
       - ".github/workflows/migrations.yml"
 
+# As in tests.yml: a superseded push's checks are not a verdict anybody acts on.
+# The apply workflow has its own concurrency group and deliberately does *not*
+# cancel — that one writes to a database.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     name: Validate & lint (PR)
