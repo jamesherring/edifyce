@@ -84,8 +84,10 @@ from app.db import (
     term_context,
     theorem_digest,
 )
+from app.db.citations_mapping import Citation, cited_theorems, citing_proofs
 from app.db.descriptions import LabelDescriptionRow
 from app.db.descriptions_mapping import load_description
+from app.db.lineage import spine_ids
 from app.db.models import User
 from app.db.notations_mapping import load_notation, render_stored
 from app.db.proofs_mapping import failure_from_row
@@ -159,6 +161,7 @@ from app.schemas import (
     ProofReferenceOut,
     ProofReferencesUpdate,
     ProofPromotionRequest,
+    ProofCitations,
     ProofProvenance,
     ProofReferrerOut,
     ProofStructure,
@@ -169,6 +172,7 @@ from app.schemas import (
     THEOREM_LABEL_MAX,
     THEOREM_LABEL_PATTERN,
     TermSummary,
+    TheoremCitation,
     VerifyProofResponse,
 )
 from website.logical.declarative import build_spec
@@ -218,6 +222,13 @@ async def _unique_slug(
 
     return await unique_slug(name, _taken, fallback="proof")
 
+
+# How many dependents a citation read carries. The same shape of cap as
+# `_documentation.MENTION_LIMIT` and for the same reason, but a size larger: the
+# citation graph's head dwarfs the prose's — `set.mm` mentions `ax-13` in 656
+# comments and cites `ax-mp` from most of the corpus — so a page showing "and N
+# more" wants enough of a sample to be worth reading.
+CITATION_LIMIT = 50
 
 # Loads for a detail view: the owner, plus the outgoing reference edges (with
 # each referenced proof, for its identity in ProofReferenceOut) and the incoming
@@ -2029,6 +2040,63 @@ def _line_out(row: ProofLineRow, rendered: str | None = None) -> ProofLineOut:
             )
             for edge in row.antecedents
         ],
+    )
+
+
+@router.get("/{proof_id}/citations", response_model=ProofCitations)
+async def read_proof_citations(
+    proof_id: uuid.UUID,
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> ProofCitations:
+    """Which theorems this proof cites, and which proofs cite it.
+
+    Its own route rather than a field on `ProofDetail`, because the two questions
+    have different costs and different readers: the detail is served by every
+    create, patch and reference edit, and none of those wants two extra joins over
+    a corpus-sized `proof_lines`. A reader looking at the citation graph asks for
+    it.
+
+    Both directions are computed, never stored — see `app.db.citations_mapping`
+    for why a materialised edge would be the wrong table. Visibility follows the
+    proof itself, and each label resolves to a page only if the viewer may open
+    it.
+    """
+    proof = await _get_readable_or_404(session, proof_id, user)
+    spine = await spine_ids(session, proof.formal_system_id)
+    cites = await cited_theorems(session, proof.id, spine, user)
+    # A proof is cited under its *library label*, which is not its name: promotion
+    # defaults to the slug, so "My Lemma" is cited as `my-lemma`. An entry-less
+    # proof has no label and therefore no dependents — there is nothing to cite it
+    # by (found in review, where this asked for `proof.name` and answered nothing
+    # for every hand-authored proof).
+    #
+    # Read through `theorem_id`, the link an import sets, rather than the
+    # `proved_by_id` a promotion sets: an imported entry has only the former.
+    label = (
+        await session.scalar(
+            select(PromotedTheoremRow.label).where(
+                PromotedTheoremRow.id == proof.theorem_id
+            )
+        )
+        if proof.theorem_id is not None
+        else None
+    )
+    cited_by, total = (
+        await citing_proofs(session, spine, label, user, CITATION_LIMIT)
+        if label is not None
+        else ([], 0)
+    )
+
+    def out(citation: Citation) -> TheoremCitation:
+        return TheoremCitation(
+            label=citation.label, proof_id=citation.proof_id, title=citation.title
+        )
+
+    return ProofCitations(
+        cites=[out(citation) for citation in cites],
+        cited_by=[out(citation) for citation in cited_by],
+        cited_by_total=total,
     )
 
 
