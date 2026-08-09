@@ -57,6 +57,7 @@ from app.db.avoidances import LabelAvoidanceRow
 from app.db.descriptions import (
     LabelAttributionRow,
     LabelDescriptionRow,
+    LabelCitationRow,
     LabelReferenceRow,
 )
 from app.db.proof_lines import ProofLineAntecedentRow, ProofLineRow
@@ -153,6 +154,7 @@ _TABLES = [
         PromotedTheoremRow, PromotedTheoremPremiseRow, PromotedTheoremBindingRow,
         # And what the file says about each label it names.
         LabelDescriptionRow, LabelAttributionRow, LabelReferenceRow,
+        LabelCitationRow,
         LabelAvoidanceRow,
     )
 ]

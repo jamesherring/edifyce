@@ -25,6 +25,7 @@ from app.db import Base
 from app.db.descriptions import (
     LabelAttributionRow,
     LabelDescriptionRow,
+    LabelCitationRow,
     LabelReferenceRow,
 )
 from app.db.descriptions_mapping import store_descriptions
@@ -385,3 +386,75 @@ def test_a_comment_that_is_only_a_marker_is_still_stored() -> None:
         assert row.label == "old"
         assert row.text == "" and row.attributions == []
         assert row.discouraged_usage
+
+
+# ---------------------------------------------------------------------------
+# Bibliography citations
+#
+# The other direction a comment points: outward, at the literature. The
+# fixture's `ax-1` carries `Axiom A1 of [Margaris] p. 49.`
+# ---------------------------------------------------------------------------
+
+
+def test_a_citation_is_stored_with_the_span_it_occupies() -> None:
+    with database() as session:
+        import_corpus(session, parse(SOURCE), name="S")
+        session.commit()
+
+        row = described(session)["ax-1"]
+        (citation,) = row.citations
+        assert (citation.work, citation.page) == ("Margaris", "49")
+        assert row.text[citation.start_offset : citation.end_offset] == "[Margaris] p. 49"
+
+
+def test_a_work_is_answerable_across_the_corpus() -> None:
+    # The reason these are rows: no statement says what else came from the same
+    # book, and asking is the point of keeping the key.
+    with database() as session:
+        import_corpus(session, parse(SOURCE), name="S")
+        session.commit()
+
+        citing = session.scalars(
+            select(LabelDescriptionRow.label)
+            .join(LabelCitationRow.description)
+            .where(LabelCitationRow.work == "Margaris")
+        ).all()
+
+        assert list(citing) == ["ax-1"]
+
+
+def test_a_rewrite_replaces_the_citations_rather_than_adding_to_them() -> None:
+    # The same cascade question the references ask: `store_descriptions` clears a
+    # system with one Core delete and never loads the rows, so this is really
+    # asking whether `ON DELETE CASCADE` reaches the citations too.
+    with database() as session:
+        import_corpus(session, parse(SOURCE), name="S")
+        session.commit()
+        system_id = session.scalars(select(LabelDescriptionRow.formal_system_id)).first()
+        assert len(session.scalars(select(LabelCitationRow)).all()) == 1
+
+        store_descriptions(
+            session,
+            system_id,
+            {"ax-1": read_comment("Restated from [Monk1] p. 22 and [Suppes] p. 7.")},
+        )
+        session.commit()
+
+        assert [row.work for row in session.scalars(select(LabelCitationRow))] == [
+            "Monk1",
+            "Suppes",
+        ]
+
+
+def test_a_comment_that_is_only_a_citation_is_still_stored() -> None:
+    # The row carries the provenance even where the prose carries nothing else,
+    # exactly as a marker-only comment carries its warning.
+    with database() as session:
+        system = FormalSystem(name="S", slug="s")
+        session.add(system)
+        session.flush()
+        store_descriptions(session, system.id, {"x": read_comment("[Monk1] p. 22")})
+        session.commit()
+
+        (row,) = session.scalars(select(LabelDescriptionRow)).all()
+        assert [(c.work, c.page) for c in row.citations] == [("Monk1", "22")]

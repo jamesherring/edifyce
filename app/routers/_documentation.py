@@ -22,7 +22,13 @@ from app.db.avoidances_mapping import avoided_by
 from app.db.descriptions_mapping import mentions_of
 from app.db.label_search import nearest, proofs_named
 from app.db.lineage import spine_ids
-from app.schemas import Attribution, LabelDescription, LabelMention, LabelReference
+from app.schemas import (
+    Attribution,
+    BibliographyCitation,
+    LabelDescription,
+    LabelMention,
+    LabelReference,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -39,13 +45,18 @@ if TYPE_CHECKING:
 MENTION_LIMIT = 20
 
 
-async def _linkable(
+async def resolve_labels(
     session: AsyncSession,
     spine: Sequence[uuid.UUID],
     names: Iterable[str],
     viewer: User | None,
 ) -> Mapping[str, tuple[uuid.UUID, str | None]]:
     """Which of ``names`` are proofs of this system the viewer may open.
+
+    Public because the works-cited listing asks the same question of the same rows
+    (`systems.list_labels_citing`): a statement that came from a book wants the
+    page to open exactly as a cross-reference target does, and the spine reasoning
+    below is subtle enough that a second copy would be a second thing to get wrong.
 
     ``spine`` is the whole chain, not just this system: a layered corpus
     files a proof against the layer its section falls in, so a ZF statement
@@ -104,7 +115,7 @@ async def documentation_out(
     mentioned, total = await mentions_of(session, spine, row.label, MENTION_LIMIT)
     # One lookup for both directions, since a label mentioning this one is as
     # likely to be a proof as a label this one mentions.
-    linkable = await _linkable(
+    linkable = await resolve_labels(
         session,
         spine,
         [*(reference.target for reference in row.references), *mentioned],
@@ -136,6 +147,15 @@ async def documentation_out(
             for label in mentioned
         ],
         mentioned_by_total=total,
+        citations=[
+            BibliographyCitation(
+                work=citation.work,
+                page=citation.page,
+                start=citation.start_offset,
+                end=citation.end_offset,
+            )
+            for citation in row.citations
+        ],
         avoids=avoids,
         discouraged_usage=row.discouraged_usage,
         discouraged_modification=row.discouraged_modification,

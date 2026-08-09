@@ -23,6 +23,7 @@ from sqlalchemy.orm import selectinload
 from app.db.descriptions import (
     LabelAttributionRow,
     LabelDescriptionRow,
+    LabelCitationRow,
     LabelReferenceRow,
 )
 
@@ -56,8 +57,9 @@ def store_descriptions(
 
     Written as Core inserts rather than through the ORM, with the ids minted here
     so the children can point at their parents without a round trip. `set.mm` lands
-    50,550 descriptions, 60,661 attributions and 21,787 references in one call, and
-    building 133,000 ORM instances at the end of a run would undo the care
+    50,550 descriptions, 60,661 attributions, 21,787 references and 5,271 citations
+    in one call, and building 138,000 ORM instances at the end of a run would undo
+    the care
     :func:`~app.db.metamath_store.import_corpus` takes to keep memory flat.
     """
     session.execute(
@@ -69,11 +71,13 @@ def store_descriptions(
     rows: list[dict[str, object]] = []
     attributions: list[dict[str, object]] = []
     references: list[dict[str, object]] = []
+    citations: list[dict[str, object]] = []
     for label, description in descriptions.items():
         if not (
             description.text
             or description.attributions
             or description.references
+            or description.citations
             or description.discouraged_usage
             or description.discouraged_modification
         ):
@@ -103,6 +107,18 @@ def store_descriptions(
             }
             for position, reference in enumerate(description.references)
         )
+        citations.extend(
+            {
+                "id": uuid.uuid4(),
+                "description_id": description_id,
+                "position": position,
+                "work": citation.work,
+                "page": citation.page,
+                "start_offset": citation.start,
+                "end_offset": citation.end,
+            }
+            for position, citation in enumerate(description.citations)
+        )
         attributions.extend(
             {
                 "id": uuid.uuid4(),
@@ -121,13 +137,15 @@ def store_descriptions(
         session.execute(insert(LabelAttributionRow), attributions)
     if references:
         session.execute(insert(LabelReferenceRow), references)
+    if citations:
+        session.execute(insert(LabelCitationRow), citations)
     return len(rows)
 
 
 async def load_description(
     session: AsyncSession, system_id: uuid.UUID, label: str
 ) -> LabelDescriptionRow | None:
-    """One label's description, its attributions and references, or None.
+    """One label's description, its attributions, references and citations, or None.
 
     Not layered through the inheritance chain, unlike a notation: a description is
     about a label *this* system declares, and a child that redeclares nothing
@@ -144,6 +162,7 @@ async def load_description(
         .options(
             selectinload(LabelDescriptionRow.attributions),
             selectinload(LabelDescriptionRow.references),
+            selectinload(LabelDescriptionRow.citations),
         )
     )
 
@@ -245,6 +264,80 @@ async def mentions_of(
         select(func.count(distinct(LabelDescriptionRow.label)))
         .select_from(LabelReferenceRow)
         .join(LabelReferenceRow.description)
+        .where(*where)
+    )
+    return list(labels), total or 0
+
+
+async def works_cited(
+    session: AsyncSession, spine: Sequence[uuid.UUID]
+) -> list[tuple[str, int]]:
+    """Every work this spine's prose cites, most-cited first.
+
+    The question a bibliography key exists to answer and a single description
+    cannot: *what does this library rest on?* `set.mm` names 135 works and leans on
+    a handful of them heavily — `[Crawley]` 520 times, `[TakeutiZaring]` 445 — and
+    that distribution is itself a description of the corpus.
+
+    Counted over citations rather than over labels, so a statement citing one work
+    from two places counts twice. That is the honest reading of "how much does this
+    library use this book", and the alternative — distinct labels — answers a
+    question nobody asked.
+
+    Spine-wide for the reason `mentions_of` is: a layered import files each
+    statement against the layer its own section falls in, so a corpus's sources are
+    spread across its layers and any one of them sees a fraction.
+    """
+    return [
+        (work, count)
+        for work, count in await session.execute(
+            select(LabelCitationRow.work, func.count().label("citations"))
+            .join(LabelCitationRow.description)
+            .where(LabelDescriptionRow.formal_system_id.in_(spine))
+            .group_by(LabelCitationRow.work)
+            # By count then name: ties are common in the tail — 40 of set.mm's
+            # works are cited once — and an unordered tie makes two reads of the
+            # same corpus disagree about a list nothing has changed.
+            .order_by(func.count().desc(), LabelCitationRow.work)
+        )
+    ]
+
+
+async def citing_labels(
+    session: AsyncSession,
+    spine: Sequence[uuid.UUID],
+    work: str,
+    limit: int,
+) -> tuple[list[str], int]:
+    """The labels whose prose cites ``work``, and how many there are.
+
+    "What else came from this book" — the direction that makes a citation a row
+    rather than punctuation, exactly as `mentions_of` is for a cross-reference.
+    Capped with the true count beside it for the same reason: `[Crawley]` is cited
+    from 520 statements.
+    """
+    where = (
+        LabelDescriptionRow.formal_system_id.in_(spine),
+        LabelCitationRow.work == work,
+    )
+    # Distinct: a comment may cite two places in one book (`[Fremlin1] p. 13` and
+    # `p. 35`), and this lists statements rather than citations.
+    labels = (
+        await session.scalars(
+            select(LabelDescriptionRow.label)
+            .join(LabelCitationRow.description)
+            .where(*where)
+            .distinct()
+            .order_by(LabelDescriptionRow.label)
+            .limit(limit)
+        )
+    ).all()
+    if len(labels) < limit:
+        return list(labels), len(labels)
+    total = await session.scalar(
+        select(func.count(distinct(LabelDescriptionRow.label)))
+        .select_from(LabelCitationRow)
+        .join(LabelCitationRow.description)
         .where(*where)
     )
     return list(labels), total or 0

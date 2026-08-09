@@ -1886,10 +1886,10 @@ note whose sentence happens to contain "is discouraged".
 |---|---|---|
 | `$j` markup directives | 1,221 in 1,203 blocks | **Read** — see §4.9. |
 | comments on non-assertion statements | 1,621 | 606 before a `$c` ("Absolute value function." — what a *symbol* means, and nothing else in the file says it), 432 before a `${`, 302 before an `$e`, 123 before a `$f`, 74 before a `$v`, 66 before a `$}`, 18 before a `$d`. `$e`/`$f` are labels and would key into `label_descriptions` unchanged; `$c`/`$v` declare tokens and need a token key. |
-| `[Author]` bibliography refs | 5,271 across 139 works | Needs a works table and the `htmlbibliography` target to link out. |
+| `[Author]` bibliography refs | 5,271 across 135 works | **Read** — see §4.10. |
 | `$t` non-definition directives | 12 kinds | `htmlvarcolor`, `htmltitle`, `htmlhome`, `exthtml*`, `htmldir`, `htmlcss`, `htmlfont`. Only `htmlvarcolor` has content value — the typecode-to-colour legend, which `althtmldef`'s `<SPAN>`s already encode per token. |
 | front matter and dormant blocks | 56 + ~60 | Including commented-out mathematics, the largest 26 KB. |
-| `proof_references` for an import | — | `proof_lines.rule` is stored and indexed, so "which proofs cite X" is answerable; but the proof-level rollup is written only by the interactive route, so `ProofDetail.referenced_by` is empty for every imported proof. |
+| `proof_references` for an import | — | **Not a gap** — settled in #213. That table is the alias-lemma mechanism (`[alias.line]`, with a transitive re-parse behind every verify); a Metamath step cites a *theorem*, which resolves through `promoted_theorems`. The graph an import does build is served from `proof_lines.rule` at `GET /proofs/{id}/citations`. |
 
 Total prose the import still drops: **374,876 characters**.
 

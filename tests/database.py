@@ -88,9 +88,10 @@ def _always() -> list[Table]:
     queries the table whether the test has heard of notations or not. So do
     `label_descriptions` / `label_attributions` / `label_references`, which a single
     proof read consults for the corpus's record of that proof's label — and, since
-    that record carries its cross-references and what points back at it, for both
-    directions of the reference graph. `label_avoidances` rides along with it: the
-    same read reports what the corpus says a proof does without. So does
+    that record carries its cross-references, its bibliography citations and what
+    points back at it, for both directions of the reference graph.
+    `label_avoidances` rides along with it: the same read reports what the corpus
+    says a proof does without. So does
     `theorem_assumptions`: promoting a theorem records what it rests on that
     nobody proved, so the table is written on a path no test has to know about
     (and `assumptions` is read beside it). `proof_lines` and `theorems` join them
@@ -121,6 +122,7 @@ def _always() -> list[Table]:
     from app.db.proof_lines import ProofLineAntecedentRow, ProofLineRow
     from app.db.descriptions import (
         LabelAttributionRow,
+        LabelCitationRow,
         LabelDescriptionRow,
         LabelReferenceRow,
     )
@@ -144,6 +146,7 @@ def _always() -> list[Table]:
         LabelDescriptionRow.__table__,
         LabelAttributionRow.__table__,
         LabelReferenceRow.__table__,
+        LabelCitationRow.__table__,
         LabelAvoidanceRow.__table__,
         AssumptionRow.__table__,
         TheoremAssumptionRow.__table__,
