@@ -844,6 +844,35 @@ class LabelMention(BaseModel):
     title: str | None = None
 
 
+class TheoremCitation(BaseModel):
+    """One theorem a proof cites, or one proof that cites it.
+
+    ``label`` is what the citation names; ``proof_id`` is the page to open, null
+    when the label has no proof of its own (half a corpus's labels are primitives)
+    or when it belongs to a draft the viewer may not read.
+    """
+
+    label: str
+    proof_id: uuid.UUID | None = None
+    title: str | None = None
+
+
+class ProofCitations(BaseModel):
+    """A proof's place in its corpus's citation graph, both directions.
+
+    Distinct from ``ProofDetail.references``/``referenced_by``, which are the
+    alias-lemma edges a hand-authored proof declares. These are citations of
+    *theorems*, resolved through the library by label — what an imported corpus is
+    made of, and what its empty ``proof_references`` does not say. See
+    `app.db.citations_mapping` for why the two are not one table.
+    """
+
+    cites: list[TheoremCitation] = Field(default_factory=list)
+    # Capped, with the true count beside it: `ax-mp` is cited by most of `set.mm`.
+    cited_by: list[TheoremCitation] = Field(default_factory=list)
+    cited_by_total: int = 0
+
+
 class LabelDescription(BaseModel):
     """What a system says about one of the labels it names.
 

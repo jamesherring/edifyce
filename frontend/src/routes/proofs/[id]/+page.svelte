@@ -8,6 +8,7 @@
 	import CheckBadge from '$lib/components/CheckBadge.svelte';
 	import LoadingSpinner from '$lib/components/LoadingSpinner.svelte';
 	import ProofResults from '$lib/components/ProofResults.svelte';
+	import Citations from '$lib/components/Citations.svelte';
 	import Documentation from '$lib/components/Documentation.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
@@ -16,6 +17,7 @@
 	import {
 		api,
 		ApiError,
+		type ProofCitations,
 		type ProofDetail,
 		type ProofStructure,
 		type VerifyResponse
@@ -53,6 +55,16 @@
 	let notationError = $state<string | null>(null);
 	let reading = $state(false);
 
+	// The citation graph, fetched beside the detail rather than in it: the detail
+	// read is served by every create and patch too, and none of those wants two
+	// extra joins over a corpus-sized `proof_lines`.
+	let citations = $state<ProofCitations | null>(null);
+	// Whether the graph has anything to show. An imported proof often carries no
+	// comment at all, and its dependents are then the only thing the card holds.
+	const hasCitations = $derived(
+		(citations?.cites.length ?? 0) > 0 || (citations?.cited_by.length ?? 0) > 0
+	);
+
 	// Bumped on every load so late responses from a previous id are dropped.
 	let loadSeq = 0;
 	let verifySeq = 0;
@@ -77,6 +89,7 @@
 		notation = null;
 		structure = null;
 		notationError = null;
+		citations = null;
 		let detail: ProofDetail;
 		try {
 			detail = await api.proofs.get(id);
@@ -102,6 +115,18 @@
 		// Best-effort system name for the header link (readable proofs reference a
 		// readable system, so this normally resolves).
 		void loadSystemName(detail.formal_system_id, seq);
+		void loadCitations(id, seq);
+	}
+
+	async function loadCitations(id: string, seq: number) {
+		try {
+			const found = await api.proofs.citationGraph(id);
+			if (seq !== loadSeq) return;
+			citations = found;
+		} catch {
+			// Leave the graph unshown. It is context around the proof, not the proof:
+			// failing to fetch it must not take the page down with it.
+		}
 	}
 
 	async function loadSystemName(systemId: string, seq: number) {
@@ -216,6 +241,11 @@
 			// rather than merely blank.
 			structure = null;
 			void readIn(notation);
+			// The same staleness, one step further out: "Cites" is derived from the
+			// rules the stored lines resolved to, so a check that rewrote them
+			// rewrote it. Keyed on `loadSeq` because it belongs to this proof rather
+			// than to this check.
+			void loadCitations(proof.id, loadSeq);
 		} catch (err) {
 			if (seq !== verifySeq) return;
 			requestError = err instanceof ApiError ? err.message : String(err);
@@ -283,7 +313,7 @@
 
 		<!-- Ahead of the proof: what a theorem says and who proved it is what a
 		     reader wants first, and the lines are long. -->
-		{#if ownDescription || documentation || provenance}
+		{#if ownDescription || documentation || provenance || hasCitations}
 			<Card.Root>
 				<Card.Header>
 					<Card.Title>About</Card.Title>
@@ -300,6 +330,9 @@
 					{/if}
 					{#if documentation}
 						<Documentation {documentation} />
+					{/if}
+					{#if citations}
+						<Citations {citations} />
 					{/if}
 					{#if provenance}
 						<!-- The system's, shown on every proof of it: an imported proof has
