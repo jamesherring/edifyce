@@ -78,15 +78,12 @@ if TYPE_CHECKING:
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
-# How many labels one write may carry. A corpus is 50,550 of them and one request
-# apiece is not a way to fill a table, so this is a batch by construction — but an
-# unbounded body is a way to be handed 300 MB of floats.
-MAX_BATCH = 256
-
-# How many neighbours a search may be asked for. The same cap the lexical search
-# pages by; a nearest-neighbour list past this is not being read, it is being
-# post-processed, and that is a different request.
-MAX_NEIGHBOURS = 100
+# The bounds on a batch and on a neighbour list live on the schemas that enforce
+# them (`app.schemas.MAX_EMBEDDING_BATCH`, `SimilarityQuery.limit`), not here.
+# Pydantic rejects an oversized body *while parsing* it; a constant checked in the
+# route after the fact is a limit announced only once the 300 MB has been read
+# (both found in review, where this module held a `MAX_BATCH` the route checked
+# late and a `MAX_NEIGHBOURS` nothing referenced at all).
 
 
 class LabelEmbeddingRow(TimestampMixin, Base):
@@ -278,7 +275,11 @@ async def store_embeddings(
         )
     }
 
-    kept = 0
+    # Labels, not entries: a batch naming one label twice writes one row, and
+    # counting the entries would report two stored against one embedded (found in
+    # review). A set rather than a counter because the second write is a real
+    # update of the same row — it is not skipped, it is simply not another row.
+    written: set[str] = set()
     skipped: list[str] = []
     for label, embedding, tokens in batch:
         described_row = described.get(label)
@@ -298,32 +299,38 @@ async def store_embeddings(
         row.embedding = embedding
         row.source_digest = digest
         row.tokens = tokens
-        kept += 1
-    return kept, skipped
+        written.add(label)
+    return len(written), skipped
 
 
 async def counts(
-    session: AsyncSession, system_id: uuid.UUID, model: str
+    session: AsyncSession, spine: Sequence[uuid.UUID], model: str
 ) -> tuple[int, int]:
-    """``(documented, embedded)`` for one system under one model — two counts.
+    """``(documented, embedded)`` across ``spine`` under one model — two counts.
 
     :func:`coverage`'s cheap twin, and the one a *search* uses. That one digests
     every description to decide what is stale and what is pending, which is right
     for a job runner asking deliberately and quite wrong behind a query: it would
     put a 50,550-row scan under every nearest-neighbour lookup to report two
     integers that two `COUNT(*)`s already answer.
+
+    Over the **spine**, because that is what the search ranked over. Counted on
+    the leaf alone it reported "0 embedded" beside a hit found on an ancestor
+    (found in review) — which is the exact overstatement-in-reverse these counts
+    exist to prevent, and it is why `coverage` is *not* what this route uses:
+    that one is a per-system job report and this is a description of a search.
     """
     documented = (
         await session.scalar(
             select(func.count()).where(
-                LabelDescriptionRow.formal_system_id == system_id
+                LabelDescriptionRow.formal_system_id.in_(spine)
             )
         )
     ) or 0
     embedded = (
         await session.scalar(
             select(func.count()).where(
-                LabelEmbeddingRow.formal_system_id == system_id,
+                LabelEmbeddingRow.formal_system_id.in_(spine),
                 LabelEmbeddingRow.model == model,
             )
         )
@@ -379,7 +386,13 @@ async def coverage(
             )
         )
     }
-    stale = 0
+    # Counted from the **vector** side, not the description side. Walking
+    # descriptions never visits a vector whose description is gone — which is
+    # precisely the case a re-import creates, since `store_descriptions` replaces
+    # a system's prose wholesale — so coverage reported `stale=0` for a label the
+    # search was already reporting `stale: true` (found in review). Two answers
+    # about one row is worse than either.
+    current: set[str] = set(stored)
     pending: list[Pending] = []
     # Columns rather than ORM rows: this walks every description in the system to
     # digest it, and building 50,550 instances to read three fields off each is
@@ -401,8 +414,12 @@ async def coverage(
                     Pending(label=row.label, system_id=system_id, text=text)
                 )
             continue
-        if digest != digest_of(text):
-            stale += 1
+        if digest == digest_of(text):
+            # Matched: this vector is of the prose the system now carries.
+            current.discard(row.label)
+    # What is left is every vector whose prose has moved *or* gone — the same
+    # question `neighbours` answers per hit, asked of the whole system.
+    stale = len(current)
     return Coverage(
         documented=documented,
         embedded=len(stored),
@@ -456,7 +473,12 @@ async def neighbours(
             )
         ).all()
         found = [
-            (row.label, row.formal_system_id, row.source_digest, 1.0 - row.distance)
+            (
+                row.label,
+                row.formal_system_id,
+                row.source_digest,
+                _similarity(row.distance),
+            )
             for row in rows
         ]
     else:
@@ -535,6 +557,22 @@ async def embedding_of(
         if system_id in rows:
             return list(rows[system_id])
     return None
+
+
+def _similarity(distance: float) -> float:
+    """Cosine distance as similarity, with pgvector's one non-number handled.
+
+    ``<=>`` against a zero-magnitude vector is NaN — a zero vector has no
+    direction, so there is no angle to measure. NaN then serialises to JSON
+    ``null``, which contradicts the field's declared `float`, its documented
+    [-1, 1], *and* the SQLite branch, which returns 0.0 for the same input
+    (found in review, reproduced on pgvector).
+
+    Zero rather than an error, matching that branch: the vector is one a caller
+    stored, and "nothing in particular" is a truer answer about it than a 500.
+    """
+    similarity = 1.0 - distance
+    return 0.0 if similarity != similarity else similarity
 
 
 def _cosine(left: Sequence[float], right: Sequence[float]) -> float:

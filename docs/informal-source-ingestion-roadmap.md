@@ -545,6 +545,24 @@ always returns *something*, so the size of what it ranked over is the only thing
 separating "the closest in a well-stocked corpus" from "the only four vectors
 here" — and a corpus can be perfectly well documented and simply not embedded yet.
 
+Review found three ways those numbers lied, and it is worth recording that all
+three were about *counting the wrong set* rather than about the search itself. The
+counts were taken on the leaf system while the ranking spanned the **spine**, so a
+hit found on an ancestor arrived beside "0 embedded". `stale` was counted by
+walking descriptions, which never visits a vector whose description is *gone* —
+exactly what a re-import produces, since `store_descriptions` replaces a system's
+prose wholesale — so coverage reported `stale=0` for a label the search was
+already reporting stale; it is counted from the vector side now, and the two
+halves agree. And `stored` counted batch entries rather than rows, so one label
+named twice reported two stored against one embedded.
+
+Two more of the same kind: a zero-magnitude vector makes pgvector's `<=>` return
+NaN, which serialises to JSON `null` — contradicting the field's declared `float`,
+its documented `[-1, 1]`, and the SQLite branch, which returns 0.0 for the same
+input; and the batch bound sat in the route rather than on the schema, so it was
+announced only after the whole body had been read and turned into floats, which is
+no bound at all on a body meant to be large.
+
 **The notation direction.** §3's option B — notation as a second input grammar —
 stays refused, for the reason §4 gives: a LaTeX-shaped input would shorten the
 translation distance and would also make `+` ambiguous between a constant and a

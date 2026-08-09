@@ -38,6 +38,7 @@ from app.db.metamath_store import import_corpus
 from app.db.models import EMBEDDING_DIMENSIONS
 from app.db.session import get_session
 from app.main import app
+from app.schemas import MAX_EMBEDDING_BATCH
 from tests.database import async_url, create_tables, database_url, enable_foreign_keys
 from tests.test_descriptions_store import SOURCE
 from tests.test_proofs_api import _TABLES
@@ -83,7 +84,11 @@ def vector(*leading: float) -> list[float]:
 
 def seed(client: TestClient, db_path, owner_email: str = "ada@example.com") -> str:
     """Import the documented fixture into a system the caller owns."""
-    owner = _register_login(client, owner_email)
+    return seed_as(client, db_path, _register_login(client, owner_email))
+
+
+def seed_as(client: TestClient, db_path, owner: str) -> str:
+    """The same, for an account the caller has already signed in."""
     engine = create_engine(db_path)
     try:
         with Session(engine) as session:
@@ -438,6 +443,121 @@ def test_reading_coverage_follows_the_system(client, db):
 
     assert client.get(f"/api/formal-systems/{system_id}/embeddings").status_code == 404
     assert similar(client, system_id, model=MODEL, embedding=vector(1.0)).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# What the review found: five ways a count or a number could be wrong
+# ---------------------------------------------------------------------------
+
+
+def test_the_counts_cover_what_was_ranked_not_just_the_leaf(client, db):
+    # A search ranks over the whole spine, so counting the leaf alone reported
+    # "0 embedded" beside a hit found on an ancestor — which is the exact
+    # overstatement-in-reverse these counts exist to prevent.
+    owner = _register_login(client, "ada@example.com")
+    parent = seed_as(client, db, owner)
+    upload(client, parent, [{"label": "wn", "embedding": vector(1.0)}])
+    published = client.patch(
+        f"/api/formal-systems/{parent}", json={"published": True}
+    )
+    assert published.status_code == 200, published.text
+    child = client.post(
+        "/api/formal-systems", json={"name": "Child", "inherits_from_id": parent}
+    ).json()["id"]
+
+    body = similar(client, child, model=MODEL, embedding=vector(1.0)).json()
+
+    # The hit comes from the ancestor…
+    assert [hit["formal_system_id"] for hit in body["items"]] == [parent]
+    # …and so must the counts describing what it was found among.
+    assert body["embedded"] == 1
+    assert body["documented"] == 5
+
+
+def test_a_vector_whose_description_is_gone_counts_as_stale(client, db):
+    # Counted from the description side, a vector whose description was deleted
+    # is never visited — and that is exactly what a re-import produces, since
+    # `store_descriptions` replaces a system's prose wholesale. Coverage said
+    # `stale=0` for a label the search was already reporting `stale: true`.
+    system_id = seed(client, db)
+    upload(client, system_id, [{"label": "wn", "embedding": vector(1.0)}])
+    assert coverage(client, system_id, model=MODEL)["stale"] == 0
+
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            session.delete(
+                session.scalars(
+                    select(LabelDescriptionRow).where(
+                        LabelDescriptionRow.label == "wn"
+                    )
+                ).one()
+            )
+            session.commit()
+    finally:
+        engine.dispose()
+
+    body = coverage(client, system_id, model=MODEL)
+    assert body["embedded"] == 1
+    assert body["stale"] == 1
+    # And the two halves agree, which is the point — two answers about one row
+    # is worse than either.
+    hit = similar(client, system_id, model=MODEL, embedding=vector(1.0)).json()["items"][0]
+    assert hit["stale"] is True
+
+
+def test_a_zero_vector_scores_zero_rather_than_not_a_number(client, db):
+    # A zero vector has no direction, so pgvector's `<=>` is NaN — which
+    # serialises to JSON null, contradicting the field's declared float, its
+    # documented [-1, 1], and the SQLite branch, which returns 0.0 for the same
+    # input. Zero rather than an error: the vector is one a caller stored, and
+    # "nothing in particular" is truer about it than a 500.
+    system_id = seed(client, db)
+    upload(client, system_id, [{"label": "wn", "embedding": vector(1.0)}])
+
+    body = similar(client, system_id, model=MODEL, embedding=vector(0.0)).json()
+
+    (hit,) = body["items"]
+    assert hit["similarity"] == 0.0
+    assert isinstance(hit["similarity"], float)
+
+
+def test_a_label_twice_in_one_batch_is_one_row_and_counted_once(client, db):
+    # Counting entries rather than rows reported two stored against one embedded.
+    # The second write is a real update of the same row — not skipped, simply not
+    # another row.
+    system_id = seed(client, db)
+
+    res = upload(
+        client,
+        system_id,
+        [
+            {"label": "wn", "embedding": vector(1.0)},
+            {"label": "wn", "embedding": vector(0.0, 1.0)},
+        ],
+    )
+
+    assert res.status_code == 200, res.text
+    assert res.json()["stored"] == 1
+    assert coverage(client, system_id, model=MODEL)["embedded"] == 1
+
+
+def test_an_oversized_batch_is_refused_while_it_is_parsed(client, db):
+    # Bounded on the schema rather than checked in the route: a limit enforced
+    # after the body has been read and turned into floats is no limit at all on a
+    # body meant to be large.
+    system_id = seed(client, db)
+
+    res = upload(
+        client,
+        system_id,
+        [
+            {"label": f"l{n}", "embedding": vector(1.0)}
+            for n in range(MAX_EMBEDDING_BATCH + 1)
+        ],
+    )
+
+    assert res.status_code == 422, res.text
 
 
 def test_the_text_composed_is_the_text_digested():

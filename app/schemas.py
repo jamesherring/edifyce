@@ -943,14 +943,24 @@ class LabelSearch(Page[LabelHit]):
 # from the same model, and neither vector carries a hint that it is the wrong one.
 
 
+# How many labels one write may carry, and it is a *parse* bound rather than a
+# check: a corpus is 50,550 labels and one request apiece is not a way to fill a
+# table, so a batch is the shape — but a limit enforced in the route is one
+# announced after the whole body has been read and turned into floats, which is
+# no limit at all on a body meant to be large (found in review).
+MAX_EMBEDDING_BATCH = 256
+
+
 class LabelVector(BaseModel):
     """One label's vector, as the caller computed it."""
 
     label: _Name128
-    # The vector itself. Length is checked against the column's fixed dimension
-    # rather than trusted: a shorter one is a different model's, and pgvector
-    # would refuse it at the insert with an error naming neither.
-    embedding: list[float] = Field(min_length=1)
+    # The vector itself. Bounded here so an oversized one is refused while being
+    # parsed; the route additionally requires the *exact* width, since a shorter
+    # vector is not a malformed one, it is a different model's — and pgvector
+    # would otherwise refuse it at the insert with an error naming neither the
+    # label nor the width expected.
+    embedding: list[float] = Field(min_length=1, max_length=8192)
     # What it cost, if the caller is counting. Recorded, never read here — a
     # corpus embedded at a known token count is one somebody can decide whether
     # to re-embed.
@@ -967,7 +977,7 @@ class EmbeddingUpload(BaseModel):
     """
 
     model: _Name128
-    entries: list[LabelVector] = Field(min_length=1)
+    entries: list[LabelVector] = Field(min_length=1, max_length=MAX_EMBEDDING_BATCH)
 
 
 class EmbeddingUploadOutcome(BaseModel):
@@ -1032,7 +1042,7 @@ class SimilarityQuery(BaseModel):
     """
 
     model: _Name128
-    embedding: list[float] | None = Field(default=None, min_length=1)
+    embedding: list[float] | None = Field(default=None, min_length=1, max_length=8192)
     label: _Name128 | None = None
     limit: int = Field(default=20, ge=1, le=100)
 

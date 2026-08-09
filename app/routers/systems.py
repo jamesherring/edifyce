@@ -59,7 +59,6 @@ from app.routers._common import (
 from app.db.descriptions import LabelDescriptionRow
 from app.db.descriptions_mapping import load_description
 from app.db.label_embeddings import (
-    MAX_BATCH,
     counts,
     coverage,
     embedding_of,
@@ -121,6 +120,7 @@ from app.schemas import (
     FormalSystemUpdate,
     Folder,
     Justification,
+    MAX_EMBEDDING_BATCH,
     EmbeddingCoverage,
     EmbeddingUpload,
     EmbeddingUploadOutcome,
@@ -1260,7 +1260,10 @@ async def get_embedding_coverage(
         ),
     ),
     pending: int = Query(
-        50, ge=0, le=MAX_BATCH, description="How many unembedded labels to list."
+        50,
+        ge=0,
+        le=MAX_EMBEDDING_BATCH,
+        description="How many unembedded labels to list.",
     ),
     user: User | None = Depends(current_active_user_optional),
     session: AsyncSession = Depends(get_session),
@@ -1317,12 +1320,12 @@ async def put_embeddings(
 
     Owner-only, because it writes to the system.
     """
-    system = await _get_owned_or_404(session, system_id, user.id)
-    if len(payload.entries) > MAX_BATCH:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Send at most {MAX_BATCH} vectors at a time.",
-        )
+    # The cheap gate: this writes rows keyed by the system's id and needs nothing
+    # else, where the other one hydrates the whole grammar to get it.
+    owned = await owned_system_id_or_404(session, system_id, user.id)
+    # The batch's *size* is bounded on the schema, so an oversized body is refused
+    # while being parsed rather than after. What is left here is the width of each
+    # vector, which is an exact-equality question with an answer worth spelling.
     wrong = [
         entry.label
         for entry in payload.entries
@@ -1343,10 +1346,10 @@ async def put_embeddings(
         )
     # Under the system's lock: two concurrent batches naming one label would
     # otherwise both miss the existing row and both insert it.
-    await lock_system(session, system.id)
+    await lock_system(session, owned)
     stored, skipped = await store_embeddings(
         session,
-        system.id,
+        owned,
         payload.model,
         [(entry.label, entry.embedding, entry.tokens) for entry in payload.entries],
     )
@@ -1416,8 +1419,10 @@ async def find_similar_labels(
     )
     # `counts`, not `coverage`: the latter digests every description to work out
     # what is stale and what is pending, which is a 50,550-row scan to report two
-    # integers behind every search.
-    documented, embedded = await counts(session, readable, payload.model)
+    # integers behind every search. Over the **spine**, since that is what was
+    # just ranked — counted on the leaf it read "0 embedded" beside a hit found on
+    # an ancestor.
+    documented, embedded = await counts(session, spine, payload.model)
     return SimilarLabels(
         formal_system_id=readable,
         model=payload.model,
