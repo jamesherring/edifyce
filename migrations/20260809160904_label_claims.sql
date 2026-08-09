@@ -23,5 +23,13 @@ CREATE INDEX "ix_label_claims_system_subject" ON "label_claims" ("formal_system_
 INSERT INTO "label_claims" ("id", "formal_system_id", "subject", "kind", "object", "position")
 SELECT "id", "formal_system_id", "label", 'usage_avoids', "avoided", "position"
 FROM "label_avoidances";
+-- The drop is deliberate and loses nothing: the INSERT above carried every row
+-- across. Atlas diffs schemas and cannot see that `label_claims` *is*
+-- `label_avoidances` generalised, so its analyzer flags the DROP and suggests
+-- asserting the table is empty first — which is the opposite of what this wants,
+-- a populated table being exactly the case being preserved. Verified rather than
+-- argued: applied to a Postgres seeded with avoidance rows, which came back as
+-- claims with their positions intact.
+-- atlas:nolint destructive
 -- Drop "label_avoidances" table
 DROP TABLE "label_avoidances";
