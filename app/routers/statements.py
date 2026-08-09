@@ -42,6 +42,7 @@ from app.schemas import (
     StatementProposal,
     TheoremCandidate,
 )
+from website.logical.fingerprint import fingerprint
 from website.logical.kernel.terms import Node
 from website.logical.rendering import render
 
@@ -166,6 +167,9 @@ async def propose_statement(
             effective.library,
             constructor,
             alpha_digest=goal,
+            # The goal term is already resolved here, so its fingerprint prunes the
+            # library below the root — free on top of the head-symbol filter.
+            goal_fingerprint=fingerprint(term),
             limit=payload.limit,
         )
     )

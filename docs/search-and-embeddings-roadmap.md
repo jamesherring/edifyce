@@ -78,15 +78,18 @@ WHERE formal_system_id = :sys AND alpha_digest = :query_alpha;
 [authoring-and-ingestion-roadmap.md](authoring-and-ingestion-roadmap.md) §9d. The
 head-symbol filter (`terms.constructor`, indexed per system) and the `unify`
 confirm are in place and serving two endpoints; the α-exact case is Phase 0's
-digest doing the work. What is *not* built is the index below — the discrimination
-tree that makes the candidate set small rather than merely smaller.
+digest doing the work. What that filter does *not* do on its own — narrow below the
+root, so the candidate set is small rather than merely smaller — is the fingerprint
+index below, now built on top of it.
 
-**The deeper index is now in progress** as a *fingerprint index* (Schulz 2012,
+**The deeper index has now landed** as a *fingerprint index* (Schulz 2012,
 the SQL-native member of the discrimination-tree family), with the design and the
 100%-recall argument in [search-phase1-fingerprint.md](search-phase1-fingerprint.md).
 The engine primitive (`website/logical/fingerprint.py`) and its soundness suite
-(`tests/test_fingerprint.py`) have landed; storage (an Atlas migration) and the
-wiring into `conclusion_candidates` are the remaining steps. Position `()` of the
+(`tests/test_fingerprint.py`) landed first; then storage (a fingerprint per
+promoted-theorem conclusion) and the wiring into `conclusion_candidates`
+(`app/db/fingerprints.py::fingerprint_filter`), which the statement search and a
+proof line's citations now pass a goal fingerprint to. Position `()` of the
 fingerprint is a refinement of the head-symbol filter above (it also splits ground
 leaves by token), and the deeper positions only narrow further — so the wiring
 extends the filter rather than replacing it.

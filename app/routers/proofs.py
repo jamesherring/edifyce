@@ -167,6 +167,7 @@ from app.schemas import (
     VerifyProofResponse,
 )
 from website.logical.declarative import build_spec
+from website.logical.fingerprint import fingerprint
 from website.logical.kernel.terms import Node
 from website.logical.graphs import topological_order
 from website.logical.promotion import proved_theorem, schematic_theorem
@@ -2861,6 +2862,9 @@ async def find_citations(
                 verification.effective.library,
                 root.constructor.name,
                 alpha_digest=alpha_digest(root),
+                # The proof is built, so the goal term is in hand — fingerprint it
+                # to prune below the root before the unifier confirms each match.
+                goal_fingerprint=fingerprint(root),
                 limit=candidates,
                 exclude=rule_labels,
             )

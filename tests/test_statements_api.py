@@ -170,15 +170,22 @@ def test_the_library_names_what_could_already_prove_it(db, client):
 
 
 def test_a_statement_nothing_proves_says_so(db, client):
-    # The control: the answer is about this statement, not about whether the
-    # library has anything at all. `id` is there and does not conclude this.
+    # The answer is about this statement, not about whether the library has
+    # anything at all. `id` proves `(P → P)`, which cannot conclude `(A → B)` —
+    # its conclusion does not unify with the goal below the root. The fingerprint
+    # prefilter sees that (the two disagree at the antecedent) and returns nothing,
+    # so the empty list here means "the library has nothing that proves this", not
+    # "the library is empty".
     pc, _fol, _zfc = tower(db, client, "state-unproved@example.com")
     proof = proved_and_published(client, pc, IDENTITY_PROOF)
     assert promote(client, proof, "id")[0] == 201
 
     status, body = state(client, pc, implication(atom("A"), atom("B")))
     assert status == 200, body
-    assert [m["exact"] for m in body["matches"]] == [False]
+    assert body["matches"] == []
+    # Not because nothing is indexed — the library holds `id`, it just does not
+    # conclude this goal.
+    assert body["constructor"] == "implication"
 
 
 def test_an_ancestors_theorem_answers_a_descendants_question(db, client):

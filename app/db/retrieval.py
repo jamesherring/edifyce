@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
+from app.db.fingerprints import fingerprint_filter
 from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
 from app.db.terms import TermRow
 
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
     from sqlalchemy.sql.elements import ColumnElement
 
     from app.db.promoted_theorems_mapping import LibraryChain
+    from website.logical.fingerprint import Fingerprint
 
 
 @dataclass(frozen=True)
@@ -105,7 +107,8 @@ class Candidates:
     """
 
     candidates: tuple[Candidate, ...] = ()
-    # How many rows the constructor filter matched, before `limit` cut the list.
+    # How many rows the prefilter matched, before `limit` cut the list — the head
+    # filter alone, or that narrowed by the fingerprint when a goal carries one.
     matched: int = 0
     unindexed: int = 0
     unfiltered: int = 0
@@ -126,14 +129,30 @@ def conclusion_candidates(
     constructor: str,
     *,
     alpha_digest: str | None = None,
+    goal_fingerprint: Fingerprint | None = None,
     limit: int = 25,
     exclude: Sequence[str] = (),
 ) -> Candidates:
-    """Theorems in ``chain`` whose conclusion's root production is ``constructor``.
+    """Theorems in ``chain`` whose conclusion could unify with the goal.
 
-    ``constructor`` is the goal's, in the **citing** system's names; each layer is
-    asked about its own spelling of it. ``alpha_digest`` is the goal's, and is
-    only ever used to order — pass it and an α-identical conclusion sorts first.
+    ``constructor`` is the goal's root production, in the **citing** system's
+    names; each layer is asked about its own spelling of it, and it is the indexed
+    head-symbol filter (`ix_terms_system_constructor`).
+
+    ``goal_fingerprint`` sharpens that filter: given it, a per-position
+    compatibility test (`app.db.fingerprints.fingerprint_filter`) narrows within
+    the constructor bucket, dropping theorems whose conclusion cannot unify with
+    the goal below the root. It is layered on top of the head filter and only ever
+    removes candidates, so recall is unchanged — a caller still confirms each with
+    the kernel. It applies only to the **inheritance spine**, though: the
+    fingerprint keys on constructor *signatures*, which agree between a system and
+    its ancestors but not necessarily across a relation edge to an
+    independently-built system (the head filter crosses such an edge by inverting
+    the constructor *name*, which a signature has no analogue of here), so a
+    relation layer falls back to the head filter alone rather than risk pruning a
+    real match — see the condition below. Absent, retrieval is exactly the
+    head-symbol prefilter it was. ``alpha_digest`` is the goal's, and is only ever
+    used to order — pass it and an α-identical conclusion sorts first.
 
     ``exclude`` drops labels the caller already has an answer for, which is what
     keeps a proposal search from re-offering what it has already tried.
@@ -187,6 +206,45 @@ def conclusion_candidates(
         # means something else, and lending its α-digest to the wrong theorem.
         ~_shadowed(rank),
     ]
+    if goal_fingerprint is not None:
+        # The deep half of the prefilter: same rows in, a shorter list out. It
+        # reads a JSON column position by position, which no index covers, so it
+        # sits *after* the indexed head filter above — the constructor bucket is
+        # chosen by the index, this narrows within it.
+        #
+        # Restricted to the inheritance spine. A fingerprint keys on constructor
+        # *signatures* — a string production's surface skeleton, a constant's token
+        # — which agree between the citing system and its ancestors because the
+        # ancestors' productions are inherited verbatim. A **relation edge** joins
+        # independently-built systems: a mapped one may spell a production
+        # differently (`translation.py`: only an *unmapped* name is held to equal
+        # signatures), and an identity one is not even checked for template
+        # agreement (the check short-circuits on the identity), so its stored
+        # fingerprints may be in a spelling the goal's is not. The head filter
+        # crosses such an edge by inverting the constructor *name*; the fingerprint
+        # has no per-layer inverse for a skeleton, so comparing across the edge
+        # would prune a theorem that unifies once rebuilt here — the silent
+        # false-negative this filter must never produce. A relation layer therefore
+        # falls back to the head filter alone, exactly as before the fingerprint
+        # existed. (Spine layers are identity by construction; the extra check keeps
+        # that assumption honest.)
+        signature_stable = {
+            layer.system_id
+            for layer in chain.layers
+            if not layer.related and layer.translation.identity
+        } & set(asked)
+        if signature_stable:
+            deep = fingerprint_filter(
+                PromotedTheoremRow.conclusion_fingerprint,
+                goal_fingerprint,
+                session.get_bind().dialect.name,
+            )
+            conditions.append(
+                or_(
+                    PromotedTheoremRow.system_id.notin_(list(signature_stable)),
+                    deep,
+                )
+            )
     if exclude:
         conditions.append(PromotedTheoremRow.label.notin_(list(exclude)))
 
