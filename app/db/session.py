@@ -1,8 +1,12 @@
-"""Async engine and session wiring.
+"""Engine and session wiring — async for the API, synchronous for batch work.
 
 Kept lazy on purpose: importing this module must not open a connection (the Atlas
 schema loader imports the package offline, and the API should boot without a
 database when `DATABASE_URL` is unset). The engine is created on first use.
+
+Both drivers are configured from the *same* environment variable and the same
+pair of URL rules, so a deployment describes its database once
+(`_configured_url`, `asyncpg_url`, `psycopg_url`).
 """
 
 import os
@@ -10,8 +14,8 @@ from collections.abc import AsyncIterator
 from functools import lru_cache
 from uuid import uuid4
 
-from sqlalchemy import NullPool, make_url
-from sqlalchemy.engine import URL
+from sqlalchemy import NullPool, create_engine, make_url
+from sqlalchemy.engine import URL, Engine
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -52,7 +56,28 @@ def asyncpg_url(raw: str | URL) -> URL:
     return url.set(query=query)
 
 
-def _database_url() -> URL:
+def psycopg_url(raw: str | URL) -> URL:
+    """``raw`` on psycopg 3, which is the synchronous counterpart of the above.
+
+    Two things make this more than a `set(drivername=...)`. SQLAlchemy resolves a
+    bare ``postgresql://`` to **psycopg2**, which this project does not depend on;
+    and ``postgres://`` — the scheme Neon, Vercel and Heroku hand out — resolves to
+    no dialect at all. Either dies inside `create_engine`.
+
+    Query params are deliberately left as they came, which is the whole
+    difference from :func:`asyncpg_url`: psycopg speaks libpq, so ``sslmode`` and
+    ``channel_binding`` already mean there exactly what they mean in the URL.
+
+    Here rather than in a script because this and `asyncpg_url` are two halves of
+    one fact about platform URLs, and a copy kept somewhere else is a copy that
+    drifts. Batch work reaches for this: a walk of a corpus is synchronous from
+    end to end, and driving it through the async engine costs it the event loop
+    (see `scripts/import_metamath.py`).
+    """
+    return make_url(raw).set(drivername="postgresql+psycopg")
+
+
+def _configured_url() -> str:
     # Prefer DATABASE_URL, but fall back to POSTGRES_URL: the Neon/Vercel
     # Marketplace integration provisions the latter (pooled) automatically, so
     # accepting it lets those deployments work without a manual alias.
@@ -63,7 +88,11 @@ def _database_url() -> URL:
             "*pooled* connection string (the '-pooler' host) for serverless "
             "deployments."
         )
-    return asyncpg_url(raw)
+    return raw
+
+
+def _database_url() -> URL:
+    return asyncpg_url(_configured_url())
 
 
 @lru_cache(maxsize=1)
@@ -96,3 +125,22 @@ async def get_session() -> AsyncIterator[AsyncSession]:
     """FastAPI dependency yielding a session scoped to one request."""
     async with get_sessionmaker()() as session:
         yield session
+
+
+@lru_cache(maxsize=1)
+def get_sync_engine() -> Engine:
+    """The same database on a synchronous driver, for batch work off the request path.
+
+    Nothing the API serves wants this — a request is async all the way down. A
+    *corpus import* is the opposite: `app.db.metamath_store.import_corpus` is
+    synchronous, and reaching it through `AsyncSession.run_sync` puts a greenlet
+    hop and an event-loop iteration around every statement it issues. Measured
+    over the first 3,000 theorems of `set.mm`, the same import writing the same
+    rows costs 46.9 ms/theorem through the async engine and 24.5 ms through this
+    one — the transport, not the work.
+
+    Deliberately not the pool the async engine uses: `NullPool` is there because
+    a serverless function should hold no idle connections, and a batch job that
+    runs for an hour on one session wants the ordinary pool.
+    """
+    return create_engine(psycopg_url(_configured_url()))
