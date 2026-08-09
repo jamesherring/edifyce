@@ -18,13 +18,15 @@ interning (a no-op off Postgres), and the native ``uuid``/``jsonb`` types where
 SQLite stores text.
 
 Tables are dropped and recreated per test, so a Postgres run is serial by
-construction — it shares one database rather than one file per test.
+construction — it shares one database rather than one file per test, and
+``tests/conftest.py`` refuses to run one under xdist for that reason. A SQLite
+run has a file per test and parallelises freely, which is what CI does.
 """
 
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, TypeGuard
 
 from sqlalchemy import create_engine, event, make_url
 
@@ -165,3 +167,36 @@ def enable_foreign_keys(engine) -> None:  # noqa: ANN001 - Engine or AsyncEngine
     @event.listens_for(engine, "connect")
     def _pragma(dbapi_connection, _record):  # noqa: ANN001, ANN202
         dbapi_connection.execute("PRAGMA foreign_keys=ON")
+
+
+class DBAPIConnection(Protocol):
+    """The one method these helpers ask of a raw driver connection."""
+
+    def execute(self, sql: str, /) -> object: ...
+
+
+def is_sqlite_connection(dbapi_connection: object) -> TypeGuard[DBAPIConnection]:
+    """Whether a DBAPI connection is one of the two SQLite drivers.
+
+    SQLAlchemy's ``connect`` event carries the raw connection and no dialect, and
+    ``isinstance(..., sqlite3.Connection)`` sees only the synchronous driver —
+    aiosqlite's is an adapter class of SQLAlchemy's own. Both live under a module
+    path naming the dialect, which is what tells them from psycopg/asyncpg.
+    """
+    return "sqlite" in type(dbapi_connection).__module__
+
+
+def relax_sqlite_durability(dbapi_connection: DBAPIConnection) -> None:
+    """Stop a throwaway database paying for crash safety it cannot use.
+
+    SQLite fsyncs at every commit by default, and each test's schema is ~47
+    ``CREATE TABLE``s against a fresh file — around 0.2s of waiting on the disk
+    before the test has done anything, on every one of the several hundred tests
+    that ask for a database. These files live in ``tmp_path`` and are read only
+    by the process that wrote them, so a crash mid-test destroys nothing a rerun
+    would not rebuild anyway.
+
+    Only durability is given up. Transactions, rollback and foreign keys behave
+    exactly as before, so nothing a test asserts about the database changes.
+    """
+    dbapi_connection.execute("PRAGMA synchronous=OFF")

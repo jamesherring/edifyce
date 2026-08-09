@@ -27,6 +27,9 @@ dev = [
     # database instead of SQLite (see tests/database.py). The app itself only
     # ever uses asyncpg; this is test-only.
     "psycopg[binary]>=3.2",
+    # The suite is a long tail of ~2,100 short tests, so wall-clock is a matter
+    # of how many cores it uses. CI runs it with `-n auto --dist loadfile`.
+    "pytest-xdist>=3.8.0",
 ]
 
 [tool.uv]

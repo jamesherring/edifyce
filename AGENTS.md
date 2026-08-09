@@ -170,8 +170,16 @@ The **backend** requires **Python 3.13+** and [uv](https://docs.astral.sh/uv/).
 ```bash
 uv sync                                      # install deps (incl. dev group)
 uv run pytest                                # run the test suite
+uv run pytest -n auto --dist loadfile        # …in parallel, as CI runs it
 uv run uvicorn app.main:app --reload         # run the dev server (docs at /docs)
 ```
+
+The suite is a long tail — ~2,100 tests at a fifth of a second each, with no
+single test worth optimising — so what makes it quick is running it on every
+core. `--dist loadfile` keeps a file's tests together, which matters because the
+module-scoped fixtures that build formal systems would otherwise be built once
+per worker. A run against real Postgres (`EDIFYCE_TEST_DATABASE_URL`) shares one
+database and is refused under `-n`; run those serially.
 
 The **frontend** requires **Node 20+** and lives in `frontend/`.
 
@@ -226,7 +234,7 @@ wherever you run it:
 
 - **Run the tests before and after any change to the engine.** The engine is
   large, largely untyped in its internals, and interconnected — tests are the
-  safety net. CI runs `uv run pytest -v` on every PR.
+  safety net. CI runs `uv run pytest -n auto --dist loadfile` on every PR.
 - **Keep the API layer thin.** New behaviour belongs in `website/logical/`;
   `app/` should stay a translation layer between HTTP/Pydantic and the engine.
 - **Keep the frontend a thin client.** It renders and calls the API; proof and

@@ -5,6 +5,15 @@ on:
   push:
     branches: [develop]
 
+# A push that supersedes an earlier one on the same branch cancels its run. The
+# older commit's verdict is not one anybody acts on, and the suite is the bulk of
+# this repository's CI minutes — a superseded run has been left to spend twenty
+# of them. `develop` is exempt: every commit on it is merged history, and its
+# result is what the next branch is cut from.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/develop' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -20,8 +29,14 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
+      # `-n auto` is one worker per core the runner has (4 on ubuntu-latest).
+      # `--dist loadfile` keeps a file's tests on one worker, so module-scoped
+      # fixtures — of which this suite has many, each building a formal system —
+      # are still built once rather than once per worker. Dropped `-v`: 2,000
+      # lines of PASSED are not what anyone opens a failed run to read, and
+      # xdist interleaves them across workers anyway.
       - name: Run tests
-        run: uv run pytest -v
+        run: uv run pytest -n auto --dist loadfile
 
   frontend:
     runs-on: ubuntu-latest
