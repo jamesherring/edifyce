@@ -44,8 +44,8 @@ def test_expected_tables_present():
         "label_attributions",
         "label_citations",
         "label_references",
-        # And what it declares a proof does *without*.
-        "label_avoidances",
+        # And what its `$j` markup asserts about them.
+        "label_claims",
         "definitions",
         "definition_bindings",
         "definition_fresh",

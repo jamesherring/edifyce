@@ -1884,7 +1884,7 @@ note whose sentence happens to contain "is discouraged".
 
 | | count | note |
 |---|---|---|
-| `$j` markup directives | 1,221 in 1,203 blocks | **Read** — see §4.9. |
+| `$j` markup directives | 1,222 in 1,203 blocks | **Read and stored** — see §4.9 and §4.11. |
 | comments on non-assertion statements | 1,621 | 606 before a `$c` ("Absolute value function." — what a *symbol* means, and nothing else in the file says it), 432 before a `${`, 302 before an `$e`, 123 before a `$f`, 74 before a `$v`, 66 before a `$}`, 18 before a `$d`. `$e`/`$f` are labels and would key into `label_descriptions` unchanged; `$c`/`$v` declare tokens and need a token key. |
 | `[Author]` bibliography refs | 5,271 across 135 works | **Read** — see §4.10. |
 | `$t` non-definition directives | 12 kinds | `htmlvarcolor`, `htmltitle`, `htmlhome`, `exthtml*`, `htmldir`, `htmlcss`, `htmlfont`. Only `htmlvarcolor` has content value — the typecode-to-colour legend, which `althtmldef`'s `<SPAN>`s already encode per token. |
@@ -1959,6 +1959,44 @@ have written. Idempotent by construction — a row it has already fixed has no
 marker left to find, so the flags are OR-ed in and never assigned.
 
 ---
+
+### 4.11 What the `$j` directives are stored as — *done*
+
+§4.9 read them and stored one keyword. This stores the rest, and the shape is
+what makes that one table rather than twenty-four.
+
+Every name-carrying directive flattens to a **claim** — a subject, a kind, and at
+most one object — and the two forms a directive takes are what produce it:
+
+- with a preposition, the first argument is the subject and each value of each
+  clause is an object (`usage 'a1i' avoids 'ax-11' 'ax-12'` → two claims);
+- without one, every argument is a subject asserting the same thing about itself
+  and there is no object (`primitive 'wn' 'wi'` → two claims).
+
+Over `set.mm` that is **3,364 claims of 24 kinds over 1,329 labels**, from 1,222
+directives. `usage_avoids` is 3,109 of them; the rest is the content §4.8 counted
+as dropped — `restatement_of` 29, the `natded_*` family 175, `condcongruence` 9,
+`primitive` 11, `equality_from` 6, `congruence` 6, and a tail.
+
+**The kind keeps its preposition** (`equality_from`, `notfree_from`) because the
+preposition is part of the relation's identity: those two share a keyword-adjacent
+word and mean different things. And the kind is stored **as the file spells it**
+rather than mapped to a vocabulary of ours, for the reason an attribution's `kind`
+is kept verbatim — a closed set would have to be maintained against a file free to
+add to it.
+
+**Twelve directives are skipped**, by a deny-list rather than an allow-list so a
+keyword some future file invents lands as data rather than being dropped in
+silence. What it excludes is the four shapes whose arguments are not names:
+`varcolorcode` and `altvarcolorcode` (colour tables for Metamath's own site — the
+same reason `htmldef` is skipped), `garden_path` (bare math tokens), and
+`unambiguous` (whose argument names a parsing algorithm). `type_conversions`
+carries no argument at all.
+
+`label_avoidances` **became** this table rather than sitting beside it. It was
+already the claim shape with the kind implied by the table's name, and a second
+table of identical columns for `restatement` would have been the drift
+`tests/database.py` warns about in the small.
 
 ### Tier B — the human-altitude layer
 

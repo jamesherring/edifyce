@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import Documentation from './Documentation.svelte';
-import type { LabelDescription } from '$lib/api';
+import type { LabelClaim, LabelDescription } from '$lib/api';
 
 function documentation(over: Partial<LabelDescription> = {}): LabelDescription {
 	return {
@@ -15,7 +15,7 @@ function documentation(over: Partial<LabelDescription> = {}): LabelDescription {
 		mentioned_by_total: 0,
 		discouraged_usage: false,
 		discouraged_modification: false,
-		avoids: [],
+		claims: [],
 		...over
 	};
 }
@@ -113,17 +113,75 @@ describe('a corpus record', () => {
 	});
 });
 
-describe('what a proof is declared to do without', () => {
-	it('lists the statements the corpus says it avoids', () => {
+function claim(over: Partial<LabelClaim> = {}): LabelClaim {
+	return {
+		kind: 'usage_avoids',
+		object: 'ax-11',
+		object_proof_id: null,
+		object_title: null,
+		...over
+	};
+}
+
+describe('what the corpus declares about a label', () => {
+	it('lists the statements a proof is said to do without', () => {
 		// A result about the proof rather than the theorem, and nowhere else to read
 		// it from: an avoided statement is usually nowhere in the citation graph.
 		render(Documentation, {
-			documentation: documentation({ avoids: ['ax-11', 'ax-12'] })
+			documentation: documentation({
+				claims: [claim({ object: 'ax-11' }), claim({ object: 'ax-12' })]
+			})
 		});
 
 		expect(screen.getByText('Proved without')).toBeInTheDocument();
 		expect(screen.getByText('ax-11')).toBeInTheDocument();
 		expect(screen.getByText('ax-12')).toBeInTheDocument();
+	});
+
+	it('groups the kinds under their own headings', () => {
+		// They are unrelated claims that happen to share a shape — a proof that does
+		// without `ax-12` and a statement that restates `axsep` are not one list.
+		render(Documentation, {
+			documentation: documentation({
+				claims: [
+					claim({ kind: 'usage_avoids', object: 'ax-12' }),
+					claim({ kind: 'restatement_of', object: 'axsep' })
+				]
+			})
+		});
+
+		expect(screen.getByText('Proved without')).toBeInTheDocument();
+		expect(screen.getByText('Restatement of')).toBeInTheDocument();
+	});
+
+	it('links a claim whose object is a readable proof', () => {
+		render(Documentation, {
+			documentation: documentation({
+				claims: [claim({ kind: 'restatement_of', object: 'axsep', object_proof_id: 'p1' })]
+			})
+		});
+
+		expect(screen.getByRole('link', { name: 'axsep' })).toHaveAttribute('href', '/proofs/p1');
+	});
+
+	it('renders a kind it has never heard of from the file own word', () => {
+		// The `$j` vocabulary is Metamath's and is open, so an unknown kind must
+		// still show as something a reader can look up rather than be dropped.
+		render(Documentation, {
+			documentation: documentation({ claims: [claim({ kind: 'natded_weak', object: 'a1i' })] })
+		});
+
+		expect(screen.getByText('Natded weak')).toBeInTheDocument();
+	});
+
+	it('shows a claim with no object as the heading alone', () => {
+		// `primitive 'wn';` names nothing else.
+		render(Documentation, {
+			documentation: documentation({ claims: [claim({ kind: 'primitive', object: null })] })
+		});
+
+		expect(screen.getByText('Primitive')).toBeInTheDocument();
+		expect(screen.getByText('declared')).toBeInTheDocument();
 	});
 
 	it('says nothing when the corpus declares nothing', () => {
