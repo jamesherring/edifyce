@@ -2,11 +2,17 @@ import type { BibliographyCitation, LabelDescription, LabelReference } from '$li
 
 /** One piece of a description's prose: plain text, a cross-reference, or a
  * bibliography citation. The last two are both spans the API sends offsets for;
- * they differ in where they point — inside the corpus, or out of it. */
+ * they differ in where they point — inside the corpus, or out of it.
+ *
+ * A citation carries its own `text` — the slice, verbatim. Rebuilding it from
+ * `work` and `page` loses what the file actually wrote: 103 of set.mm's put a
+ * comma before the `p.`, and a reconstruction quietly drops it (found in
+ * review). A reference needs no such field because its `target` is deliberately
+ * *not* the span — a `~~` in a URL resolves to a single tilde. */
 export type ProseSegment =
 	| { kind: 'text'; text: string }
 	| { kind: 'reference'; reference: LabelReference }
-	| { kind: 'citation'; citation: BibliographyCitation };
+	| { kind: 'citation'; citation: BibliographyCitation; text: string };
 
 type Span = { start: number; end: number; segment: ProseSegment };
 
@@ -90,7 +96,11 @@ export function renderProse(description: LabelDescription): ProseSegment[] {
 			description.citations.map((citation) => ({
 				start: citation.start,
 				end: citation.end,
-				segment: { kind: 'citation', citation } as const
+				segment: {
+					kind: 'citation',
+					citation,
+					text: description.text.slice(citation.start, citation.end)
+				} as const
 			})),
 			length
 		)

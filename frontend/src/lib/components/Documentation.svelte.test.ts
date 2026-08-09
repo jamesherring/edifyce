@@ -174,6 +174,22 @@ describe('where the prose points outside the corpus', () => {
 		expect(screen.queryByRole('link', { name: '[Margaris] p. 49' })).toBeNull();
 	});
 
+	it('shows the citation exactly as the file wrote it', () => {
+		// 103 of set.mm's put a comma before the `p.`, which its own conventions
+		// forbid. Rebuilding the label from the key and page drops it silently, so
+		// the span is what renders (found in review).
+		render(Documentation, {
+			documentation: documentation({
+				text: 'Lemma 6.1C.2 of [Shapiro], p. 199.',
+				citations: [{ work: 'Shapiro', page: '199', start: 16, end: 33 }],
+				references: []
+			}),
+			systemId: 's1'
+		});
+
+		expect(screen.getByRole('link', { name: '[Shapiro], p. 199' })).toBeInTheDocument();
+	});
+
 	it('says nothing extra when the prose cites nothing', () => {
 		render(Documentation, { documentation: documentation({ text: 'Prose.' }) });
 

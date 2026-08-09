@@ -53,17 +53,20 @@
 				<!-- Where the prose points *outside* the corpus. The key indexes a
 				     bibliography that lives in a separate file, so there is no work to
 				     open — what there is is the rest of this library that came from the
-				     same book, which is what the link goes to. -->
+				     same book, which is what the link goes to.
+				     Rendered from the *span*, not rebuilt from the key and page: 103 of
+				     set.mm's citations put a comma before the `p.` and a reconstruction
+				     silently drops it. -->
 				{#if systemId}
 					<a
 						href={`/systems/${systemId}/works/${encodeURIComponent(segment.citation.work)}`}
 						class="text-[0.9em] underline decoration-dotted underline-offset-2 hover:decoration-solid"
 						title={`Other statements from ${segment.citation.work}`}
-						>[{segment.citation.work}] p. {segment.citation.page}</a
+						>{segment.text}</a
 					>
 				{:else}
 					<span class="text-[0.9em] text-muted-foreground"
-						>[{segment.citation.work}] p. {segment.citation.page}</span
+						>{segment.text}</span
 					>
 				{/if}
 			{:else if segment.kind === 'reference'}

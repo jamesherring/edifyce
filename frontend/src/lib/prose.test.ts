@@ -149,6 +149,16 @@ describe('citations interleaved with references', () => {
 		expect(renderProse(doc).map((s) => s.kind)).toEqual(['text', 'reference', 'text']);
 	});
 
+	it('carries the span verbatim, not a reconstruction of it', () => {
+		const doc = description({
+			text: 'Lemma 6.1C.2 of [Shapiro], p. 199.',
+			citations: [{ work: 'Shapiro', page: '199', start: 16, end: 33 }]
+		});
+
+		const [, citation] = renderProse(doc);
+		expect(citation.kind === 'citation' && citation.text).toBe('[Shapiro], p. 199');
+	});
+
 	it('keeps prose whole when there are no citations', () => {
 		expect(renderProse(description({ text: 'Just prose.' }))).toEqual([
 			{ kind: 'text', text: 'Just prose.' }
