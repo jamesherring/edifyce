@@ -557,6 +557,16 @@ the engine's mechanic rather than a limit of the route, it is the thing a caller
 will hit first, and it is caught by the scope round trip above with a message that
 says so.
 
+**Opening a scope and carrying a citation are two questions**, and review caught
+them fused. A scope opener is granted by fiat, so the checker never resolves its
+reference — but whether there is a reference *field* to write in is the line
+type's business, and some declare one. Skipping the citation for every opener
+meant a new opener spliced out of an old one silently kept **the old one's**: a
+phantom dependency this layer does treat as real, blocking a removal and shifting
+under a renumber, and invisible to every round trip because the term, the type and
+the scope all come back exactly as asked. The citation is now refused only where
+the type has nowhere to put it, and written wherever it does.
+
 **The guard needed the other invariant, not a wider version of the same one.** The
 section asks for the renumbering guard extended over scope boundaries under *no
 line that was valid before may be invalid after* — but that invariant is exactly
@@ -569,6 +579,14 @@ moves is which block it is a step of — so a discharge would then consume a
 subproof that no longer contains it. `_rescoped_by_insert` is the companion to
 `_broken_by_insert`, comparing each surviving line's opener before and after, and
 it is pinned by a test checked to fail without it.
+
+**And `/lines/remove` needed the same companion**, which review caught missing.
+It became reachable the moment the structured path could author a subproof at all:
+the line that *dedents* is what closes one, so removing an uncited dedent leaves
+everything after it inside the block it used to end — still checking, still citing
+what it cited, and a step of something else. Both edits move scopes, so both
+guard it; `_rescoped_by_insert` and `_rescoped_by_removal` are one function with
+the shift as its argument.
 
 ## 5. What stays out
 

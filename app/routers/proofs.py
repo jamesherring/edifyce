@@ -121,7 +121,11 @@ from app.routers.systems import (
 from website.logical.formal_system.diagnostics import numbers
 from website.logical.formal_system.justification import justification
 from website.logical.formal_system.proof import Proof as EngineProof
-from website.logical.formal_system.proof import CITATION_SEPARATOR, citation_text
+from website.logical.formal_system.proof import (
+    CITATION_SEPARATOR,
+    HOLE_KEY,
+    citation_text,
+)
 from website.logical.formal_system.retrieval import (
     Application,
     accessible_lines,
@@ -2386,20 +2390,34 @@ async def propose_line(
     system = built.system
     compiled = built.compiled
 
-    opener_kind = _opens_scope(built, shape.line_type)
-    if opener_kind is not None and (payload.antecedents or "rule" in payload.model_fields_set):
-        # A scope opener is granted by fiat — it is a hypothesis, not a step —
-        # so it declares no reference field and there is nothing for a citation
-        # to go in. Refused rather than dropped: a caller that thinks it has
-        # justified an assumption has misunderstood what it just wrote.
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                f"Line type {shape.line_type!r} opens a subproof, which is "
-                "assumed rather than justified, so it takes no rule or "
-                "antecedents."
-            ),
-        )
+    opener_kind, takes_citation = _line_kind(built, shape.line_type)
+    # **Opening a scope and carrying a citation are two questions**, and it took
+    # review to see that fusing them was wrong twice over. A scope opener is
+    # granted by fiat, so the checker never resolves its reference — but whether
+    # there is a reference *field* to write in is the line type's business, and
+    # some declare one (`tests.test_proofs_api._scoped_with_reference_spec`, whose
+    # comment records that nothing forbids it).
+    #
+    # So the citation is refused only where the type has nowhere to put it, and
+    # written wherever it does. Skipping the write for every opener meant a new
+    # `assume` spliced out of an old one silently kept *the old one's* citation —
+    # a phantom dependency this layer does treat as real, blocking a removal and
+    # shifting under a renumber, and invisible to every round trip below because
+    # the term, the type and the scope are all exactly as asked.
+    if opener_kind is not None and not takes_citation:
+        # By value rather than by `model_fields_set`: `rule` defaults to the hole
+        # keyword, which says "nothing justifies this" — the very thing an opener
+        # means — so a client spelling the default out loud is asking for what it
+        # would have got anyway and must not be refused for saying so.
+        if payload.antecedents or payload.rule != HOLE_KEY:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Line type {shape.line_type!r} opens a subproof and declares "
+                    "no reference field, so it is assumed rather than justified "
+                    "and takes no rule or antecedents."
+                ),
+            )
 
     term, context = await resolve_proposal(
         session, payload.statement, system.id, compiled
@@ -2440,7 +2458,7 @@ async def propose_line(
                 "would not read back as written."
             ),
         )
-    if opener_kind is None:
+    if takes_citation:
         stated = compiled.recite(
             stated, citation_text(payload.rule, payload.antecedents)
         )
@@ -2721,6 +2739,20 @@ async def remove_line(
                 "before; no line was removed."
             ),
         )
+    # The mirror of the insert's, and it became reachable when the structured
+    # path learned to author subproofs at all: taking out the line that *dedents*
+    # is what leaves the lines after it inside the subproof it used to close, and
+    # they can stay valid throughout. Both edits move scopes, so both need this
+    # (found in review, where only the insert had it).
+    moved_scope = _rescoped_by_removal(rows, verification.engine_proof, payload.line)
+    if moved_scope:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Removing this line would move line {moved_scope} into a "
+                "different subproof; no line was removed."
+            ),
+        )
 
     outcome = LineRemovalOutcome(
         line=payload.line,
@@ -2910,8 +2942,13 @@ def _shape_source(
     return _Shape(line_type=line_type, display=kin[-1].display if kin else None)
 
 
-def _opens_scope(built: BuiltSystem, line_type: str) -> str | None:
-    """The scope kind ``line_type`` opens, or None — the system's answer, not ours.
+def _line_kind(built: BuiltSystem, line_type: str) -> tuple[str | None, bool]:
+    """What scope ``line_type`` opens, and whether it has room for a citation.
+
+    Two independent properties, kept apart because they are independent: a line
+    type may open a subproof, carry a reference field, both or neither, and the
+    system is the authority on each. Answered together only because one lookup
+    serves both.
 
     Raises when the system declares no such type, which is a 422 rather than a
     silent fall back to the anchor's: a caller naming a type that does not exist
@@ -2927,7 +2964,7 @@ def _opens_scope(built: BuiltSystem, line_type: str) -> str | None:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"This system declares no line type named {line_type!r}.",
         )
-    return found.scope
+    return found.scope, found.reference_field is not None
 
 
 def _stated_afresh(built: BuiltSystem, line_type: str, formula: str) -> str | None:
@@ -3001,14 +3038,55 @@ def _rescoped_by_insert(
     after = {
         line.number: line for line in checked.proof_lines if line.number is not None
     }
+    return _rescoped(before, checked, at, by=1)
+
+
+def _rescoped_by_removal(
+    before: Sequence[ProofLineRow], checked: EngineProof | None, at: int
+) -> int | None:
+    """The first line the removal moved into a different subproof, by its new number.
+
+    :func:`_rescoped_by_insert`'s mirror, and reachable for the same reason the
+    other is: the line that *dedents* is what closes a subproof, so taking it out
+    leaves everything after it inside the block it used to end — still checking,
+    still citing what it cited, and a step of something else.
+
+    The removed line is skipped: it is meant to be gone, and it has no scope after.
+    """
+    return _rescoped(before, checked, at, by=-1, dropped=at)
+
+
+def _rescoped(
+    before: Sequence[ProofLineRow],
+    checked: EngineProof | None,
+    at: int,
+    *,
+    by: int,
+    dropped: int | None = None,
+) -> int | None:
+    # Shared by the two above. Both sides are read *after* the shift, since a
+    # stored row and a fresh parse have no object in common and numbers are the
+    # only thing they both speak — so the before-scope is shifted the same way
+    # the line it names was.
+    if checked is None:
+        return None
+    after = {
+        line.number: line for line in checked.proof_lines if line.number is not None
+    }
+
+    def shifted(number: int | None) -> int | None:
+        if number is None:
+            return None
+        return number + by if number >= at else number
+
     for row in before:
-        moved = row.number + 1 if row.number >= at else row.number
+        if row.number == dropped:
+            continue
+        moved = shifted(row.number)
         line = after.get(moved)
         if line is None:
             continue
-        was = _scope_of_row(before, row.number)
-        now = _scope_of(line)
-        if (was + 1 if was is not None and was >= at else was) != now:
+        if shifted(_scope_of_row(before, row.number)) != _scope_of(line):
             return moved
     return None
 

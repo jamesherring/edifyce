@@ -32,6 +32,7 @@ from fastapi.testclient import TestClient
 
 from tests.test_proofs_api import (  # noqa: F401 - fixtures come along
     _register_login,
+    _scoped_with_reference_spec,
     _seed_system,
     client,
     db,
@@ -68,6 +69,11 @@ def implication(left: dict, right: dict) -> dict:
 
 def source_of(client: TestClient, proof_id: str) -> str:
     return client.get(f"/api/proofs/{proof_id}").json()["source"]
+
+
+def structure(client: TestClient, proof_id: str) -> list[dict]:
+    body = client.get(f"/api/proofs/{proof_id}/structure").json()
+    return [dict(l, scope=l["scope_id"]) for l in body["lines"]]
 
 
 def lines_of(client: TestClient, proof_id: str) -> list[tuple[int | None, int, str]]:
@@ -124,6 +130,27 @@ def test_a_scope_opener_takes_no_citation(client, db):
     )
     assert res.status_code == 422
     assert "assumed rather than justified" in res.json()["detail"]
+
+
+def test_spelling_the_default_rule_out_loud_is_not_a_citation(client, db):
+    # `rule` defaults to the hole keyword, which says "nothing justifies this" —
+    # the very thing an opener means. A client that sends the default explicitly
+    # is asking for what it would have got anyway, so refusing it would be
+    # refusing a request identical to one that is accepted.
+    owner = _register_login(client, "ada@example.com")
+    proof_id = _proof(client, db, owner, "x ∈ y [HYP]")
+
+    res = client.post(
+        f"/api/proofs/{proof_id}/lines",
+        json={
+            "statement": membership("a", "b"),
+            "line_type": "assume",
+            "rule": "?",
+            "antecedents": [],
+        },
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["display"] == "assume a ∈ b"
 
 
 def test_a_line_type_the_system_does_not_declare_is_refused(client, db):
@@ -557,6 +584,104 @@ def test_an_insert_inside_the_subproof_moves_nothing(client, db):
     assert res.status_code == 200, res.text
     assert res.json()["scope"] == 1
     assert [n for n, _, _ in lines_of(client, proof_id)] == [1, 2, 3, 4]
+
+
+def test_an_opener_that_declares_a_reference_gets_its_own_citation(client, db):
+    # Opening a scope and carrying a citation are two questions. A scope opener
+    # is granted by fiat — the checker never resolves its reference — but whether
+    # there is a reference *field* to write in is the line type's business, and
+    # some declare one.
+    #
+    # Skipping the citation for every opener meant a new `assume` spliced out of
+    # an old one silently kept **the old one's**: a phantom dependency this layer
+    # treats as real, and invisible to every round trip, since the term, the type
+    # and the scope all come back exactly as asked.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_system(client and db, owner, spec=_scoped_with_reference_spec())
+    created = client.post(
+        "/api/proofs",
+        json={
+            "name": "P",
+            "formal_system_id": system_id,
+            "source": "assume x ∈ y [HYP 1]\n    x ∈ y [HYP]",
+        },
+    ).json()
+    client.post(f"/api/proofs/{created['id']}/verify")
+
+    default = client.post(
+        f"/api/proofs/{created['id']}/lines",
+        json={
+            "statement": {
+                "constructor": "membership",
+                "slots": {
+                    "s": {"constructor": "variable", "literal": "a"},
+                    "t": {"constructor": "variable", "literal": "b"},
+                },
+            },
+            "line_type": "assume",
+        },
+    )
+    assert default.status_code == 200, default.text
+    # Not `[HYP 1]`: nothing was said, so nothing is claimed — and crucially no
+    # line number is named, so no dependency is invented.
+    assert default.json()["display"] == "    assume a ∈ b [?]"
+
+    # And because the field exists, the caller may write the system's own idiom.
+    spelled = client.post(
+        f"/api/proofs/{created['id']}/lines",
+        json={
+            "statement": {
+                "constructor": "membership",
+                "slots": {
+                    "s": {"constructor": "variable", "literal": "a"},
+                    "t": {"constructor": "variable", "literal": "b"},
+                },
+            },
+            "line_type": "assume",
+            "rule": "HYP",
+        },
+    )
+    assert spelled.status_code == 200, spelled.text
+    assert spelled.json()["display"] == "    assume a ∈ b [HYP]"
+
+
+# ---------------------------------------------------------------------------
+# Taking one back out
+# ---------------------------------------------------------------------------
+
+
+def test_a_removal_that_would_move_a_valid_line_into_a_subproof_is_refused(client, db):
+    # The mirror of the insert guard, reachable for the same reason: the line
+    # that *dedents* is what closes a subproof, so taking it out leaves what
+    # follows inside the block it used to end — still checking, still citing what
+    # it cited, and a step of something else.
+    #
+    # Line 3 is the dedent. Line 4 cites line 3's own citation source at the root
+    # and stays valid wherever it sits, so nothing about its verdict moves.
+    # Line 3 is the dedent that closes the subproof, and nothing cites it — so
+    # the citation guard has no opinion and this is the only thing standing
+    # between the caller and a silently re-parented line 4.
+    owner = _register_login(client, "ada@example.com")
+    proof_id = _proof(
+        client,
+        db,
+        owner,
+        "assume x ∈ y\n"
+        "    x ∈ y [R, 1]\n"
+        "(x ∈ y → x ∈ y) [CP, 1]\n"
+        "    x ∈ y [?]",
+    )
+    before = lines_of(client, proof_id)
+    assert [n for n, _, _ in before] == [1, 2, 3, 4]
+    # Line 4 is indented but at the *root*: closing a subproof is what a dedent
+    # does, and indenting again cannot reopen it.
+    assert [l["scope"] is None for l in structure(client, proof_id)][3]
+
+    res = client.post(f"/api/proofs/{proof_id}/lines/remove", json={"line": 3})
+
+    assert res.status_code == 409, res.text
+    assert "different subproof" in res.json()["detail"]
+    assert lines_of(client, proof_id) == before
 
 
 # ---------------------------------------------------------------------------
