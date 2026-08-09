@@ -21,12 +21,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.db import Base, store_term
+from app.db.fingerprints import encode
 from app.db.models import FormalSystem
 from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
 from app.db.promoted_theorems_mapping import LibraryChain, LibraryLayer
 from app.db.retrieval import conclusion_candidates
 from app.db.terms import TermChildRow, TermRow
 from app.db.terms_mapping import alpha_digest
+from website.logical.fingerprint import Fingerprint, compatible, fingerprint
 from tests.spec_helpers import (
     brackets,
     hyp_rule,
@@ -110,18 +112,24 @@ def add_theorem(
 ):
     """A promoted entry with its conclusion term cached, as a promotion writes it."""
     term_id = None
+    conclusion_fingerprint = None
     if store:
-        stored = store_term(session, system_row, term_of(context, statement))
+        term = term_of(context, statement)
+        stored = store_term(session, system_row, term)
         # The client-side uuid default lands at flush, not at construction — the
         # same flush `_term_id` does before it hands the id on.
         session.flush()
         term_id = stored.id
+        # Written beside the cached term, present or absent together, as a
+        # promotion does (`promoted_theorems_mapping.pattern_fingerprint`).
+        conclusion_fingerprint = encode(fingerprint(term))
     row = PromotedTheoremRow(
         system_id=system_row.id,
         label=label,
         statement=statement,
         primitive=False,
         statement_term_id=term_id,
+        conclusion_fingerprint=conclusion_fingerprint,
     )
     session.add(row)
     session.flush()
@@ -365,3 +373,111 @@ def test_a_label_a_nearer_layer_shadows_is_not_offered(session, engine_context):
         labels = [(c.label, c.system_id) for c in found.candidates]
         assert labels == [("id", child.id), ("other", parent.id)]
         assert found.matched == 2
+
+
+# ---------------------------------------------------------------------------
+# The fingerprint: narrowing below the root
+# ---------------------------------------------------------------------------
+
+
+def test_the_fingerprint_prunes_a_shared_head_that_cannot_unify(
+    session, system_row, engine_context
+):
+    # Both conclusions are implications, so the head filter keeps both. Only the
+    # fingerprint sees that the goal's left side is a membership while `nested`'s is
+    # itself an implication — a position the unifier would reject too. (Leaves in
+    # this grammar are ground tokens, so `flat` shares the goal's spelling to stay
+    # unifiable; the distinguishing structure is the nesting, not the letters.)
+    add_theorem(session, system_row, engine_context, "flat", "(a ∈ b → a ∈ c)")
+    add_theorem(
+        session, system_row, engine_context, "nested", "((a ∈ b → a ∈ c) → a ∈ b)"
+    )
+    goal = fingerprint(term_of(engine_context, "(a ∈ b → a ∈ c)"))
+
+    # The head filter alone keeps both — the baseline the fingerprint improves on.
+    head_only = conclusion_candidates(session, chain_of(system_row), "implication")
+    assert {c.label for c in head_only.candidates} == {"flat", "nested"}
+
+    narrowed = conclusion_candidates(
+        session, chain_of(system_row), "implication", goal_fingerprint=goal
+    )
+    assert [c.label for c in narrowed.candidates] == ["flat"]
+    assert narrowed.matched == 1
+
+
+def test_the_fingerprint_filter_matches_the_engine_predicate(
+    session, system_row, engine_context
+):
+    # The recall contract, against the engine as oracle: the rows the database
+    # keeps are exactly the implication-headed theorems whose stored fingerprint
+    # `compatible` accepts. A divergence here is either a dropped real match (a
+    # recall bug) or a kept impossible one (the SQL disagreeing with the engine).
+    corpus = {
+        "flat": "(a ∈ b → a ∈ c)",
+        "nested_left": "((a ∈ b → a ∈ c) → a ∈ b)",
+        "nested_right": "(a ∈ b → (a ∈ c → a ∈ b))",
+        "both_members": "(a ∈ b → a ∈ b)",
+        "member": "a ∈ b",  # not an implication — the head filter drops it
+    }
+    for label, statement in corpus.items():
+        add_theorem(session, system_row, engine_context, label, statement)
+
+    # Shares the corpus's ground tokens so the match is decided by structure, not
+    # by the letters — otherwise a token mismatch would prune everything.
+    goal_term = term_of(engine_context, "(a ∈ b → (a ∈ c → a ∈ b))")
+    goal = fingerprint(goal_term)
+
+    expected = {
+        label
+        for label, statement in corpus.items()
+        if statement.startswith("(")  # implication-headed, as the head filter asks
+        and compatible(goal, fingerprint(term_of(engine_context, statement)))
+    }
+
+    found = conclusion_candidates(
+        session, chain_of(system_row), "implication", goal_fingerprint=goal
+    )
+    assert {c.label for c in found.candidates} == expected
+    # And the filter actually did something — this goal is not vacuous.
+    assert expected != {"flat", "nested_left", "nested_right", "both_members"}
+
+
+def test_a_theorem_without_a_stored_fingerprint_is_kept(
+    session, system_row, engine_context
+):
+    # A NULL fingerprint is the "not re-indexed yet" state — it cannot be compared,
+    # so it must fall through to the head filter rather than be dropped. Its shape
+    # would otherwise be pruned by this goal, which is what makes the fallback
+    # visible.
+    row = add_theorem(
+        session, system_row, engine_context, "nested", "((a ∈ b → a ∈ c) → a ∈ b)"
+    )
+    row.conclusion_fingerprint = None
+    session.flush()
+    goal = fingerprint(term_of(engine_context, "(a ∈ b → a ∈ c)"))
+
+    found = conclusion_candidates(
+        session, chain_of(system_row), "implication", goal_fingerprint=goal
+    )
+    assert [c.label for c in found.candidates] == ["nested"]
+
+
+def test_a_fingerprint_from_a_different_position_set_is_kept(
+    session, system_row, engine_context
+):
+    # A fingerprint written under a different FINGERPRINT_POSITIONS cannot be read
+    # against the current one — the engine `compatible` raises on that key
+    # mismatch. The filter must keep such a row (fall back to the head filter),
+    # never silently compare it against positions it does not describe.
+    row = add_theorem(
+        session, system_row, engine_context, "nested", "((a ∈ b → a ∈ c) → a ∈ b)"
+    )
+    stale = fingerprint(term_of(engine_context, "((a ∈ b → a ∈ c) → a ∈ b)"))
+    row.conclusion_fingerprint = encode(Fingerprint(key="stale-key", features=stale.features))
+    session.flush()
+    goal = fingerprint(term_of(engine_context, "(a ∈ b → a ∈ c)"))
+
+    found = conclusion_candidates(
+        session, chain_of(system_row), "implication", goal_fingerprint=goal
+    )
+    assert [c.label for c in found.candidates] == ["nested"]

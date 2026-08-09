@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
+from app.db.fingerprints import fingerprint_filter
 from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
 from app.db.terms import TermRow
 
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
     from sqlalchemy.sql.elements import ColumnElement
 
     from app.db.promoted_theorems_mapping import LibraryChain
+    from website.logical.fingerprint import Fingerprint
 
 
 @dataclass(frozen=True)
@@ -105,7 +107,8 @@ class Candidates:
     """
 
     candidates: tuple[Candidate, ...] = ()
-    # How many rows the constructor filter matched, before `limit` cut the list.
+    # How many rows the prefilter matched, before `limit` cut the list — the head
+    # filter alone, or that narrowed by the fingerprint when a goal carries one.
     matched: int = 0
     unindexed: int = 0
     unfiltered: int = 0
@@ -126,14 +129,26 @@ def conclusion_candidates(
     constructor: str,
     *,
     alpha_digest: str | None = None,
+    goal_fingerprint: Fingerprint | None = None,
     limit: int = 25,
     exclude: Sequence[str] = (),
 ) -> Candidates:
-    """Theorems in ``chain`` whose conclusion's root production is ``constructor``.
+    """Theorems in ``chain`` whose conclusion could unify with the goal.
 
-    ``constructor`` is the goal's, in the **citing** system's names; each layer is
-    asked about its own spelling of it. ``alpha_digest`` is the goal's, and is
-    only ever used to order — pass it and an α-identical conclusion sorts first.
+    ``constructor`` is the goal's root production, in the **citing** system's
+    names; each layer is asked about its own spelling of it, and it is the indexed
+    head-symbol filter (`ix_terms_system_constructor`).
+
+    ``goal_fingerprint`` sharpens that filter: given it, a per-position
+    compatibility test (`app.db.fingerprints.fingerprint_filter`) narrows within
+    the constructor bucket, dropping theorems whose conclusion cannot unify with
+    the goal below the root. It is layered on top of the head filter and only ever
+    removes candidates, so recall is unchanged — a caller still confirms each with
+    the kernel. Where the head filter keys on the constructor *name* (renamed per
+    layer), the fingerprint keys on the translation-invariant *signature*, so the
+    deep positions need no per-layer inversion. Absent, retrieval is exactly the
+    head-symbol prefilter it was. ``alpha_digest`` is the goal's, and is only ever
+    used to order — pass it and an α-identical conclusion sorts first.
 
     ``exclude`` drops labels the caller already has an answer for, which is what
     keeps a proposal search from re-offering what it has already tried.
@@ -187,6 +202,18 @@ def conclusion_candidates(
         # means something else, and lending its α-digest to the wrong theorem.
         ~_shadowed(rank),
     ]
+    if goal_fingerprint is not None:
+        # The deep half of the prefilter: same rows in, a shorter list out. It
+        # reads a JSON column position by position, which no index covers, so it
+        # sits *after* the indexed head filter above — the constructor bucket is
+        # chosen by the index, this narrows within it.
+        conditions.append(
+            fingerprint_filter(
+                PromotedTheoremRow.conclusion_fingerprint,
+                goal_fingerprint,
+                session.get_bind().dialect.name,
+            )
+        )
     if exclude:
         conditions.append(PromotedTheoremRow.label.notin_(list(exclude)))
 

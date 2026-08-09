@@ -1709,6 +1709,10 @@ async def find_matching_theorems(
     if effective.errors:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=effective.errors)
 
+    # Head filter only, no fingerprint: this route deliberately does not build the
+    # system (see the docstring), and a fingerprint keys on constructor signatures
+    # a build is what produces. The two routes that hold a *built* goal term — the
+    # statement search and a proof line's citations — pass one and prune deeper.
     found = await session.run_sync(
         lambda sync: conclusion_candidates(
             sync,

@@ -164,15 +164,29 @@ theory (synonyms merged).
   exactly when the cached term is, so a theorem is "indexed" consistently. Existing
   rows carry NULL until re-indexed — the same "unindexed" state a NULL cached term
   already has. One Atlas migration (a nullable column add).
-- **Wiring.** `conclusion_candidates` gains a per-position compatibility filter in
-  place of the single `constructor` equality; position `()` refines today's
-  behaviour (it splits ground leaves by token too), and the deeper positions only
-  narrow further, so the change never keeps a candidate the shipped filter would
-  have dropped. One reconciliation the wiring must make: the shipped filter keys
-  on the constructor *name* (with rename handling via `stored_name`), while a
-  fingerprint keys on the *signature* — the same distinction the confirm already
-  draws, to settle at that step. The kernel-`unify` confirm stays exactly
-  as it is — the filter feeds it a shorter list, nothing more.
+- **Wiring** — *done.* `conclusion_candidates` takes an optional `goal_fingerprint`
+  and, given one, adds a per-position compatibility filter
+  (`app/db/fingerprints.py::fingerprint_filter`) to the WHERE clause. It is layered
+  *on top of* the indexed head-symbol filter rather than replacing it: the
+  constructor column is a btree index and picks the bucket, and the fingerprint —
+  a JSON column no index covers — narrows within it, so the two play the roles the
+  measurements assumed. The reconciliation the design called for is settled by
+  keeping both: the head filter keys on the constructor *name* (renamed per layer
+  via `stored_name`), while the fingerprint keys on the translation-invariant
+  *signature*, so the deep positions need no per-layer inversion. Recall is
+  preserved three ways — the filter only ever *adds* conditions to the head filter;
+  a NULL or stale-position-set fingerprint falls back to the head filter rather
+  than being dropped (the engine `compatible` *raises* on a key mismatch, so it is
+  never silently miscompared); and `tests/test_fingerprint_sql.py` pins the SQL
+  per-position predicate to the engine's `features_compatible` over every feature
+  pair. The kernel-`unify` confirm is untouched — the filter feeds it a shorter
+  list, nothing more. Two of the three call sites pass a fingerprint: the
+  statement search and a proof line's citations, both of which already hold a built
+  goal term. The browse-by-stored-term route
+  (`GET /formal-systems/{id}/theorems`) deliberately does not build the system, and
+  a signature-keyed fingerprint is what a build produces, so it stays on the head
+  filter alone. The JSON extraction is dialect-aware (`type_coerce` on SQLite,
+  `cast` on Postgres), since neither form reads a stored fingerprint on the other.
 - **Measurement** — *done* (see "Why seven" above): candidate-set-size reduction
   over the head-symbol baseline on the 10k-theorem corpus, and the width analysis
   justifying W7 against W3, W15, and a full discrimination tree.
