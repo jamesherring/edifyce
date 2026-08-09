@@ -66,7 +66,16 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import JSON, ForeignKey, Index, Integer, String, func, select
+from sqlalchemy import (
+    JSON,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    func,
+    select,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, uuid_pk_column
@@ -106,12 +115,13 @@ class LabelEmbeddingRow(TimestampMixin, Base):
         # and what `ix_theorems_embedding` already chose. Postgres-only, like the
         # pgvector column it indexes.
         #
-        # It indexes every row regardless of model, and a search filters by one —
-        # which is HNSW's known weak spot, since the filter applies *after* the
-        # approximate scan and recall drops as the filtered-out share grows. In
-        # practice a system carries one model and the share is zero; a system
-        # carrying two would want a partial index per model, and that is a
-        # decision to take with a real corpus in front of you rather than now.
+        # It indexes every row of the table while a search filters by *system*
+        # and model, which is HNSW's known weak spot: the approximate scan
+        # produces its candidates first and the filter runs after, so another
+        # system's vectors can exhaust the scan and the search comes back short —
+        # or empty — with matching rows sitting right there. `_iterative_scan` is
+        # the answer and it needs **pgvector 0.8+**, which is what makes that a
+        # requirement of this installation rather than a preference.
         Index(
             "ix_label_embeddings_embedding",
             "embedding",
@@ -479,6 +489,7 @@ async def neighbours(
     Postgres).
     """
     if session.bind is not None and session.bind.dialect.name == "postgresql":
+        await _iterative_scan(session)
         distance = LabelEmbeddingRow.embedding.cosine_distance(query)
         rows = (
             await session.execute(
@@ -581,6 +592,36 @@ async def embedding_of(
         if system_id in rows:
             return list(rows[system_id])
     return None
+
+
+async def _iterative_scan(session: AsyncSession) -> None:
+    """Ask HNSW to keep scanning until the filter is satisfied. **pgvector 0.8+.**
+
+    The index covers every row of the table, and a search filters it by system
+    and model — so the approximate scan produces its candidates *first* and the
+    filter runs after. Nearby vectors belonging to other systems can exhaust the
+    scan, and the route then returns fewer than asked for, or nothing at all,
+    while the system has perfectly good matching rows (found in review). Worse
+    than slow: silently short, which is the one thing this whole layer refuses.
+
+    `hnsw.iterative_scan` is pgvector's answer — the scan resumes rather than
+    stopping at `ef_search` candidates — and it arrived in **0.8**, which this
+    installation therefore requires for correct recall. `relaxed_order` rather
+    than `strict_order` because the ordering is re-imposed by the `ORDER BY`
+    anyway and the relaxed mode is markedly faster.
+
+    Probed rather than set blind: an unknown GUC is an *error*, and an error
+    inside a transaction poisons it, so a server older than 0.8 would turn every
+    search into a failed transaction rather than a slightly lossy one. Where the
+    setting is absent this does nothing and recall is approximate under a filter
+    — which is the pre-0.8 behaviour, and the reason the version is a
+    requirement rather than a preference.
+    """
+    known = await session.scalar(
+        text("SELECT 1 FROM pg_settings WHERE name = 'hnsw.iterative_scan'")
+    )
+    if known:
+        await session.execute(text("SET LOCAL hnsw.iterative_scan = 'relaxed_order'"))
 
 
 def _similarity(distance: float) -> float:

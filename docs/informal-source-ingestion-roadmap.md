@@ -563,6 +563,16 @@ input; and the batch bound sat in the route rather than on the schema, so it was
 announced only after the whole body had been read and turned into floats, which is
 no bound at all on a body meant to be large.
 
+**The index needs pgvector 0.8+**, which review turned into a requirement rather
+than a detail. The HNSW index covers the whole table while a search filters it by
+system, so the approximate scan produces its candidates *before* the filter runs —
+another system's vectors can exhaust it and the search comes back short, or empty,
+with matching rows sitting right there. Silently short is the one thing this layer
+refuses, and `hnsw.iterative_scan` is pgvector's answer to it. It is set per query
+and **probed rather than assumed**: an unknown setting is an error, and an error
+inside a transaction poisons it, so an older server would turn every search into a
+failed transaction instead of a slightly lossy one.
+
 A second pass found three more, and the sharpest is about the digest. Hashing the
 *current* prose at upload time loses the very race the digest exists to catch: a
 description edited between the caller reading its pending text and posting the

@@ -69,6 +69,14 @@ EMBEDDING_DIMENSIONS = 1536
 # it into the schema the Atlas provider dumps (which runs metadata.create_all on
 # a mock engine), so the `vector` type and HNSW index resolve. Guarded to
 # Postgres so a non-PG create_all (e.g. a future SQLite test) doesn't choke on it.
+# **pgvector 0.8 or later** is required in a real deployment, not merely the
+# extension. `label_embeddings` searches an HNSW index under a `formal_system_id`
+# filter, and before 0.8 the approximate scan produces its candidates before the
+# filter runs — so a search comes back short, or empty, with matching rows sitting
+# right there. `hnsw.iterative_scan` (0.8+) is what makes that recall correct, and
+# `app.db.label_embeddings._iterative_scan` sets it per query. An older server
+# still runs: the setting is probed rather than assumed, and its absence costs
+# recall under a filter rather than raising.
 event.listen(
     Base.metadata,
     "before_create",
