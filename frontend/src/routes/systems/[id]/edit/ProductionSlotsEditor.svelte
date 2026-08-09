@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Input } from '$lib/components/ui/input';
 	import { Button } from '$lib/components/ui/button';
-	import RepeatableRows from './RepeatableRows.svelte';
+	import RepeatableRows from '$lib/components/RepeatableRows.svelte';
 	import { blankSlot, type SlotRow } from './slots';
 
 	// A production's slots, and — unlike a rule's or a definition's metavariables —

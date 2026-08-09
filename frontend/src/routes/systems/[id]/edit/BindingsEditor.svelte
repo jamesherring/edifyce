@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Input } from '$lib/components/ui/input';
-	import RepeatableRows from './RepeatableRows.svelte';
+	import RepeatableRows from '$lib/components/RepeatableRows.svelte';
 	import type { Binding } from '$lib/api';
 
 	let {

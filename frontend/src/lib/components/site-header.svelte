@@ -13,7 +13,8 @@
 	const nav = [
 		{ href: '/', label: 'Home' },
 		{ href: '/systems', label: 'Systems' },
-		{ href: '/proofs', label: 'Proofs' }
+		{ href: '/proofs', label: 'Proofs' },
+		{ href: '/assumptions', label: 'Assumptions' }
 	];
 
 	function isActive(href: string) {

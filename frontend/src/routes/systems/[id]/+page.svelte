@@ -28,6 +28,7 @@
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import Layers from '@lucide/svelte/icons/layers';
 	import BookMarked from '@lucide/svelte/icons/book-marked';
+	import CircleHelp from '@lucide/svelte/icons/circle-help';
 
 	let system = $state<FormalSystemDetail | null>(null);
 	let loading = $state(true);
@@ -44,6 +45,10 @@
 	// and for an imported one whose comments name no sources — the button simply
 	// does not appear.
 	let works = $state<WorkCited[]>([]);
+	// What this system takes on without proving. Counted rather than listed here:
+	// the number is the interesting part on a system's front page, and a system
+	// that assumes nothing should say so to its owner rather than hide the door.
+	let assumed = $state(0);
 	// Which section of it is being read, or null for none picked yet.
 	let selectedFolder = $state<Folder | null>(null);
 
@@ -58,6 +63,7 @@
 		validation = null;
 		outline = [];
 		works = [];
+		assumed = 0;
 		selectedFolder = null;
 		let detail: FormalSystemDetail;
 		try {
@@ -80,6 +86,17 @@
 		runValidation(id, seq);
 		void loadOutline(id, seq);
 		void loadWorks(id, seq);
+		void loadAssumptions(id, seq);
+	}
+
+	async function loadAssumptions(id: string, seq: number) {
+		try {
+			const taken = await api.assumptions.list(id);
+			if (seq === requestSeq) assumed = taken.length;
+		} catch {
+			// Best-effort, as the works are. The owner's door in does not depend on
+			// this having answered.
+		}
 	}
 
 	async function loadWorks(id: string, seq: number) {
@@ -170,6 +187,12 @@
 					{#if works.length}
 						<Button href={`/systems/${system?.id}/works`} variant="outline" size="sm">
 							<BookMarked class="size-4" /> Works cited
+						</Button>
+					{/if}
+					{#if assumed > 0 || isOwner}
+						<Button href={`/systems/${system?.id}/assumptions`} variant="outline" size="sm">
+							<CircleHelp class="size-4" />
+							Assumptions{assumed > 0 ? ` (${assumed})` : ''}
 						</Button>
 					{/if}
 					{#if isOwner}

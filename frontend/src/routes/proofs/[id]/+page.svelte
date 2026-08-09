@@ -9,6 +9,7 @@
 	import LoadingSpinner from '$lib/components/LoadingSpinner.svelte';
 	import ProofResults from '$lib/components/ProofResults.svelte';
 	import Citations from '$lib/components/Citations.svelte';
+	import Provenance from '$lib/components/Provenance.svelte';
 	import Documentation from '$lib/components/Documentation.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
@@ -19,6 +20,7 @@
 		ApiError,
 		type ProofCitations,
 		type ProofDetail,
+		type ProofProvenance,
 		type ProofStructure,
 		type VerifyResponse
 	} from '$lib/api';
@@ -59,6 +61,10 @@
 	// read is served by every create and patch too, and none of those wants two
 	// extra joins over a corpus-sized `proof_lines`.
 	let citations = $state<ProofCitations | null>(null);
+	// What the proof rests on that nobody proved. Named for the question rather
+	// than `provenance`, which on this page is already the *system's* — where an
+	// imported corpus came from, a different fact about a different thing.
+	let restsOn = $state<ProofProvenance | null>(null);
 	// Whether the graph has anything to show. An imported proof often carries no
 	// comment at all, and its dependents are then the only thing the card holds.
 	const hasCitations = $derived(
@@ -90,6 +96,7 @@
 		structure = null;
 		notationError = null;
 		citations = null;
+		restsOn = null;
 		let detail: ProofDetail;
 		try {
 			detail = await api.proofs.get(id);
@@ -116,6 +123,19 @@
 		// readable system, so this normally resolves).
 		void loadSystemName(detail.formal_system_id, seq);
 		void loadCitations(id, seq);
+		void loadRestsOn(id, seq);
+	}
+
+	async function loadRestsOn(id: string, seq: number) {
+		try {
+			const found = await api.proofs.provenance(id);
+			if (seq !== loadSeq) return;
+			restsOn = found;
+		} catch {
+			// A proof that has never been verified has no resolved citations to read
+			// from, and the route says so with a 409. That is not an error to show:
+			// there is nothing yet to report, and the verify button is right there.
+		}
 	}
 
 	async function loadCitations(id: string, seq: number) {
@@ -246,6 +266,9 @@
 			// rewrote it. Keyed on `loadSeq` because it belongs to this proof rather
 			// than to this check.
 			void loadCitations(proof.id, loadSeq);
+			// A check resolves the citations this reads, so a proof verified for the
+			// first time goes from "nothing to report" to its actual debts.
+			void loadRestsOn(proof.id, loadSeq);
 		} catch (err) {
 			if (seq !== verifySeq) return;
 			requestError = err instanceof ApiError ? err.message : String(err);
@@ -310,6 +333,13 @@
 				</div>
 			{/snippet}
 		</EntityHeader>
+
+		<!-- Ahead of everything, including the description: that a proof is
+		     *conditional* changes what reading it means, and a reader deciding
+		     whether to build on it should not learn that at the bottom. -->
+		{#if restsOn}
+			<Provenance provenance={restsOn} />
+		{/if}
 
 		<!-- Ahead of the proof: what a theorem says and who proved it is what a
 		     reader wants first, and the lines are long. -->

@@ -1,0 +1,109 @@
+<script lang="ts">
+	import { untrack } from 'svelte';
+	import PageContainer from '$lib/components/PageContainer.svelte';
+	import PageHeader from '$lib/components/PageHeader.svelte';
+	import LoadingSpinner from '$lib/components/LoadingSpinner.svelte';
+	import EmptyState from '$lib/components/EmptyState.svelte';
+	import { Badge } from '$lib/components/ui/badge';
+	import { Button } from '$lib/components/ui/button';
+	import * as Alert from '$lib/components/ui/alert';
+	import { api, ApiError, type Assumption } from '$lib/api';
+	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
+
+	const PAGE_SIZE = 20;
+
+	let items = $state<Assumption[]>([]);
+	let total = $state(0);
+	let loading = $state(true);
+	let error = $state<string | null>(null);
+
+	// Appended rather than paged over: the ranking only means something across the
+	// whole set (the API orders in the database for exactly that reason), so
+	// reading down the list is the way through it, and a page-2 button would
+	// invite reading a slice as a ranking of its own.
+	async function more() {
+		loading = true;
+		error = null;
+		try {
+			const page = await api.assumptions.public({ limit: PAGE_SIZE, offset: items.length });
+			items = [...items, ...page.items];
+			total = page.total;
+		} catch (err) {
+			error = err instanceof ApiError ? err.message : String(err);
+		} finally {
+			loading = false;
+		}
+	}
+
+	// Untracked: `more` reads `items.length` to page from, and writes `items` —
+	// tracked, the first page would fetch the second, and so on.
+	$effect(() => {
+		untrack(() => {
+			more();
+		});
+	});
+</script>
+
+<PageContainer maxWidth="3xl" gap>
+	<PageHeader
+		title="Assumptions"
+		description="Statements published systems take on without proving them, most depended-on first."
+	/>
+
+	<p class="text-sm text-muted-foreground">
+		Every row is something believed true that this database cannot yet justify, and the
+		count says how much has been built on it. That ranking is the roadmap: the assumption a
+		hundred entries rest on is where proving effort buys the most.
+	</p>
+
+	{#if error}
+		<Alert.Root variant="destructive">
+			<TriangleAlert class="size-4" />
+			<Alert.Title>Could not load assumptions</Alert.Title>
+			<Alert.Description>{error}</Alert.Description>
+		</Alert.Root>
+	{:else if loading && items.length === 0}
+		<LoadingSpinner message="Loading assumptions…" />
+	{:else if items.length === 0}
+		<EmptyState
+			title="Nothing is assumed"
+			description="Every published system's library rests on proofs and its own declared primitives."
+		/>
+	{:else}
+		<ul class="flex flex-col gap-2">
+			{#each items as one (one.id)}
+				<li>
+					<a
+						href={`/systems/${one.formal_system_id}/assumptions/${encodeURIComponent(one.label)}`}
+						class="flex flex-col gap-1.5 rounded-lg border p-3 hover:bg-muted/40"
+					>
+						<div class="flex items-start justify-between gap-3">
+							<span class="font-mono text-sm">{one.label}</span>
+							<Badge variant="secondary" class="shrink-0 tabular-nums">
+								{one.dependents}
+								{one.dependents === 1 ? 'dependent' : 'dependents'}
+							</Badge>
+						</div>
+						<code class="whitespace-pre-wrap break-words font-mono text-xs text-muted-foreground"
+							>{one.statement}</code
+						>
+						<p class="text-xs text-muted-foreground">
+							{one.formal_system_name} — {one.reason}
+						</p>
+					</a>
+				</li>
+			{/each}
+		</ul>
+
+		{#if items.length < total}
+			<div class="flex items-center justify-center gap-3">
+				<span class="text-xs text-muted-foreground">
+					Showing {items.length} of {total}
+				</span>
+				<Button variant="outline" size="sm" onclick={more} disabled={loading}>
+					{loading ? 'Loading…' : 'Show more'}
+				</Button>
+			</div>
+		{/if}
+	{/if}
+</PageContainer>
