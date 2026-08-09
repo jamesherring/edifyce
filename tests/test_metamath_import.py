@@ -1191,3 +1191,55 @@ def test_the_schedule_is_bounded_by_the_walk_horizon():
     # Bounded at `id`, the schedule names only sorts that system has.
     assert "class" not in grammar_schedule(database, before="id").sorts
     assert "class" in grammar_schedule(database).sorts
+
+
+# ---------------------------------------------------------------------------
+# A hypothesis is a documented statement too
+#
+# Metamath's rule — a statement is described by the comment before it — is not
+# only about `$a`/`$p`. `set.mm` writes prose before 307 of its `$e`s and 118 of
+# its `$f`s, and those labels are cited by the proofs they belong to.
+# ---------------------------------------------------------------------------
+
+DOCUMENTED_HYPOTHESES = r"""
+$c |- wff ( ) -> $.
+$v ph ps $.
+$( Let variable ` ph ` be a wff. $)
+wph $f wff ph $.
+$( Let variable ` ps ` be a wff. $)
+wps $f wff ps $.
+wi $a wff ( ph -> ps ) $.
+${
+  $( Minor premise for modus ponens. $)
+  mp.min $e |- ph $.
+  $( Major premise for modus ponens. $)
+  mp.maj $e |- ( ph -> ps ) $.
+  ax-mp $a |- ps $.
+$}
+"""
+
+
+def test_a_hypothesis_carries_the_comment_before_it():
+    database = parse(DOCUMENTED_HYPOTHESES)
+
+    assert database.hypotheses["mp.min"].comment.strip() == (
+        "Minor premise for modus ponens."
+    )
+    assert database.hypotheses["wph"].comment.strip() == "Let variable ` ph ` be a wff."
+
+
+def test_an_undocumented_hypothesis_carries_none():
+    database = parse("$c |- wff $.\n$v ph $.\nwph $f wff ph $.\n")
+
+    assert database.hypotheses["wph"].comment is None
+
+
+def test_a_comment_belongs_to_the_statement_after_it_not_before():
+    # The whole of Metamath's association rule, and the reason a trailing comment
+    # (which `set.mm` uses for its `$c` symbol glosses) is a different convention
+    # this does not read.
+    database = parse(
+        "$c |- wff $.\n$v ph $.\n$( For wph. $)\nwph $f wff ph $.\n$( Trailing. $)\n"
+    )
+
+    assert database.hypotheses["wph"].comment.strip() == "For wph."

@@ -1009,3 +1009,80 @@ def test_a_claim_about_a_typecode_rather_than_a_label_is_not_stored(session):
     report = import_corpus(session, parse(declaring), name="Sorts")
 
     assert report.claims == 0
+
+
+# ---------------------------------------------------------------------------
+# Hypotheses are documented labels
+# ---------------------------------------------------------------------------
+
+DOCUMENTED_HYPOTHESES = PROPOSITIONAL.replace(
+    "${\n  min $e |- ph $.",
+    "${\n  $( Minor premise for modus ponens. $)\n  min $e |- ph $.",
+).replace(
+    "  maj $e |- ( ph -> ps ) $.",
+    "  $( Major premise for modus ponens. $)\n  maj $e |- ( ph -> ps ) $.",
+)
+
+
+def test_a_documented_hypothesis_is_stored_like_any_other_label(session):
+    # `label_descriptions` is keyed by label and a hypothesis has one, so this
+    # needs no new table — what it needed was the parser keeping the comment.
+    import_corpus(session, parse(DOCUMENTED_HYPOTHESES), name="Hypotheses")
+
+    rows = {
+        row.label: row
+        for row in session.scalars(select(LabelDescriptionRow))
+    }
+    assert rows["min"].text == "Minor premise for modus ponens."
+    assert rows["maj"].text == "Major premise for modus ponens."
+
+
+def test_a_hypothesis_declared_past_the_horizon_is_not_described(session):
+    """The cut is where the hypothesis was *declared*, not who uses it.
+
+    Bounding by use instead looks equivalent and is not: a floating hypothesis
+    that is only ever optional can still be cited by a proof as a dummy variable,
+    and filing by first user puts a file-scope `$f` on whichever layer first
+    mentions it (found in review).
+    """
+    unused = PROPOSITIONAL + (
+        "$v unusedvar $.\n$( Declared after the last theorem. $)\n"
+        "wunused $f wff unusedvar $.\n"
+    )
+    import_corpus(session, parse(unused), name="Unused")
+
+    described = {row.label for row in session.scalars(select(LabelDescriptionRow))}
+    assert "wunused" not in described
+
+
+def test_a_hypothesis_no_assertion_uses_is_still_described(session):
+    # Declared inside the horizon and mandatory for nothing. It is a label this
+    # system declares, so its prose belongs to it — bounding by use would drop it.
+    unused = PROPOSITIONAL.replace(
+        "wn $a wff -. ph $.",
+        "$( A variable nothing needs. $)\nwspare $f wff ps $.\nwn $a wff -. ph $.",
+    )
+    import_corpus(session, parse(unused), name="Spare")
+
+    described = {row.label for row in session.scalars(select(LabelDescriptionRow))}
+    assert "wspare" in described
+
+
+def test_a_hypothesis_description_is_bounded_by_the_horizon(session):
+    """A hypothesis reaches this system through the assertions that use it.
+
+    `a2i.1` belongs to `a2i`, the last theorem in the fixture, so a one-theorem
+    prefix does not contain it. `min` and `maj` belong to `ax-mp`, which is
+    declared *before* the first theorem and so is inside any prefix — which is
+    what the first cut of this test got wrong about its own fixture.
+    """
+    documented = DOCUMENTED_HYPOTHESES.replace(
+        "  a2i.1 $e |- ( ph -> ( ps -> ch ) ) $.",
+        "  $( The premise of a2i. $)\n  a2i.1 $e |- ( ph -> ( ps -> ch ) ) $.",
+    )
+    import_corpus(session, parse(documented), limit=1, name="Prefix")
+
+    described = {row.label for row in session.scalars(select(LabelDescriptionRow))}
+    assert "a2i.1" not in described
+    # And the ones belonging to a statement inside the prefix are kept.
+    assert {"min", "maj"} <= described

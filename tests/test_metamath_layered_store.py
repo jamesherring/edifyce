@@ -845,3 +845,30 @@ def test_a_label_declared_in_two_layers_is_reachable_from_either(
     session.flush()
 
     assert unreachable_citations(session) == ()
+
+
+def test_a_hypothesis_description_belongs_to_its_assertions_layer(
+    session, database
+) -> None:
+    """A hypothesis has no position among the assertions, so it is placed by one.
+
+    `Hypothesis.position` counts hypotheses, not statements, so the boundary that
+    splits a corpus into layers cannot read it. What can is the assertion that
+    made the hypothesis mandatory — declared just after it, in the same section —
+    and filing by that is what keeps a first-order hypothesis off the
+    propositional root, where `load_description` would never find it.
+    """
+    documented = CORPUS.replace(
+        "fol-thm $p |- ( A. x ph -> ph ) $= ( ax-4 ) ABC $.",
+        "${\n  $( The premise of fol-hyp. $)\n  fol-hyp.1 $e |- ( A. x ph -> ph ) $.\n"
+        "  fol-hyp $p |- ( A. x ph -> ph ) $= ( ax-4 ) ABC $.\n$}\n"
+        "fol-thm $p |- ( A. x ph -> ph ) $= ( ax-4 ) ABC $.",
+    )
+    import_corpus(session, parse(documented), name="Corpus", plan=LAYERS)
+
+    spine = {system.id: system.name for system in systems(session)}
+    where = {
+        row.label: spine[row.formal_system_id]
+        for row in session.scalars(select(LabelDescriptionRow))
+    }
+    assert where["fol-hyp.1"] == "First-order logic"

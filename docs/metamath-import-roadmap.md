@@ -1885,7 +1885,9 @@ note whose sentence happens to contain "is discouraged".
 | | count | note |
 |---|---|---|
 | `$j` markup directives | 1,222 in 1,203 blocks | **Read and stored** — see §4.9 and §4.11. |
-| comments on non-assertion statements | 1,621 | 606 before a `$c` ("Absolute value function." — what a *symbol* means, and nothing else in the file says it), 432 before a `${`, 302 before an `$e`, 123 before a `$f`, 74 before a `$v`, 66 before a `$}`, 18 before a `$d`. `$e`/`$f` are labels and would key into `label_descriptions` unchanged; `$c`/`$v` declare tokens and need a token key. |
+| comments on `$e`/`$f` | 426 | **Read** — see §4.12. They are labelled statements, so they key into `label_descriptions` unchanged. |
+| symbol glosses on `$c`/`$v` | ~525 | Still dropped. They use a **trailing** convention (`$c ( $.  $( Left parenthesis $)`) that Metamath's leading rule does not cover, and need a token key — see §4.12. |
+| comments on `${`/`$}`/`$d` | 521 | Still dropped, and mostly not descriptions: mathbox TODOs, `Begin $[ … $]` modularisation markers, and commented-out mathematics written with `@` for `$`. |
 | `[Author]` bibliography refs | 5,271 across 135 works | **Read** — see §4.10. |
 | `$t` non-definition directives | 12 kinds | `htmlvarcolor`, `htmltitle`, `htmlhome`, `exthtml*`, `htmldir`, `htmlcss`, `htmlfont`. Only `htmlvarcolor` has content value — the typecode-to-colour legend, which `althtmldef`'s `<SPAN>`s already encode per token. |
 | front matter and dormant blocks | 56 + ~60 | Including commented-out mathematics, the largest 26 KB. |
@@ -2005,6 +2007,59 @@ carries no argument at all.
 already the claim shape with the kind implied by the table's name, and a second
 table of identical columns for `restatement` would have been the drift
 `tests/database.py` warns about in the small.
+
+### 4.12 A hypothesis is a documented statement — *done*
+
+§4.8 counted 1,621 comments on statements that are not `$a`/`$p`, and its own
+breakdown of them was wrong in a way worth recording, because the error is in
+what Metamath's association rule covers.
+
+**The `$e`/`$f` half is straightforward and is now read.** A hypothesis is a
+labelled statement, the comment before it describes it exactly as one before a
+`$p` does, and `set.mm` documents **308 `$e`s and 118 `$f`s** — "Minor premise
+for modus ponens.", "Let variable ` ph ` be a wff." Those labels are cited by the
+proofs they belong to, so the prose is about something a reader can already reach.
+It needed no schema: `label_descriptions` is keyed by label and a hypothesis has
+one. What it needed was the parser keeping `Hypothesis.comment`, which it threw
+away.
+
+The bound is **where the hypothesis was declared**, so all 426 are stored. That
+is `Hypothesis.at` — how many assertions precede it, the space
+`Database.position` and `Commentary.at` already use — and it is what places a
+hypothesis among the *statements*: `Hypothesis.position` counts hypotheses, so
+the boundary that splits a layered corpus cannot read it.
+
+Bounding by *use* instead was the first cut and is wrong twice over. It drops a
+floating hypothesis that is only ever optional, which a proof may still cite as a
+dummy variable (`typed_from` reads `active_hypotheses` for exactly that reason,
+and 14 of set.mm's theorems need it). And it files a hypothesis by its first
+user, which on a layered import put the file-scope `vx` on the first-order layer
+because nothing propositional happened to mention `x` — and a description on a
+descendant layer is one its own layer cannot read, `load_description` walking
+ancestors only.
+
+**The `$c`/`$v` half is not straightforward, and the reason is a convention.**
+§4.8 read those as symbol glosses — "Absolute value function." — and they are:
+"Left parenthesis", "Right arrow (read: "implies")", "Greek mu". But `set.mm`
+writes them **after** the statement, on the same line:
+
+```
+  $c ( $.  $( Left parenthesis $)
+  $c ) $.  $( Right parenthesis $)
+```
+
+which is the opposite of Metamath's rule that a comment describes what *follows*
+it. Any reader applying the standard rule attributes every gloss to the next
+symbol — "Left parenthesis" to `)` — and §4.8's own count was made that way.
+Measured properly: **479 of the single-token `$c`s carry a trailing gloss** and 46
+of the `$v`s, against 447 and 19 with a leading comment, most of which are section
+rules rather than glosses.
+
+So that half needs two things this does not have: a trailing-comment reader whose
+convention is stated rather than assumed, and somewhere to put a *token's*
+description. `label_descriptions` is keyed by label, and a token is not one —
+widening it would make the key mean two things, which is the objection §4.11
+already makes about `label_claims.subject`. Left for a change that decides it.
 
 ### Tier B — the human-altitude layer
 

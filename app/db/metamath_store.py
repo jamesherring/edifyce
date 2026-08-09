@@ -287,7 +287,7 @@ def import_corpus(
     # Read once, up front, and used twice: every documented label gets a row, and
     # a `$p`'s own title comes off the same parse. Metamath documents a statement
     # by the comment before it, so this is the whole of the association.
-    descriptions = _descriptions_of(database, limit)
+    descriptions, described_at = _descriptions_of(database, limit)
     # Before the walk, because a proof is filed as it is stored and the folder has
     # to exist by then. Bounded by the same horizon as everything else: a section
     # opening past the last walked theorem covers nothing this import contains.
@@ -349,7 +349,7 @@ def import_corpus(
             layers.rebind()
 
     _link_proofs_to_theorems(session, report.system_ids, library.ids)
-    report.described = layers.describe(descriptions)
+    report.described = layers.describe(descriptions, described_at)
     report.claims = layers.claim(_claims_of(database, limit))
     # On the **root**, not the leaf: a `$t` block is one declaration about the
     # whole file rather than something each layer has its own of, and a notation
@@ -439,8 +439,8 @@ def layered_systems(
 
 def _descriptions_of(
     database: Database, limit: int | None
-) -> dict[str, Description]:
-    """Every documented label the imported system actually declares.
+) -> tuple[dict[str, Description], dict[str, int]]:
+    """Every documented label the imported system declares, and where each sits.
 
     Bounded by the same horizon the grammar is: ``corpus_spec`` builds the system
     from what is declared *before the last walked theorem*, so a label past that
@@ -450,15 +450,45 @@ def _descriptions_of(
 
     Read in file order (``iter_assertions``), because the horizon is a position
     rather than a set — the same way ``theorems`` finds it.
+
+    **A hypothesis is a documented label too.** `set.mm` writes prose before 308
+    of its `$e`s and 118 of its `$f`s — "Minor premise for modus ponens.", "Let
+    variable ` ph ` be a wff." — and those labels are citable, appearing in the
+    proofs of the theorems they belong to. They are cut by ``Hypothesis.at``,
+    which is where the hypothesis sits *among the assertions*, so the same
+    horizon applies to both and a hypothesis is described exactly when the
+    statements around it are.
+
+    Bounded by declaration rather than by use, which is the difference between
+    this and its first cut. Collecting from each assertion's ``mandatory`` looks
+    equivalent and is not: it drops a floating hypothesis that is only ever
+    *optional*, which a proof may still cite as a dummy variable (``typed_from``
+    reads ``active_hypotheses`` for exactly that reason, and 14 of set.mm's
+    theorems need it), and it files a hypothesis by its first user rather than by
+    where it was written — which on a layered import put the file-scope `vx` on
+    the first-order layer because nothing propositional happened to mention `x`.
+    A description on a descendant layer is one its own layer cannot read
+    (`load_description` walks ancestors only), so that was prose stored where the
+    label is not (both found in review).
+
+    The second return is where to *file* each hypothesis on a layered import.
+    ``Hypothesis.position`` counts hypotheses rather than statements, so the
+    boundary that splits a corpus cannot read it; ``at`` is in the space that
+    boundary is expressed in.
     """
-    horizon = theorems(database, limit)[-1].label
+    horizon = database.position(theorems(database, limit)[-1].label)
     found: dict[str, Description] = {}
+    at: dict[str, int] = {}
+    for label, hypothesis in database.hypotheses.items():
+        if hypothesis.comment is not None and hypothesis.at <= horizon:
+            found[label] = read_comment(hypothesis.comment)
+            at[label] = hypothesis.at
     for assertion in database.iter_assertions():
         if assertion.comment is not None:
             found[assertion.label] = read_comment(assertion.comment)
-        if assertion.label == horizon:
+        if database.position(assertion.label) == horizon:
             break
-    return found
+    return found, at
 
 
 def _claims_of(database: Database, limit: int | None) -> list[Claim]:
@@ -830,11 +860,27 @@ class _Layers:
         """The folder ``label`` is filed in, within its own layer's outline."""
         return self._folders[index].folder_for(self._database.position(label))
 
-    def describe(self, descriptions: Mapping[str, Description]) -> int:
-        """Store each label's prose against the layer that declares it."""
+    def describe(
+        self, descriptions: Mapping[str, Description], at: Mapping[str, int]
+    ) -> int:
+        """Store each label's prose against the layer that declares it.
+
+        ``at`` overrides the routing for labels that have no position among the
+        assertions — a hypothesis, which `_descriptions_of` places by where it
+        was declared. Required rather than defaulted: without it a hypothesis
+        label falls through to `Database.position` and raises, and this runs at
+        the very end of a run that takes twenty minutes on a corpus (found in
+        review).
+        """
+        placed = at
         split: list[dict[str, Description]] = [{} for _ in self._ids]
         for label, description in descriptions.items():
-            split[self._of_label(label)][label] = description
+            layer = (
+                self._of_position(placed[label])
+                if label in placed
+                else self._of_label(label)
+            )
+            split[layer][label] = description
         total = 0
         for system_id, share, report in zip(self._ids, split, self._reports):
             report.described = store_descriptions(self._session, system_id, share)
