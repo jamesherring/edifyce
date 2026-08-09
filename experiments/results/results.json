@@ -1,0 +1,170 @@
+{
+  "corpus": {
+    "system": "Metamath",
+    "theorems": 10177,
+    "primitive": 177,
+    "with_hypotheses": 4475,
+    "without_stored_term": 76,
+    "generators": 5701,
+    "terms": 205601,
+    "citation_edges": 101644,
+    "sections": 186
+  },
+  "alpha_key_check": {
+    "statement_roots_compared": 8476,
+    "alpha_classes": 7965,
+    "disagreements_with_engine": 0
+  },
+  "families": {
+    "all": [
+      {
+        "name": "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - add the Axiom of Power Sets",
+        "generators": 1461
+      },
+      {
+        "name": "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - start with the Axiom of Extensionality",
+        "generators": 1155
+      },
+      {
+        "name": "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - add the Axiom of Union",
+        "generators": 1084
+      },
+      {
+        "name": "CLASSICAL FIRST-ORDER LOGIC WITH EQUALITY/Propositional calculus",
+        "generators": 663
+      },
+      {
+        "name": "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - add the Axiom of Infinity",
+        "generators": 471
+      },
+      {
+        "name": "CLASSICAL FIRST-ORDER LOGIC WITH EQUALITY/Predicate calculus with equality:  Tarski's system S2 (1 rule, 6 schemes)",
+        "generators": 206
+      },
+      {
+        "name": "CLASSICAL FIRST-ORDER LOGIC WITH EQUALITY/Predicate calculus with equality:  Auxiliary axiom schemes (4 schemes)",
+        "generators": 177
+      },
+      {
+        "name": "",
+        "generators": 171
+      },
+      {
+        "name": "CLASSICAL FIRST-ORDER LOGIC WITH EQUALITY/Other axiomatizations related to classical propositional calculus",
+        "generators": 124
+      },
+      {
+        "name": "CLASSICAL FIRST-ORDER LOGIC WITH EQUALITY/Uniqueness and unique existence",
+        "generators": 76
+      },
+      {
+        "name": "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - add the Axiom of Replacement",
+        "generators": 63
+      },
+      {
+        "name": "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - add the Axiom of Regularity",
+        "generators": 35
+      },
+      {
+        "name": "CLASSICAL FIRST-ORDER LOGIC WITH EQUALITY/Other axiomatizations related to classical predicate calculus",
+        "generators": 15
+      }
+    ],
+    "train": [
+      "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - start with the Axiom of Extensionality",
+      "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - add the Axiom of Union",
+      "CLASSICAL FIRST-ORDER LOGIC WITH EQUALITY/Propositional calculus",
+      "CLASSICAL FIRST-ORDER LOGIC WITH EQUALITY/Predicate calculus with equality:  Tarski's system S2 (1 rule, 6 schemes)",
+      "CLASSICAL FIRST-ORDER LOGIC WITH EQUALITY/Predicate calculus with equality:  Auxiliary axiom schemes (4 schemes)",
+      "CLASSICAL FIRST-ORDER LOGIC WITH EQUALITY/Other axiomatizations related to classical propositional calculus",
+      "CLASSICAL FIRST-ORDER LOGIC WITH EQUALITY/Uniqueness and unique existence",
+      "CLASSICAL FIRST-ORDER LOGIC WITH EQUALITY/Other axiomatizations related to classical predicate calculus"
+    ],
+    "held_out": [
+      "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - add the Axiom of Infinity",
+      "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - add the Axiom of Power Sets",
+      "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - add the Axiom of Regularity",
+      "ZF (ZERMELO-FRAENKEL) SET THEORY/ZF Set Theory - add the Axiom of Replacement"
+    ],
+    "train_generators": 3500,
+    "held_out_generators": 2030
+  },
+  "fragment": {
+    "compounds": 24000,
+    "provable": 12000,
+    "seen_family_compounds": 16000,
+    "unseen_family_compounds": 8000,
+    "skeleton_shapes": 17988,
+    "mean_formula_nodes": 68.67404166666667
+  },
+  "experiment_1": {
+    "unseen_family": {
+      "linear": 0.555125,
+      "rbf_svm": 0.5405,
+      "nearest_neighbour": 0.510375
+    },
+    "random_split": {
+      "linear": 0.5438333333333333,
+      "rbf_svm": 0.5425,
+      "nearest_neighbour": 0.49983333333333335
+    },
+    "skeleton_only_control": 0.7003333333333334
+  },
+  "citation_graph": {
+    "pairs": 4096,
+    "spearman_rho": 0.016400461177761488,
+    "p_value": 0.29400338815341387,
+    "mean_path_length": 4.129638671875
+  },
+  "experiment_2": {
+    "coordinates": 1024,
+    "generators": 5701,
+    "exhaustive": false,
+    "distinguished_coordinate_accuracy": 1.0,
+    "algebraic_identity_max_error": {
+      "negation": 0.0,
+      "and": 0.0,
+      "or": 0.0,
+      "imp": 0.0,
+      "iff": 0.0,
+      "hamming_identity": 0.0
+    },
+    "random_projection": [
+      {
+        "dimension": 8,
+        "median_relative_error": 0.16556689566871935,
+        "p90_relative_error": 0.3992023999492284
+      },
+      {
+        "dimension": 32,
+        "median_relative_error": 0.09556483873638258,
+        "p90_relative_error": 0.20390798584987255
+      },
+      {
+        "dimension": 64,
+        "median_relative_error": 0.053836046905561985,
+        "p90_relative_error": 0.1384482159610233
+      },
+      {
+        "dimension": 128,
+        "median_relative_error": 0.04030134615059992,
+        "p90_relative_error": 0.09570841377794904
+      },
+      {
+        "dimension": 256,
+        "median_relative_error": 0.03238506318672993,
+        "p90_relative_error": 0.07531804843204411
+      }
+    ],
+    "projection_pairs": 742,
+    "equivalent_pairs_excluded": 8
+  },
+  "structure_to_semantics": {
+    "spearman_rho_structural_vs_hamming": 0.001847250076787596,
+    "p_value": 0.9597202119893862,
+    "coordinates_predicted": 32,
+    "mean_coordinate_accuracy": 0.504796875,
+    "best_coordinate_accuracy": 0.5131666666666667
+  },
+  "runtime_seconds": 101.220871925354
+}
