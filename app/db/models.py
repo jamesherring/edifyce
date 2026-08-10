@@ -387,6 +387,21 @@ class Proof(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Cached `proof.data()` payload and last-known validity (null = never checked).
     result: Mapped[dict | None] = mapped_column(_JSON)
     valid: Mapped[bool | None] = mapped_column(Boolean)
+    # Whether this proof's stored lines carry `proof_lines.theorem_id` — which
+    # library entry each citation resolved to, recorded by the check that
+    # resolved it.
+    #
+    # A flag rather than an inference, because the column it describes is
+    # nullable and null is *two* different facts: on a line written since, "this
+    # citation named a rule, not an entry"; on one written before, "nobody
+    # looked". A reader that could not tell them apart would report a proof
+    # resting on nothing when it rests on plenty, which is the single failure the
+    # provenance report exists to prevent. False here means "ask the library",
+    # and `scripts/backfill_line_citations.py` is what turns it true for the
+    # proofs that predate the column.
+    citations_stored: Mapped[bool] = mapped_column(
+        Boolean, server_default=text("false"), default=False
+    )
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # The library entry this proof *establishes*, when it establishes one — set by
     # a corpus import, where a proof and a promoted theorem are two views of one

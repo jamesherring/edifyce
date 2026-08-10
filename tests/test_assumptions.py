@@ -36,6 +36,8 @@ from sqlalchemy.orm import Session
 import app.auth.backend as backend
 import app.routers.proofs as proofs_router
 from app.db.assumptions import AssumptionRow, TheoremAssumptionRow, rests_on
+from app.db.models import Proof
+from app.db.proof_lines import ProofLineRow
 from app.db.promoted_theorems import PromotedTheoremRow
 from app.db.session import get_session
 from app.main import app
@@ -503,6 +505,11 @@ def test_a_citation_the_walk_cannot_follow_is_reported_not_dropped(db, client):
     # rows outright. A corpus import can (it stores the labels a `.mm` file
     # wrote, whether or not this database holds every one of them), and this is
     # that shape: ask for the closure against a library the label is not in.
+    #
+    # On a proof whose check **recorded** what it resolved, this cannot arise at
+    # all — the entry is a column, so an empty library order changes nothing —
+    # and the guard applies to exactly the proofs stored before that column. So
+    # the flag is cleared here, which is the state such a row is in.
     pc, _fol, _zfc = tower(db, client, "assume-unresolved@example.com")
     assert assume(client, pc)[0] == 201
     proof = make_proof(client, pc, "(((A → B) → A) → A) [peirce]")
@@ -511,10 +518,38 @@ def test_a_citation_the_walk_cannot_follow_is_reported_not_dropped(db, client):
     engine = create_engine(db)
     try:
         with Session(engine) as session:
+            row = session.get(Proof, uuid.UUID(proof))
+            row.citations_stored = False
+            for line in session.scalars(
+                select(ProofLineRow).where(ProofLineRow.proof_id == row.id)
+            ):
+                line.theorem_id = None
+            session.commit()
+
             report = rests_on(session, uuid.UUID(proof), systems=[])
             assert report.assumptions == ()
             assert report.unresolved == ("peirce",)
             assert report.complete is False
+    finally:
+        engine.dispose()
+
+
+def test_a_recorded_resolution_needs_no_library_order(db, client):
+    # The same proof, left as the check stored it: the entry it cites is on the
+    # line, so the report is right without being told where citations resolve.
+    # That is what lets the route skip a chain load it used to pay on every view.
+    pc, _fol, _zfc = tower(db, client, "assume-recorded@example.com")
+    assert assume(client, pc)[0] == 201
+    proof = make_proof(client, pc, "(((A → B) → A) → A) [peirce]")
+    verify(client, proof)
+
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            report = rests_on(session, uuid.UUID(proof), systems=[])
+            assert [entry.label for entry in report.assumptions] == ["peirce"]
+            assert report.unresolved == ()
+            assert report.complete is True
     finally:
         engine.dispose()
 

@@ -431,6 +431,22 @@ class PendingLibrary:
     chain: LibraryChain = LibraryChain(())
 
     @property
+    def entry_ids(self) -> dict[str, uuid.UUID]:
+        """Which library entry each cited label resolved to.
+
+        The resolution itself, as a caller can record it: :func:`_nearest` has
+        already picked one entry per label, so this is what the citation *means*
+        in this proof's library — shadowing settled, edges followed — and not a
+        guess a later reader would have to reconstruct from the chain.
+
+        ``owner`` is deliberately absent. Its hypotheses are promoted under their
+        own labels and are citable from this proof alone, but they are not
+        library entries and nothing rests on them: a proof cites its own
+        theorem's ``$e`` the way it cites a rule.
+        """
+        return {entry.label: entry.id for entry in self.cited}
+
+    @property
     def term_ids(self) -> list[uuid.UUID]:
         """Every cached term worth loading — the roots this contributes to a sweep."""
         ids = [term_id for entry in self.fresh.values() for term_id in entry.term_ids]

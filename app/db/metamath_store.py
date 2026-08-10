@@ -332,6 +332,7 @@ def import_corpus(
                         descriptions,
                         layers.folder_for(layer, checked.label),
                         owner,
+                        library.ids,
                     )
             except Exception as exc:  # noqa: BLE001 - reported, not fatal
                 _record_failure(report, checked.label, str(exc))
@@ -1087,6 +1088,7 @@ def _store(
     descriptions: Mapping[str, Description],
     folder_id: uuid.UUID | None,
     owner: uuid.UUID | None,
+    entry_ids: Mapping[str, uuid.UUID],
 ) -> _Stored:
     engine_proof = checked.proof
     valid = bool(engine_proof.valid)
@@ -1120,13 +1122,25 @@ def _store(
         # `result` and the line rows are one artefact of one check, and a row
         # carrying two of the three is a state nothing else in the schema makes.
         result=engine_proof.data(),
+        # True on the way in, not assigned after the flush: `store_proof_lines`
+        # below is given this run's label table and records what each citation
+        # resolved to, so the claim is good — and setting it here is what keeps
+        # that one statement an INSERT rather than an UPDATE per proof.
+        citations_stored=True,
     )
     session.add(proof)
     session.flush()
 
     # `replace=False`: the proof was created three lines ago, so there is no
     # earlier structure to clear, and the delete is not free to issue anyway.
-    rows = store_proof_lines(session, proof, system, engine_proof, replace=False)
+    #
+    # `entry_ids` is the run's own label table, which is the resolution here: a
+    # Metamath label is unique across the database and a proof may only cite what
+    # precedes it, so every entry this proof names is already in it — whichever
+    # layer of a spine declared it. That is what spares an import the backfill.
+    rows = store_proof_lines(
+        session, proof, system, engine_proof, replace=False, entry_ids=entry_ids
+    )
 
     return _Stored(
         valid=valid,
