@@ -18,6 +18,8 @@ vi.mock('$lib/api', () => ({
 
 const apiMock = api as unknown as { assumptions: { public: ReturnType<typeof vi.fn> } };
 
+// The page ends the list on a page shorter than the `limit` the server echoed, so
+// a fixture wanting a "Show more" sends a full page — of whatever size it claims.
 function assumption(over: Partial<Assumption> = {}): Assumption {
 	return {
 		id: 'a1',
@@ -61,13 +63,16 @@ describe('the public gap register', () => {
 			.mockResolvedValueOnce({
 				items: [assumption({ id: 'a1' }), assumption({ id: 'a2', label: 'lemma-2-2' })],
 				total: 3,
-				limit: 20,
+				limit: 2,
 				offset: 0
 			})
 			.mockResolvedValueOnce({
-				items: [assumption({ id: 'a2', label: 'lemma-2-2' }), assumption({ id: 'a3', label: 'lemma-2-3' })],
+				items: [
+					assumption({ id: 'a2', label: 'lemma-2-2' }),
+					assumption({ id: 'a3', label: 'lemma-2-3' })
+				],
 				total: 3,
-				limit: 20,
+				limit: 2,
 				offset: 2
 			});
 		render(Page);
@@ -75,22 +80,44 @@ describe('the public gap register', () => {
 		await userEvent.click(await screen.findByRole('button', { name: 'Show more' }));
 
 		expect(await screen.findByRole('link', { name: /lemma-2-3/ })).toBeInTheDocument();
-		// Three distinct rows, not four: the repeat is dropped rather than listed
-		// twice (or, keyed, thrown over).
+		// Three rows, not four: the repeat is dropped rather than listed twice (or,
+		// keyed, thrown over).
 		expect(screen.getAllByRole('link')).toHaveLength(3);
 		expect(screen.getAllByRole('link', { name: /lemma-2-2/ })).toHaveLength(1);
 	});
 
+	it('stops offering more once the server sends a short page', async () => {
+		// `total` and the number of rows paging can reach drift apart as soon as one
+		// duplicate is dropped, so a count-based end test leaves a button that
+		// fetches nothing forever. A short page is the end.
+		apiMock.assumptions.public.mockResolvedValue({
+			items: [assumption()],
+			// Deliberately disagrees: the set grew between the count and the page.
+			total: 4,
+			limit: 2,
+			offset: 0
+		});
+		render(Page);
+
+		expect(await screen.findByRole('link', { name: /lemma-2-1/ })).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
+	});
+
 	it('keeps the rows it has when a later page fails, and offers a retry', async () => {
 		apiMock.assumptions.public
-			.mockResolvedValueOnce({ items: [assumption()], total: 2, limit: 20, offset: 0 })
+			.mockResolvedValueOnce({
+				items: [assumption({ id: 'a1' }), assumption({ id: 'a2', label: 'lemma-2-2' })],
+				total: 4,
+				limit: 2,
+				offset: 0
+			})
 			.mockRejectedValueOnce(new ApiError(500, 'upstream is down'));
 		render(Page);
 
 		await userEvent.click(await screen.findByRole('button', { name: 'Show more' }));
 
 		expect(await screen.findByText('upstream is down')).toBeInTheDocument();
-		expect(screen.getByRole('link', { name: /lemma-2-1/ })).toBeInTheDocument();
+		expect(screen.getAllByRole('link')).toHaveLength(2);
 		expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
 	});
 

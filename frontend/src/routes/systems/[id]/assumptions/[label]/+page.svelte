@@ -100,8 +100,11 @@
 					naming it nowhere is here too. Each is a complete proof of an implication until
 					this is discharged.
 				</p>
+				<!-- Unkeyed: a label is unique within one system, and this closure spans
+				     descendant systems, so two of them may legitimately promote a
+				     dependent under the same name. -->
 				<ul class="flex flex-wrap gap-1.5">
-					{#each assumption.dependent_labels as label (label)}
+					{#each assumption.dependent_labels as label}
 						<li class="rounded border px-2 py-0.5 font-mono text-xs">{label}</li>
 					{/each}
 				</ul>

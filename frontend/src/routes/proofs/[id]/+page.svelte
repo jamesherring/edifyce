@@ -78,6 +78,9 @@
 	// Bumped on every load so late responses from a previous id are dropped.
 	let loadSeq = 0;
 	let verifySeq = 0;
+	// Per-read tokens for the two side panels a check re-reads: see `loadRestsOn`.
+	let citationsSeq = 0;
+	let restsOnSeq = 0;
 	let notationSeq = 0;
 
 	async function load(id: string) {
@@ -86,6 +89,10 @@
 		// would otherwise render its lines, or its error, inside this page.
 		verifySeq++;
 		notationSeq++;
+		// Bumped here as well as at each call site: a detail fetch that fails returns
+		// before those calls, and the previous proof's panel reads would land anyway.
+		citationsSeq++;
+		restsOnSeq++;
 		verifying = false;
 		reading = false;
 		loading = true;
@@ -127,18 +134,23 @@
 		// Best-effort system name for the header link (readable proofs reference a
 		// readable system, so this normally resolves).
 		void loadSystemName(detail.formal_system_id, seq);
-		void loadCitations(id, seq);
-		void loadRestsOn(id, seq);
+		void loadCitations(id);
+		void loadRestsOn(id);
 	}
 
-	async function loadRestsOn(id: string, seq: number) {
+	async function loadRestsOn(id: string) {
+		// Its own token, not `loadSeq`: a check re-reads this for the *same* proof,
+		// so a page-level sequence cannot tell the pre-verify read from the one the
+		// check started — and the older one resolving last would report the
+		// previous check's debts as this one's.
+		const seq = ++restsOnSeq;
 		try {
 			const found = await api.proofs.provenance(id);
-			if (seq !== loadSeq) return;
+			if (seq !== restsOnSeq) return;
 			restsOn = found;
 			restsOnUnread = null;
 		} catch (err) {
-			if (seq !== loadSeq) return;
+			if (seq !== restsOnSeq) return;
 			// Cleared either way: a stale card surviving a failed re-read would
 			// report the *previous* check's debts as this one's.
 			restsOn = null;
@@ -155,10 +167,12 @@
 		}
 	}
 
-	async function loadCitations(id: string, seq: number) {
+	async function loadCitations(id: string) {
+		// Same reasoning as `loadRestsOn`: a check re-reads the graph for this proof.
+		const seq = ++citationsSeq;
 		try {
 			const found = await api.proofs.citationGraph(id);
-			if (seq !== loadSeq) return;
+			if (seq !== citationsSeq) return;
 			citations = found;
 		} catch {
 			// Leave the graph unshown. It is context around the proof, not the proof:
@@ -282,10 +296,10 @@
 			// rules the stored lines resolved to, so a check that rewrote them
 			// rewrote it. Keyed on `loadSeq` because it belongs to this proof rather
 			// than to this check.
-			void loadCitations(proof.id, loadSeq);
+			void loadCitations(proof.id);
 			// A check resolves the citations this reads, so a proof verified for the
 			// first time goes from "nothing to report" to its actual debts.
-			void loadRestsOn(proof.id, loadSeq);
+			void loadRestsOn(proof.id);
 		} catch (err) {
 			if (seq !== verifySeq) return;
 			requestError = err instanceof ApiError ? err.message : String(err);

@@ -15,6 +15,11 @@
 	let items = $state<Assumption[]>([]);
 	let offset = 0;
 	let total = $state(0);
+	// Whether the server has run out of rows to send. The *end condition*, in place
+	// of `items.length < total`: the set can change between requests, so a merge
+	// that drops a duplicate leaves the two permanently out of step and a
+	// count-based test would offer a button that fetches nothing forever.
+	let exhausted = $state(false);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 
@@ -31,6 +36,10 @@
 			// advancing by the kept rows would stall on a page that was entirely
 			// duplicate.
 			offset += page.items.length;
+			// A short page is the end of what paging can reach, whatever `total` says.
+			// Measured against the limit the *server* echoes, which is what actually
+			// bounded the result — it clamps anything above its own maximum.
+			exhausted = page.items.length < page.limit;
 			// Deduped: this pages by offset over a set that can change between
 			// requests, so a row shifting across the boundary arrives twice — and
 			// twice under one key is a thrown error, not a repeated row.
@@ -115,7 +124,7 @@
 
 	<!-- Outside the list: a first page that failed shows no rows and no total, and
 	     still needs the retry. -->
-	{#if items.length < total || error}
+	{#if (items.length > 0 && !exhausted) || error}
 		<div class="flex items-center justify-center gap-3">
 			{#if total > 0}
 				<span class="text-xs text-muted-foreground">
