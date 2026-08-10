@@ -390,6 +390,26 @@ the prover refuses its own answer when a variable came out undetermined: that is
 Metamath's *dummy variable*, legal only against `$d` obligations this does not
 track, so the contract is that a returned proof verifies.
 
+## The algebra, wired in as a closer
+
+`certify.py`'s Boolean entailment is available to the prover as a **closer**: a
+subgoal closes outright when the theorem's hypotheses propositionally entail it.
+Pass `--propositional`. The step is labelled `$taut`, and `checking.py` re-decides
+it rather than trusting it.
+
+| ranker | search alone | with the algebra |
+|---|---|---|
+| random | 13 (6.5 %) | **37 (18.5 %)** |
+| frequency | 31 (15.5 %) | 51 (25.5 %) |
+| analogy | 37 (18.5 %) | 55 (27.5 %) |
+| **all** | 42 (21.0 %) | **58 (29.0 %)** |
+
+The closer with a *random* ranker nearly matches the best ranker without it: on
+this corpus the algebra contributes more than the ranking does. Held out beyond
+the 10k it adds much less — 39 → 42 of 200 — because those goals are about
+arithmetic and cardinality, where a propositional abstraction sees only opaque
+atoms. See [docs/automated-proof-search.md](../docs/automated-proof-search.md) §6.
+
 ## What stops the other 78 %
 
 A solve rate says how far the prover gets, not what is stopping it, and those

@@ -16,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from experiments.lindenbaum import certify
+from experiments.lindenbaum.prover import TAUTOLOGY
 from experiments.lindenbaum.unification import RIGID, Terms, disjoint_holds
 
 if TYPE_CHECKING:
@@ -64,6 +66,18 @@ class Checker:
         if step.label == "$e":
             if conclusion not in self.hypotheses:
                 return Rejection(step.label, "cites a hypothesis the theorem lacks")
+            return None
+        if step.label == TAUTOLOGY:
+            # Re-decided here, not trusted: the search's claim is that the
+            # hypotheses propositionally entail this, and a truth table settles
+            # it in the checker as readily as in the prover.
+            atoms: dict[int, int] = {}
+            abstracted = certify.abstract(terms, conclusion, atoms)
+            assumptions = [
+                certify.abstract(terms, fact, atoms) for fact in sorted(self.hypotheses)
+            ]
+            if not certify.entailed(abstracted, assumptions):
+                return Rejection(step.label, "not propositionally entailed")
             return None
 
         lemma = self.by_label.get(step.label)

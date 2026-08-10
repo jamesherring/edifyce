@@ -76,10 +76,11 @@ def run(
     steps: int,
     width: int,
     depth: int,
+    propositional: bool,
 ) -> dict[str, object]:
     index = P.Index(terms)
     scorer = rankers(index, 7)[name]
-    prover = P.Prover(terms, index, scorer)
+    prover = P.Prover(terms, index, scorer, propositional=propositional)
     solved: list[dict[str, object]] = []
     rejected: list[dict[str, str]] = []
     attempted = 0
@@ -185,6 +186,11 @@ def main() -> None:
     parser.add_argument("--depth", type=int, default=5)
     parser.add_argument("--seed", type=int, default=20260809)
     parser.add_argument("--rankers", default="random,frequency,analogy,all")
+    parser.add_argument(
+        "--propositional",
+        action="store_true",
+        help="close a subgoal when the hypotheses propositionally entail it",
+    )
     arguments = parser.parse_args()
 
     if arguments.cache is not None and arguments.cache.exists():
@@ -227,6 +233,7 @@ def main() -> None:
             arguments.steps,
             arguments.width,
             arguments.depth,
+            arguments.propositional,
         )
         proofs = outcome["proofs"]
         deep = sum(1 for p in proofs if p["depth"] >= 3)
@@ -252,6 +259,7 @@ def main() -> None:
             "steps": arguments.steps,
             "width": arguments.width,
             "depth": arguments.depth,
+            "propositional_closer": arguments.propositional,
         },
         "rankers": [
             {

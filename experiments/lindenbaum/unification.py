@@ -114,6 +114,10 @@ class Terms:
     def canonical(self, term: int) -> int:
         return self._key[term][0]
 
+    def identity(self, term: int) -> int:
+        """Exact structural identity. Interning makes it the canonical index."""
+        return self._key[term][0]
+
     def mark(self) -> int:
         """A watermark to :meth:`release` back to."""
         return len(self.kind)

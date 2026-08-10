@@ -1,0 +1,397 @@
+{
+  "corpus": {
+    "theorems": 14293,
+    "systems": [
+      "Metamath"
+    ],
+    "eligible": 4158,
+    "sampled": 200,
+    "min_proof_lines": 2
+  },
+  "budget": {
+    "steps": 1200,
+    "width": 14,
+    "depth": 5,
+    "propositional_closer": true
+  },
+  "rankers": [
+    {
+      "ranker": "all",
+      "attempted": 200,
+      "solved": 42,
+      "rate": 0.21,
+      "rejected_by_checker": [],
+      "seconds": 507.5557744503021,
+      "depth_histogram": {
+        "1": 7,
+        "2": 31,
+        "3": 4
+      },
+      "solved_by_section": [
+        [
+          "Some properties of specific numbers",
+          7
+        ],
+        [
+          "Ordering on reals",
+          3
+        ],
+        [
+          "Division",
+          3
+        ],
+        [
+          "Upper sets of integers",
+          3
+        ],
+        [
+          "Subtraction",
+          2
+        ],
+        [
+          "Multiplication",
+          2
+        ],
+        [
+          "Decimal representation of numbers",
+          2
+        ],
+        [
+          "Decimal arithmetic",
+          2
+        ],
+        [
+          "Real number intervals",
+          2
+        ],
+        [
+          "Integer powers",
+          2
+        ]
+      ],
+      "different_lemmas_from_corpus": 22,
+      "mean_corpus_proof_lines_of_solved": 7.190476190476191,
+      "examples": [
+        {
+          "theorem": "gchxpidm",
+          "depth": 2,
+          "steps": 4,
+          "corpus_proof_lines": 57,
+          "budget_used": 118,
+          "section": "Sets satisfying the Generalized Continuum Hypothesis",
+          "lemmas": [
+            "gchinf",
+            "infxpidm2",
+            "numth3",
+            "syl2an2r"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "infxpidm2",
+            "numth3",
+            "syl2an2r"
+          ]
+        },
+        {
+          "theorem": "seqexw",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 45,
+          "budget_used": 1,
+          "section": "The infinite sequence builder \"seq\" - extension",
+          "lemmas": [
+            "seqex"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "seqex"
+          ]
+        },
+        {
+          "theorem": "zfcndpow",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 23,
+          "budget_used": 1,
+          "section": "ZFC Axioms with no distinct variable requirements",
+          "lemmas": [
+            "ax-pow"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "ax-pow"
+          ]
+        },
+        {
+          "theorem": "hashnemnf",
+          "depth": 2,
+          "steps": 4,
+          "corpus_proof_lines": 15,
+          "budget_used": 152,
+          "section": "The ` # ` (set size) function",
+          "lemmas": [
+            "hashxnn0",
+            "pm3.35",
+            "sylancl",
+            "xnn0nemnf"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "hashxnn0",
+            "pm3.35",
+            "sylancl",
+            "xnn0nemnf"
+          ]
+        },
+        {
+          "theorem": "hashgt0",
+          "depth": 2,
+          "steps": 2,
+          "corpus_proof_lines": 12,
+          "budget_used": 427,
+          "section": "The ` # ` (set size) function",
+          "lemmas": [
+            "biimpar",
+            "hashneq0"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "hashneq0"
+          ]
+        },
+        {
+          "theorem": "qexALT",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 11,
+          "budget_used": 1,
+          "section": "Rational numbers (as a subset of complex numbers)",
+          "lemmas": [
+            "qex"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "qex"
+          ]
+        },
+        {
+          "theorem": "nn0ge2m1nnALT",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 9,
+          "budget_used": 1,
+          "section": "Upper sets of integers",
+          "lemmas": [
+            "nn0ge2m1nn"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "nn0ge2m1nn"
+          ]
+        },
+        {
+          "theorem": "1lt10OLD",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 7,
+          "budget_used": 1,
+          "section": "Decimal arithmetic",
+          "lemmas": [
+            "1lt10"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "1lt10"
+          ]
+        },
+        {
+          "theorem": "axac2",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 6,
+          "budget_used": 1,
+          "section": "Introduce the Axiom of Choice",
+          "lemmas": [
+            "ax-ac2"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "ax-ac2"
+          ]
+        },
+        {
+          "theorem": "5nn",
+          "depth": 3,
+          "steps": 5,
+          "corpus_proof_lines": 5,
+          "budget_used": 1036,
+          "section": "Decimal representation of numbers",
+          "lemmas": [
+            "4nn",
+            "ax-mp",
+            "df-5",
+            "eqeltri",
+            "peano2nn"
+          ],
+          "same_lemmas_as_corpus": true,
+          "novel_lemmas": []
+        },
+        {
+          "theorem": "8nn",
+          "depth": 3,
+          "steps": 5,
+          "corpus_proof_lines": 5,
+          "budget_used": 1036,
+          "section": "Decimal representation of numbers",
+          "lemmas": [
+            "7nn",
+            "ax-mp",
+            "df-8",
+            "eqeltri",
+            "peano2nn"
+          ],
+          "same_lemmas_as_corpus": true,
+          "novel_lemmas": []
+        },
+        {
+          "theorem": "adddiri",
+          "depth": 2,
+          "steps": 5,
+          "corpus_proof_lines": 5,
+          "budget_used": 295,
+          "section": "Some deductions from the field axioms for complex numbers",
+          "lemmas": [
+            "adddir",
+            "mp3an"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": []
+        },
+        {
+          "theorem": "subdii",
+          "depth": 2,
+          "steps": 5,
+          "corpus_proof_lines": 5,
+          "budget_used": 561,
+          "section": "Multiplication",
+          "lemmas": [
+            "mp3an",
+            "subdi"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": []
+        },
+        {
+          "theorem": "subdiri",
+          "depth": 2,
+          "steps": 5,
+          "corpus_proof_lines": 5,
+          "budget_used": 565,
+          "section": "Multiplication",
+          "lemmas": [
+            "mp3an",
+            "subdir"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": []
+        },
+        {
+          "theorem": "divreci",
+          "depth": 2,
+          "steps": 3,
+          "corpus_proof_lines": 5,
+          "budget_used": 546,
+          "section": "Division",
+          "lemmas": [
+            "$taut",
+            "ax-mp",
+            "divrec"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut",
+            "divrec"
+          ]
+        },
+        {
+          "theorem": "redivcli",
+          "depth": 2,
+          "steps": 3,
+          "corpus_proof_lines": 5,
+          "budget_used": 356,
+          "section": "Division",
+          "lemmas": [
+            "$taut",
+            "ax-mp",
+            "redivcl"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut",
+            "redivcl"
+          ]
+        },
+        {
+          "theorem": "ltneii",
+          "depth": 3,
+          "steps": 4,
+          "corpus_proof_lines": 4,
+          "budget_used": 165,
+          "section": "Ordering on reals",
+          "lemmas": [
+            "gtneii",
+            "necomi"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": []
+        },
+        {
+          "theorem": "4lt5",
+          "depth": 3,
+          "steps": 4,
+          "corpus_proof_lines": 4,
+          "budget_used": 560,
+          "section": "Some properties of specific numbers",
+          "lemmas": [
+            "4re",
+            "breqtrri",
+            "df-5",
+            "ltp1i"
+          ],
+          "same_lemmas_as_corpus": true,
+          "novel_lemmas": []
+        },
+        {
+          "theorem": "negdii",
+          "depth": 2,
+          "steps": 4,
+          "corpus_proof_lines": 4,
+          "budget_used": 24,
+          "section": "Subtraction",
+          "lemmas": [
+            "mp2an",
+            "negdi"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": []
+        },
+        {
+          "theorem": "6m1e5",
+          "depth": 2,
+          "steps": 4,
+          "corpus_proof_lines": 4,
+          "budget_used": 6,
+          "section": "Some properties of specific numbers",
+          "lemmas": [
+            "5cn",
+            "ax-1cn",
+            "df-6",
+            "mvrraddi"
+          ],
+          "same_lemmas_as_corpus": true,
+          "novel_lemmas": []
+        }
+      ]
+    }
+  ]
+}

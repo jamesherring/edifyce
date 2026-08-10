@@ -81,6 +81,10 @@ class Arena:
     def __len__(self) -> int:
         return len(self.kind)
 
+    def identity(self, term: int) -> int:
+        """The exact structural key — see :attr:`exact`."""
+        return self.exact[term]
+
     def add(self, constructor: str, children: tuple[int, ...]) -> int:
         """Append a synthesised node and key it. Returns its index."""
         term = len(self.kind)

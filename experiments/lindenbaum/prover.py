@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from experiments.lindenbaum import certify
 from experiments.lindenbaum.unification import (
     RIGID,
     Subst,
@@ -48,6 +49,11 @@ BELOW_VAR = 0
 ABSENT = 1
 VARIABLE = 2
 FIRST_SYMBOL = 3
+
+#: The label a propositionally-closed step carries. Not a Metamath theorem: it
+#: stands for "a derivation in the propositional calculus exists", which the
+#: checker re-decides rather than takes on trust.
+TAUTOLOGY = "$taut"
 
 #: Where the fingerprint samples. The root is the head-symbol filter
 #: `app/db/retrieval.py` already ships; the rest are what make it prune a corpus
@@ -429,10 +435,23 @@ class Attempt:
 
 
 class Prover:
-    def __init__(self, terms: Terms, index: Index, scorer: Scorer) -> None:
+    def __init__(
+        self,
+        terms: Terms,
+        index: Index,
+        scorer: Scorer,
+        *,
+        propositional: bool = False,
+    ) -> None:
         self.terms = terms
         self.index = index
         self.scorer = scorer
+        #: Close a subgoal outright when the theorem's hypotheses propositionally
+        #: entail it. This is the Boolean algebra of `certify.py` used as a
+        #: closer: a whole subtree of `syl`/`imp`/`ex`/`adantr` glue becomes one
+        #: step, which is aimed squarely at what `run_failures.py` measured — the
+        #: wall is the *number of lemmas* a proof needs, not its depth.
+        self.propositional = propositional
         self._orders: dict[int, list[int]] = {}
 
     def attempt(
@@ -490,6 +509,14 @@ class Prover:
         )
         goal = terms.apply(goals[pick], subst)
         rest = goals[:pick] + goals[pick + 1 :]
+
+        if self.propositional and self._entails(goal, facts):
+            tail = self._prove(rest, subst, depth, budget, facts, attempt, active)
+            if tail is not None:
+                return (
+                    _splice(tail[0], Step(label=TAUTOLOGY, conclusion=goal), pick),
+                    tail[1],
+                )
 
         # A hypothesis of the theorem being proved closes a goal outright — by
         # *unification*, not equality. A goal reached through a rule that left a
@@ -598,6 +625,23 @@ class Prover:
         order.sort(key=lambda at: not self.index.lemmas[candidates[at]].is_fact)
         self._orders[goal] = order
         return order
+
+    def _entails(self, goal: int, facts: tuple[int, ...]) -> bool:
+        """Whether the hypotheses propositionally entail this (ground) goal.
+
+        Refused for a goal that still carries a flexible variable: the
+        abstraction would key that variable as an atom and decide a question
+        about a *pattern*, when what closing it means is that some instance is
+        provable — which is not the same claim.
+        """
+        if any(self.terms.is_flexible(v) for v in self.terms.variables(goal)):
+            return False
+        atoms: dict[int, int] = {}
+        abstracted = certify.abstract(self.terms, goal, atoms)
+        if abstracted.is_atom:
+            return False
+        assumptions = [certify.abstract(self.terms, fact, atoms) for fact in facts]
+        return certify.entailed(abstracted, assumptions)
 
     def _difficulty(self, goal: int) -> tuple[int, int]:
         flexible = sum(

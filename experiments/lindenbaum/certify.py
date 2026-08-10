@@ -48,7 +48,7 @@ this is the floor that gets, not the ceiling.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
 
@@ -57,6 +57,15 @@ if TYPE_CHECKING:
 
     from experiments.lindenbaum.corpus import Theorem
     from experiments.lindenbaum.dag import Arena
+
+
+class Store(Protocol):
+    """What :func:`abstract` needs of a term store."""
+
+    constructor: Sequence[str | None]
+    children: Sequence[Sequence[int]]
+
+    def identity(self, term: int) -> int: ...
 
 #: set.mm's propositional connectives and their arities. A constructor absent
 #: here — `wceq`, `wal`, `wral` — is opaque, and the subterm it heads becomes an
@@ -124,17 +133,41 @@ class Formula:
         raise ValueError(f"unknown connective {self.op!r}")
 
 
-def abstract(arena: Arena, term: int, atoms: dict[int, int]) -> Formula:
-    """Abstract a stored statement, interning atoms into ``atoms`` as it goes."""
-    constructor = arena.constructor[term]
+def abstract(store: Store, term: int, atoms: dict[int, int]) -> Formula:
+    """Abstract a stored statement, interning atoms into ``atoms`` as it goes.
+
+    ``store`` is anything that can name a term's constructor, its children, and
+    its **exact structural identity** — both the read-only `Arena` and the
+    prover's mutable `Terms` can, and the prover needs this over the terms it
+    builds mid-search, not only over the ones the corpus stored.
+    """
+    constructor = store.constructor[term]
     arity = CONNECTIVES.get(constructor or "")
-    if arity is not None and len(arena.children[term]) == arity:
+    if arity is not None and len(store.children[term]) == arity:
         return Formula(
             op=constructor or "",
-            args=tuple(abstract(arena, child, atoms) for child in arena.children[term]),
+            args=tuple(abstract(store, child, atoms) for child in store.children[term]),
         )
-    key = arena.exact[term]
-    return Formula(op="atom", atom=atoms.setdefault(key, len(atoms)))
+    return Formula(op="atom", atom=atoms.setdefault(store.identity(term), len(atoms)))
+
+
+def entailed(goal: Formula, assumptions: Sequence[Formula]) -> bool:
+    """Whether ``assumptions`` propositionally entail ``goal``.
+
+    The Boolean algebra used as a *closer*: `E*(φ) = +1` in the algebra the
+    assumptions generate. Sound for the same reason as everything in this module
+    — the implication is a substitution instance of a tautology, and the corpus
+    proves every one of those — and decidable by a truth table over the atoms
+    the two sides share.
+    """
+    atoms = sorted(goal.atoms().union(*(a.atoms() for a in assumptions)) if assumptions else goal.atoms())
+    if len(atoms) > MAX_ATOMS:
+        return False
+    values = _table(atoms)
+    admissible = np.ones(1 << len(atoms), dtype=bool)
+    for assumption in assumptions:
+        admissible &= assumption.evaluate(values)
+    return bool((goal.evaluate(values) | ~admissible).all())
 
 
 def _table(atoms: Sequence[int]) -> dict[int, np.ndarray]:

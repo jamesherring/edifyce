@@ -1,0 +1,1508 @@
+{
+  "corpus": {
+    "theorems": 10177,
+    "systems": [
+      "Metamath"
+    ],
+    "eligible": 9928,
+    "sampled": 200,
+    "min_proof_lines": 2
+  },
+  "budget": {
+    "steps": 1200,
+    "width": 14,
+    "depth": 5,
+    "propositional_closer": true
+  },
+  "rankers": [
+    {
+      "ranker": "random",
+      "attempted": 200,
+      "solved": 37,
+      "rate": 0.185,
+      "rejected_by_checker": [],
+      "seconds": 288.9276530742645,
+      "depth_histogram": {
+        "1": 35,
+        "2": 2
+      },
+      "solved_by_section": [
+        [
+          "Logical conjunction",
+          10
+        ],
+        [
+          "Abbreviated conjunction and disjunction of three wff's",
+          9
+        ],
+        [
+          "Logical equivalence",
+          5
+        ],
+        [
+          "Logical disjunction",
+          2
+        ],
+        [
+          "Mixed connectives",
+          2
+        ],
+        [
+          "Axiom scheme ax-12 (Substitution)",
+          2
+        ],
+        [
+          "The empty set",
+          2
+        ],
+        [
+          "Logical implication",
+          1
+        ],
+        [
+          "Implicational Calculus",
+          1
+        ],
+        [
+          "Derive the Tarski-Bernays-Wajsberg axioms from Meredith's Second CO Axiom",
+          1
+        ]
+      ],
+      "different_lemmas_from_corpus": 37,
+      "mean_corpus_proof_lines_of_solved": 3.972972972972973,
+      "examples": [
+        {
+          "theorem": "mercolem5",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 10,
+          "budget_used": 1,
+          "section": "Derive the Tarski-Bernays-Wajsberg axioms from Meredith's Second CO Axiom",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "pm5.71",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 7,
+          "budget_used": 1,
+          "section": "Mixed connectives",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "syl112anc",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 7,
+          "budget_used": 1,
+          "section": "Abbreviated conjunction and disjunction of three wff's",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "syl211anc",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 7,
+          "budget_used": 1,
+          "section": "Abbreviated conjunction and disjunction of three wff's",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "impsingle-step25",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 7,
+          "budget_used": 1,
+          "section": "Implicational Calculus",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "3bior2fd",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 6,
+          "budget_used": 1,
+          "section": "Abbreviated conjunction and disjunction of three wff's",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "ab0ALT",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 6,
+          "budget_used": 1,
+          "section": "The empty set",
+          "lemmas": [
+            "ab0"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "ab0"
+          ]
+        },
+        {
+          "theorem": "pm5.32rd",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 5,
+          "budget_used": 1,
+          "section": "Logical conjunction",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "mpbir2and",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 5,
+          "budget_used": 1,
+          "section": "Logical conjunction",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "3orel2OLD",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 5,
+          "budget_used": 1,
+          "section": "Abbreviated conjunction and disjunction of three wff's",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "mpbii",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Logical equivalence",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "sylbird",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Logical equivalence",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "bitr2d",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Logical equivalence",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "3anbi3i",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Abbreviated conjunction and disjunction of three wff's",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "syl3an3",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Abbreviated conjunction and disjunction of three wff's",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "cleljustALT",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Axiom scheme ax-12 (Substitution)",
+          "lemmas": [
+            "cleljust"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "cleljust"
+          ]
+        },
+        {
+          "theorem": "cleljustALT2",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Axiom scheme ax-12 (Substitution)",
+          "lemmas": [
+            "cleljustALT"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "cleljustALT"
+          ]
+        },
+        {
+          "theorem": "0un",
+          "depth": 2,
+          "steps": 4,
+          "corpus_proof_lines": 3,
+          "budget_used": 127,
+          "section": "The empty set",
+          "lemmas": [
+            "3eqtr2ri",
+            "eqid",
+            "un0",
+            "uncom"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "3eqtr2ri",
+            "eqid"
+          ]
+        },
+        {
+          "theorem": "2a1dd",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 3,
+          "budget_used": 1,
+          "section": "Logical implication",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "ibir",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 3,
+          "budget_used": 1,
+          "section": "Logical equivalence",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        }
+      ]
+    },
+    {
+      "ranker": "frequency",
+      "attempted": 200,
+      "solved": 51,
+      "rate": 0.255,
+      "rejected_by_checker": [],
+      "seconds": 113.56527948379517,
+      "depth_histogram": {
+        "1": 35,
+        "2": 16
+      },
+      "solved_by_section": [
+        [
+          "Logical conjunction",
+          10
+        ],
+        [
+          "Abbreviated conjunction and disjunction of three wff's",
+          9
+        ],
+        [
+          "Logical equivalence",
+          5
+        ],
+        [
+          "The empty set",
+          3
+        ],
+        [
+          "Logical disjunction",
+          2
+        ],
+        [
+          "Mixed connectives",
+          2
+        ],
+        [
+          "Axiom scheme ax-12 (Substitution)",
+          2
+        ],
+        [
+          "The intersection of two classes",
+          2
+        ],
+        [
+          "Logical implication",
+          1
+        ],
+        [
+          "Implicational Calculus",
+          1
+        ]
+      ],
+      "different_lemmas_from_corpus": 47,
+      "mean_corpus_proof_lines_of_solved": 4.117647058823529,
+      "examples": [
+        {
+          "theorem": "sdomdomtrfi",
+          "depth": 2,
+          "steps": 4,
+          "corpus_proof_lines": 21,
+          "budget_used": 157,
+          "section": "Finite sets",
+          "lemmas": [
+            "sdomdomtr",
+            "simp2",
+            "simp3",
+            "syl2anc"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "sdomdomtr",
+            "simp2",
+            "simp3"
+          ]
+        },
+        {
+          "theorem": "mercolem5",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 10,
+          "budget_used": 1,
+          "section": "Derive the Tarski-Bernays-Wajsberg axioms from Meredith's Second CO Axiom",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "reldisjunOLD",
+          "depth": 2,
+          "steps": 4,
+          "corpus_proof_lines": 7,
+          "budget_used": 322,
+          "section": "Relations",
+          "lemmas": [
+            "reldmun",
+            "simp1",
+            "simp2",
+            "syl2anc"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "reldmun",
+            "simp1",
+            "simp2",
+            "syl2anc"
+          ]
+        },
+        {
+          "theorem": "pm5.71",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 7,
+          "budget_used": 1,
+          "section": "Mixed connectives",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "syl112anc",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 7,
+          "budget_used": 1,
+          "section": "Abbreviated conjunction and disjunction of three wff's",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "syl211anc",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 7,
+          "budget_used": 1,
+          "section": "Abbreviated conjunction and disjunction of three wff's",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "impsingle-step25",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 7,
+          "budget_used": 1,
+          "section": "Implicational Calculus",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "3bior2fd",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 6,
+          "budget_used": 1,
+          "section": "Abbreviated conjunction and disjunction of three wff's",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "ab0ALT",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 6,
+          "budget_used": 1,
+          "section": "The empty set",
+          "lemmas": [
+            "ab0"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "ab0"
+          ]
+        },
+        {
+          "theorem": "pm5.32rd",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 5,
+          "budget_used": 1,
+          "section": "Logical conjunction",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "mpbir2and",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 5,
+          "budget_used": 1,
+          "section": "Logical conjunction",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "3orel2OLD",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 5,
+          "budget_used": 1,
+          "section": "Abbreviated conjunction and disjunction of three wff's",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "necon2abii",
+          "depth": 2,
+          "steps": 4,
+          "corpus_proof_lines": 4,
+          "budget_used": 36,
+          "section": "Negated equality",
+          "lemmas": [
+            "$taut",
+            "3bitr4i",
+            "biid",
+            "df-ne"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut",
+            "3bitr4i",
+            "biid",
+            "df-ne"
+          ]
+        },
+        {
+          "theorem": "mpbii",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Logical equivalence",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "sylbird",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Logical equivalence",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "bitr2d",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Logical equivalence",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "3anbi3i",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Abbreviated conjunction and disjunction of three wff's",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "syl3an3",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Abbreviated conjunction and disjunction of three wff's",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "cleljustALT",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Axiom scheme ax-12 (Substitution)",
+          "lemmas": [
+            "cleljust"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "cleljust"
+          ]
+        },
+        {
+          "theorem": "cleljustALT2",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Axiom scheme ax-12 (Substitution)",
+          "lemmas": [
+            "cleljust"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "cleljust"
+          ]
+        }
+      ]
+    },
+    {
+      "ranker": "analogy",
+      "attempted": 200,
+      "solved": 55,
+      "rate": 0.275,
+      "rejected_by_checker": [],
+      "seconds": 395.6887927055359,
+      "depth_histogram": {
+        "1": 35,
+        "2": 17,
+        "3": 3
+      },
+      "solved_by_section": [
+        [
+          "Logical conjunction",
+          10
+        ],
+        [
+          "Abbreviated conjunction and disjunction of three wff's",
+          9
+        ],
+        [
+          "Logical equivalence",
+          5
+        ],
+        [
+          "The empty set",
+          4
+        ],
+        [
+          "Logical disjunction",
+          2
+        ],
+        [
+          "Mixed connectives",
+          2
+        ],
+        [
+          "Axiom scheme ax-12 (Substitution)",
+          2
+        ],
+        [
+          "Restricted universal and existential quantification",
+          2
+        ],
+        [
+          "Logical implication",
+          1
+        ],
+        [
+          "Implicational Calculus",
+          1
+        ]
+      ],
+      "different_lemmas_from_corpus": 50,
+      "mean_corpus_proof_lines_of_solved": 3.690909090909091,
+      "examples": [
+        {
+          "theorem": "mercolem5",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 10,
+          "budget_used": 1,
+          "section": "Derive the Tarski-Bernays-Wajsberg axioms from Meredith's Second CO Axiom",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "pm5.71",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 7,
+          "budget_used": 1,
+          "section": "Mixed connectives",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "syl112anc",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 7,
+          "budget_used": 1,
+          "section": "Abbreviated conjunction and disjunction of three wff's",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "syl211anc",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 7,
+          "budget_used": 1,
+          "section": "Abbreviated conjunction and disjunction of three wff's",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "impsingle-step25",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 7,
+          "budget_used": 1,
+          "section": "Implicational Calculus",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "3bior2fd",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 6,
+          "budget_used": 1,
+          "section": "Abbreviated conjunction and disjunction of three wff's",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "ab0ALT",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 6,
+          "budget_used": 1,
+          "section": "The empty set",
+          "lemmas": [
+            "ab0"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "ab0"
+          ]
+        },
+        {
+          "theorem": "pm5.32rd",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 5,
+          "budget_used": 1,
+          "section": "Logical conjunction",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "mpbir2and",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 5,
+          "budget_used": 1,
+          "section": "Logical conjunction",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "3orel2OLD",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 5,
+          "budget_used": 1,
+          "section": "Abbreviated conjunction and disjunction of three wff's",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "sbievwOLD",
+          "depth": 3,
+          "steps": 4,
+          "corpus_proof_lines": 4,
+          "budget_used": 999,
+          "section": "Define proper substitution",
+          "lemmas": [
+            "$taut",
+            "bitri",
+            "equsalvw",
+            "sb6"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "nfsbc1",
+          "depth": 3,
+          "steps": 5,
+          "corpus_proof_lines": 4,
+          "budget_used": 574,
+          "section": "Proper substitution of classes for sets",
+          "lemmas": [
+            "df-sbc",
+            "nfab1",
+            "nfel",
+            "nfxfr"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "df-sbc",
+            "nfab1",
+            "nfel",
+            "nfxfr"
+          ]
+        },
+        {
+          "theorem": "necon2abii",
+          "depth": 2,
+          "steps": 3,
+          "corpus_proof_lines": 4,
+          "budget_used": 20,
+          "section": "Negated equality",
+          "lemmas": [
+            "$taut",
+            "bitr2i",
+            "df-ne"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut",
+            "bitr2i",
+            "df-ne"
+          ]
+        },
+        {
+          "theorem": "mpbii",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Logical equivalence",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "sylbird",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Logical equivalence",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "bitr2d",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Logical equivalence",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "3anbi3i",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Abbreviated conjunction and disjunction of three wff's",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "syl3an3",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Abbreviated conjunction and disjunction of three wff's",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "cleljustALT",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Axiom scheme ax-12 (Substitution)",
+          "lemmas": [
+            "cleljust"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "cleljust"
+          ]
+        },
+        {
+          "theorem": "cleljustALT2",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Axiom scheme ax-12 (Substitution)",
+          "lemmas": [
+            "cleljust"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "cleljust"
+          ]
+        }
+      ]
+    },
+    {
+      "ranker": "all",
+      "attempted": 200,
+      "solved": 58,
+      "rate": 0.29,
+      "rejected_by_checker": [],
+      "seconds": 253.07515788078308,
+      "depth_histogram": {
+        "1": 35,
+        "2": 18,
+        "3": 5
+      },
+      "solved_by_section": [
+        [
+          "Logical conjunction",
+          10
+        ],
+        [
+          "Abbreviated conjunction and disjunction of three wff's",
+          9
+        ],
+        [
+          "Logical equivalence",
+          5
+        ],
+        [
+          "The empty set",
+          4
+        ],
+        [
+          "Logical disjunction",
+          2
+        ],
+        [
+          "Mixed connectives",
+          2
+        ],
+        [
+          "Axiom scheme ax-12 (Substitution)",
+          2
+        ],
+        [
+          "Proper substitution of classes for sets",
+          2
+        ],
+        [
+          "Functions",
+          2
+        ],
+        [
+          "Logical implication",
+          1
+        ]
+      ],
+      "different_lemmas_from_corpus": 53,
+      "mean_corpus_proof_lines_of_solved": 4.068965517241379,
+      "examples": [
+        {
+          "theorem": "imaeqalov",
+          "depth": 2,
+          "steps": 4,
+          "corpus_proof_lines": 21,
+          "budget_used": 195,
+          "section": "Variable-to-class conversion for operations",
+          "lemmas": [
+            "$taut",
+            "ovelimab",
+            "ovex",
+            "ralxpxfr2d"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut",
+            "ralxpxfr2d"
+          ]
+        },
+        {
+          "theorem": "mercolem5",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 10,
+          "budget_used": 1,
+          "section": "Derive the Tarski-Bernays-Wajsberg axioms from Meredith's Second CO Axiom",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "pm5.71",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 7,
+          "budget_used": 1,
+          "section": "Mixed connectives",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "syl112anc",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 7,
+          "budget_used": 1,
+          "section": "Abbreviated conjunction and disjunction of three wff's",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "syl211anc",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 7,
+          "budget_used": 1,
+          "section": "Abbreviated conjunction and disjunction of three wff's",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "impsingle-step25",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 7,
+          "budget_used": 1,
+          "section": "Implicational Calculus",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "eldmrexrn",
+          "depth": 3,
+          "steps": 4,
+          "corpus_proof_lines": 6,
+          "budget_used": 694,
+          "section": "Functions",
+          "lemmas": [
+            "ex",
+            "fvelrn",
+            "rspcime",
+            "simpr"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "rspcime",
+            "simpr"
+          ]
+        },
+        {
+          "theorem": "nfaba1",
+          "depth": 2,
+          "steps": 2,
+          "corpus_proof_lines": 6,
+          "budget_used": 34,
+          "section": "Class form not-free predicate",
+          "lemmas": [
+            "nfa1",
+            "nfabg"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "nfabg"
+          ]
+        },
+        {
+          "theorem": "3bior2fd",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 6,
+          "budget_used": 1,
+          "section": "Abbreviated conjunction and disjunction of three wff's",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "ab0ALT",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 6,
+          "budget_used": 1,
+          "section": "The empty set",
+          "lemmas": [
+            "ab0"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "ab0"
+          ]
+        },
+        {
+          "theorem": "pm5.32rd",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 5,
+          "budget_used": 1,
+          "section": "Logical conjunction",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "mpbir2and",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 5,
+          "budget_used": 1,
+          "section": "Logical conjunction",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "3orel2OLD",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 5,
+          "budget_used": 1,
+          "section": "Abbreviated conjunction and disjunction of three wff's",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "nfsbc1",
+          "depth": 3,
+          "steps": 5,
+          "corpus_proof_lines": 4,
+          "budget_used": 172,
+          "section": "Proper substitution of classes for sets",
+          "lemmas": [
+            "df-sbc",
+            "nfab1",
+            "nfel",
+            "nfxfr"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "df-sbc",
+            "nfab1",
+            "nfel",
+            "nfxfr"
+          ]
+        },
+        {
+          "theorem": "sbievwOLD",
+          "depth": 2,
+          "steps": 2,
+          "corpus_proof_lines": 4,
+          "budget_used": 440,
+          "section": "Define proper substitution",
+          "lemmas": [
+            "$taut",
+            "sbievw"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut",
+            "sbievw"
+          ]
+        },
+        {
+          "theorem": "necon2abii",
+          "depth": 2,
+          "steps": 3,
+          "corpus_proof_lines": 4,
+          "budget_used": 5,
+          "section": "Negated equality",
+          "lemmas": [
+            "$taut",
+            "bitr2i",
+            "df-ne"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut",
+            "bitr2i",
+            "df-ne"
+          ]
+        },
+        {
+          "theorem": "ontri1",
+          "depth": 2,
+          "steps": 4,
+          "corpus_proof_lines": 4,
+          "budget_used": 81,
+          "section": "Ordinals",
+          "lemmas": [
+            "eloni",
+            "ordtri1",
+            "syl2an"
+          ],
+          "same_lemmas_as_corpus": true,
+          "novel_lemmas": []
+        },
+        {
+          "theorem": "mpbii",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Logical equivalence",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "sylbird",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Logical equivalence",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        },
+        {
+          "theorem": "bitr2d",
+          "depth": 1,
+          "steps": 1,
+          "corpus_proof_lines": 4,
+          "budget_used": 1,
+          "section": "Logical equivalence",
+          "lemmas": [
+            "$taut"
+          ],
+          "same_lemmas_as_corpus": false,
+          "novel_lemmas": [
+            "$taut"
+          ]
+        }
+      ]
+    }
+  ]
+}
