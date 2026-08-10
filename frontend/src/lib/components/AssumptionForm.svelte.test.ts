@@ -78,6 +78,21 @@ describe('taking an assumption on', () => {
 		expect(payload.metavariables).toEqual({});
 	});
 
+	it('leaves the form usable after a success, rather than stuck on "Taking on…"', async () => {
+		// A host that keeps the form mounted — and `oncreated` runs outside the try,
+		// so a throw from it can never be reported as the API refusing an assumption
+		// that was in fact created.
+		apiMock.assumptions.create.mockResolvedValue({ id: 'a1' });
+		render(AssumptionForm, { systemId: 'sys1', oncreated: vi.fn(), oncancel: vi.fn() });
+
+		await fillTheMinimum();
+		await userEvent.click(screen.getByRole('button', { name: 'Take on' }));
+
+		await waitFor(() =>
+			expect(screen.getByRole('button', { name: 'Take on' })).toBeEnabled()
+		);
+	});
+
 	it('shows the API refusal verbatim and stays open', async () => {
 		apiMock.assumptions.create.mockRejectedValue(
 			new Error("'lemma-2-1' already names a theorem in this system's library.")

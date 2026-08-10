@@ -31,6 +31,7 @@
 	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import Layers from '@lucide/svelte/icons/layers';
+	import CircleHelp from '@lucide/svelte/icons/circle-help';
 
 	let proof = $state<ProofDetail | null>(null);
 	let systemName = $state<string | null>(null);
@@ -65,6 +66,9 @@
 	// than `provenance`, which on this page is already the *system's* — where an
 	// imported corpus came from, a different fact about a different thing.
 	let restsOn = $state<ProofProvenance | null>(null);
+	// Why that report is missing, when it is missing for a reason other than the
+	// proof simply not having been checked yet.
+	let restsOnUnread = $state<string | null>(null);
 	// Whether the graph has anything to show. An imported proof often carries no
 	// comment at all, and its dependents are then the only thing the card holds.
 	const hasCitations = $derived(
@@ -97,6 +101,7 @@
 		notationError = null;
 		citations = null;
 		restsOn = null;
+		restsOnUnread = null;
 		let detail: ProofDetail;
 		try {
 			detail = await api.proofs.get(id);
@@ -131,10 +136,22 @@
 			const found = await api.proofs.provenance(id);
 			if (seq !== loadSeq) return;
 			restsOn = found;
-		} catch {
+			restsOnUnread = null;
+		} catch (err) {
+			if (seq !== loadSeq) return;
+			// Cleared either way: a stale card surviving a failed re-read would
+			// report the *previous* check's debts as this one's.
+			restsOn = null;
 			// A proof that has never been verified has no resolved citations to read
-			// from, and the route says so with a 409. That is not an error to show:
-			// there is nothing yet to report, and the verify button is right there.
+			// from, and the route says so with a 409 — nothing yet to report, and
+			// the verify button is right there. Anything else is a report that could
+			// not be produced, which silence would render as "rests on nothing".
+			const unverified = err instanceof ApiError && err.status === 409;
+			restsOnUnread = unverified
+				? null
+				: err instanceof ApiError
+					? err.message
+					: String(err);
 		}
 	}
 
@@ -339,6 +356,14 @@
 		     whether to build on it should not learn that at the bottom. -->
 		{#if restsOn}
 			<Provenance provenance={restsOn} />
+		{:else if restsOnUnread}
+			<div class="flex items-start gap-2 rounded-md border px-3 py-2 text-xs">
+				<CircleHelp class="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+				<p class="text-muted-foreground">
+					What this proof rests on could not be read: {restsOnUnread} Nothing here says it
+					rests on nothing.
+				</p>
+			</div>
 		{/if}
 
 		<!-- Ahead of the proof: what a theorem says and who proved it is what a

@@ -53,13 +53,16 @@
 	     one failure this surface exists to prevent. -->
 	<div class="flex items-start gap-2 rounded-md border px-3 py-2">
 		<CircleHelp class="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+		<!-- Unkeyed on purpose: a lemma is named by `proofs.name`, which carries no
+		     unique constraint, so a keyed list would throw on two lemmas sharing a
+		     name rather than list them twice. -->
 		<div class="flex flex-col gap-1 text-xs">
 			<span class="font-medium">This report is incomplete.</span>
 			{#if provenance.unresolved.length > 0}
 				<p class="text-muted-foreground">
 					Cited but not accounted for — no library entry, inference rule or hypothesis
 					answers to
-					{#each provenance.unresolved as label, i (label)}<code
+					{#each provenance.unresolved as label, i}<code
 							class="rounded bg-muted px-1 py-0.5 font-mono">{label}</code
 						>{#if i < provenance.unresolved.length - 1},
 						{/if}{/each}.
@@ -69,7 +72,7 @@
 				<p class="text-muted-foreground">
 					These lemma proofs hold no stored structure, so their own assumptions could not
 					be read —
-					{#each provenance.unread_lemmas as name, i (name)}<code
+					{#each provenance.unread_lemmas as name, i}<code
 							class="rounded bg-muted px-1 py-0.5 font-mono">{name}</code
 						>{#if i < provenance.unread_lemmas.length - 1},
 						{/if}{/each}. Verifying them fills this in.

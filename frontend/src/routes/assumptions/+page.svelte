@@ -13,6 +13,7 @@
 	const PAGE_SIZE = 20;
 
 	let items = $state<Assumption[]>([]);
+	let offset = 0;
 	let total = $state(0);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
@@ -25,8 +26,16 @@
 		loading = true;
 		error = null;
 		try {
-			const page = await api.assumptions.public({ limit: PAGE_SIZE, offset: items.length });
-			items = [...items, ...page.items];
+			const page = await api.assumptions.public({ limit: PAGE_SIZE, offset });
+			// The cursor counts what the server sent, not what survived the merge —
+			// advancing by the kept rows would stall on a page that was entirely
+			// duplicate.
+			offset += page.items.length;
+			// Deduped: this pages by offset over a set that can change between
+			// requests, so a row shifting across the boundary arrives twice — and
+			// twice under one key is a thrown error, not a repeated row.
+			const seen = new Set(items.map((one) => one.id));
+			items = [...items, ...page.items.filter((one) => !seen.has(one.id))];
 			total = page.total;
 		} catch (err) {
 			error = err instanceof ApiError ? err.message : String(err);
@@ -35,8 +44,8 @@
 		}
 	}
 
-	// Untracked: `more` reads `items.length` to page from, and writes `items` —
-	// tracked, the first page would fetch the second, and so on.
+	// Untracked: `more` reads `items` to dedupe against, and writes it — tracked,
+	// the first page would fetch the second, and so on.
 	$effect(() => {
 		untrack(() => {
 			more();
@@ -56,19 +65,27 @@
 		hundred entries rest on is where proving effort buys the most.
 	</p>
 
+	<!-- Banner, not a replacement: a failed "Show more" must leave the rows that
+	     did load — and the button that retries — on the page. -->
 	{#if error}
 		<Alert.Root variant="destructive">
 			<TriangleAlert class="size-4" />
 			<Alert.Title>Could not load assumptions</Alert.Title>
 			<Alert.Description>{error}</Alert.Description>
 		</Alert.Root>
-	{:else if loading && items.length === 0}
+	{/if}
+
+	{#if loading && items.length === 0}
 		<LoadingSpinner message="Loading assumptions…" />
 	{:else if items.length === 0}
-		<EmptyState
-			title="Nothing is assumed"
-			description="Every published system's library rests on proofs and its own declared primitives."
-		/>
+		<!-- Only after a clean read: a first page that failed has nothing to show,
+		     but it has not established that nothing is assumed. -->
+		{#if !error}
+			<EmptyState
+				title="Nothing is assumed"
+				description="Every published system's library rests on proofs and its own declared primitives."
+			/>
+		{/if}
 	{:else}
 		<ul class="flex flex-col gap-2">
 			{#each items as one (one.id)}
@@ -94,16 +111,20 @@
 				</li>
 			{/each}
 		</ul>
+	{/if}
 
-		{#if items.length < total}
-			<div class="flex items-center justify-center gap-3">
+	<!-- Outside the list: a first page that failed shows no rows and no total, and
+	     still needs the retry. -->
+	{#if items.length < total || error}
+		<div class="flex items-center justify-center gap-3">
+			{#if total > 0}
 				<span class="text-xs text-muted-foreground">
 					Showing {items.length} of {total}
 				</span>
-				<Button variant="outline" size="sm" onclick={more} disabled={loading}>
-					{loading ? 'Loading…' : 'Show more'}
-				</Button>
-			</div>
-		{/if}
+			{/if}
+			<Button variant="outline" size="sm" onclick={more} disabled={loading}>
+				{loading ? 'Loading…' : error ? 'Try again' : 'Show more'}
+			</Button>
+		</div>
 	{/if}
 </PageContainer>

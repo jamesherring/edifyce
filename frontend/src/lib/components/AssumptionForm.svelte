@@ -5,7 +5,9 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import * as Alert from '$lib/components/ui/alert';
 	import RepeatableRows from '$lib/components/RepeatableRows.svelte';
+	import SymbolPalette from '$lib/components/SymbolPalette.svelte';
 	import { api, ApiError, type Assumption } from '$lib/api';
+	import type { SymbolEntry } from '$lib/symbols';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
 
@@ -15,13 +17,21 @@
 	// of fields a promotion carries, plus `reason` and `source`.
 	let {
 		systemId,
+		symbols = [],
 		oncreated,
 		oncancel
 	}: {
 		systemId: string;
+		/** The system's own notation, to lead the palette with. */
+		symbols?: SymbolEntry[];
 		oncreated: (assumption: Assumption) => void;
 		oncancel: () => void;
 	} = $props();
+
+	// The palette types into this form's `data-symbol-field` inputs, and needs the
+	// element to find them. Without it those attributes would be decoration: there
+	// is no other way to enter the `→` in the statement placeholder.
+	let form = $state<HTMLFormElement | null>(null);
 
 	let label = $state('');
 	let statement = $state('');
@@ -50,8 +60,9 @@
 		if (!canSave || saving) return;
 		saving = true;
 		error = null;
+		let created: Assumption;
 		try {
-			const created = await api.assumptions.create(systemId, {
+			created = await api.assumptions.create(systemId, {
 				label: label.trim(),
 				statement: statement.trim(),
 				premises: filled(premises),
@@ -64,17 +75,23 @@
 				reason: reason.trim(),
 				source: source.trim() || null
 			});
-			oncreated(created);
 		} catch (err) {
 			// Every refusal here is worth reading verbatim: a label already taken, a
 			// label an inference rule owns, or a statement the grammar cannot read.
 			error = err instanceof ApiError ? err.message : String(err);
 			saving = false;
+			return;
 		}
+		// Outside the try: the assumption exists by now, and a throw from the host's
+		// callback reported as a refusal would say the opposite.
+		saving = false;
+		oncreated(created);
 	}
 </script>
 
-<form class="flex flex-col gap-4 rounded-lg border p-4" onsubmit={save}>
+<form bind:this={form} class="flex flex-col gap-4 rounded-lg border p-4" onsubmit={save}>
+	<SymbolPalette root={form} {symbols} />
+
 	{#if error}
 		<Alert.Root variant="destructive">
 			<TriangleAlert class="size-4" />

@@ -11,6 +11,7 @@
 	import * as Alert from '$lib/components/ui/alert';
 	import { auth } from '$lib/auth.svelte';
 	import { api, ApiError, type Assumption, type FormalSystemDetail } from '$lib/api';
+	import { systemSymbols } from '$lib/symbols';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
 	import Plus from '@lucide/svelte/icons/plus';
 
@@ -22,9 +23,12 @@
 	// A withdrawal that was refused, kept beside the list rather than in the form:
 	// it is a fact about one row, and the 409 says which.
 	let refused = $state<string | null>(null);
+	// The label whose DELETE is in flight, or null.
+	let withdrawing = $state<string | null>(null);
 	let loadSeq = 0;
 
 	const isOwner = $derived(!!auth.user && !!system && system.owner?.id === auth.user.id);
+	const symbols = $derived(systemSymbols(system));
 
 	async function load(systemId: string) {
 		const seq = ++loadSeq;
@@ -54,7 +58,10 @@
 	}
 
 	async function withdraw(label: string) {
-		if (!system) return;
+		// Guarded, not just visually disabled: a second DELETE 404s on a row the
+		// first one withdrew fine, and would report that as a refusal.
+		if (!system || withdrawing) return;
+		withdrawing = label;
 		refused = null;
 		try {
 			await api.assumptions.withdraw(system.id, label);
@@ -64,6 +71,8 @@
 			// would leave those entries citable and reporting no assumptions, so the
 			// API refuses and the reason is worth showing verbatim.
 			refused = err instanceof ApiError ? err.message : String(err);
+		} finally {
+			withdrawing = null;
 		}
 	}
 
@@ -107,7 +116,12 @@
 		</p>
 
 		{#if adding && system}
-			<AssumptionForm systemId={system.id} oncreated={added} oncancel={() => (adding = false)} />
+			<AssumptionForm
+				systemId={system.id}
+				{symbols}
+				oncreated={added}
+				oncancel={() => (adding = false)}
+			/>
 		{/if}
 
 		{#if refused}
@@ -144,8 +158,13 @@
 									{one.dependents === 1 ? 'dependent' : 'dependents'}
 								</Badge>
 								{#if isOwner}
-									<Button variant="ghost" size="sm" onclick={() => withdraw(one.label)}>
-										Withdraw
+									<Button
+										variant="ghost"
+										size="sm"
+										disabled={withdrawing !== null}
+										onclick={() => withdraw(one.label)}
+									>
+										{withdrawing === one.label ? 'Withdrawing…' : 'Withdraw'}
 									</Button>
 								{/if}
 							</div>

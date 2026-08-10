@@ -104,6 +104,25 @@ describe("a system's assumptions", () => {
 		);
 	});
 
+	it('sends one DELETE however many times the button is clicked', async () => {
+		// The second one 404s on a row the first withdrew fine, and that reads as a
+		// refusal for a withdrawal that worked.
+		let release: () => void = () => {};
+		apiMock.assumptions.withdraw.mockReturnValue(
+			new Promise<void>((resolve) => {
+				release = resolve;
+			})
+		);
+		render(Page);
+
+		const button = await screen.findByRole('button', { name: 'Withdraw' });
+		await userEvent.click(button);
+		expect(await screen.findByRole('button', { name: 'Withdrawing…' })).toBeDisabled();
+
+		release();
+		await waitFor(() => expect(apiMock.assumptions.withdraw).toHaveBeenCalledTimes(1));
+	});
+
 	it('keeps the row and names the dependents when withdrawal is refused', async () => {
 		// The one refusal worth reading in full: dropping a debt something rests on
 		// would leave those entries citable and reporting no assumptions.
