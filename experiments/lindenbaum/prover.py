@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from experiments.lindenbaum import certify
+from experiments.lindenbaum import certify, quotient
 from experiments.lindenbaum.unification import (
     RIGID,
     Subst,
@@ -442,6 +442,7 @@ class Prover:
         scorer: Scorer,
         *,
         propositional: bool = False,
+        equivalences: quotient.Equivalences | None = None,
     ) -> None:
         self.terms = terms
         self.index = index
@@ -452,6 +453,9 @@ class Prover:
         #: step, which is aimed squarely at what `run_failures.py` measured — the
         #: wall is the *number of lemmas* a proof needs, not its depth.
         self.propositional = propositional
+        #: The proved biconditionals the closer may rewrite an atom through, or
+        #: None to compute in the free algebra as before.
+        self.equivalences = equivalences
         self._orders: dict[int, list[int]] = {}
 
     def attempt(
@@ -636,11 +640,11 @@ class Prover:
         """
         if any(self.terms.is_flexible(v) for v in self.terms.variables(goal)):
             return False
-        atoms: dict[int, int] = {}
-        abstracted = certify.abstract(self.terms, goal, atoms)
+        abstracted, assumptions = quotient.abstract_problem(
+            self.terms, goal, facts, self.equivalences
+        )
         if abstracted.is_atom:
             return False
-        assumptions = [certify.abstract(self.terms, fact, atoms) for fact in facts]
         return certify.entailed(abstracted, assumptions)
 
     def _difficulty(self, goal: int) -> tuple[int, int]:

@@ -25,6 +25,7 @@ from collections import Counter
 from pathlib import Path
 
 from experiments.lindenbaum import prover as P
+from experiments.lindenbaum import quotient
 from experiments.lindenbaum.checking import Checker
 from experiments.lindenbaum.corpus import Corpus, Theorem, read_corpus
 from experiments.lindenbaum.transport import over_neon_https, over_psycopg
@@ -77,10 +78,14 @@ def run(
     width: int,
     depth: int,
     propositional: bool,
+    use_quotient: bool,
 ) -> dict[str, object]:
     index = P.Index(terms)
+    equivalences = quotient.Equivalences(terms) if use_quotient else None
     scorer = rankers(index, 7)[name]
-    prover = P.Prover(terms, index, scorer, propositional=propositional)
+    prover = P.Prover(
+        terms, index, scorer, propositional=propositional, equivalences=equivalences
+    )
     solved: list[dict[str, object]] = []
     rejected: list[dict[str, str]] = []
     attempted = 0
@@ -110,6 +115,7 @@ def run(
                     {lemma.label: lemma for lemma in index.lemmas},
                     frozenset(freeze(terms, h) for h in hypotheses),
                     frozenset(theorem.disjoint),
+                    equivalences,
                 )
                 complaint = checker.check(
                     found, freeze(terms, terms.canonical(theorem.term))
@@ -137,7 +143,11 @@ def run(
                         }
                     )
             terms.release(mark)
+            if equivalences is not None:
+                equivalences.forget()
 
+        if equivalences is not None:
+            equivalences.add(theorem)
         lemma = P.as_lemma(terms, theorem)
         if lemma is not None:
             at = index.add(lemma)
@@ -191,6 +201,15 @@ def main() -> None:
         action="store_true",
         help="close a subgoal when the hypotheses propositionally entail it",
     )
+    parser.add_argument(
+        "--quotient",
+        action="store_true",
+        help=(
+            "let the closer rewrite an atom through a proved biconditional, so "
+            "it computes modulo the equivalences the corpus has established "
+            "rather than in the free algebra"
+        ),
+    )
     arguments = parser.parse_args()
 
     if arguments.cache is not None and arguments.cache.exists():
@@ -234,6 +253,7 @@ def main() -> None:
             arguments.width,
             arguments.depth,
             arguments.propositional,
+            arguments.quotient,
         )
         proofs = outcome["proofs"]
         deep = sum(1 for p in proofs if p["depth"] >= 3)
@@ -260,6 +280,7 @@ def main() -> None:
             "width": arguments.width,
             "depth": arguments.depth,
             "propositional_closer": arguments.propositional,
+            "equivalence_quotient": arguments.quotient,
         },
         "rankers": [
             {

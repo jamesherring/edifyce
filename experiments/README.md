@@ -408,7 +408,14 @@ The closer with a *random* ranker nearly matches the best ranker without it: on
 this corpus the algebra contributes more than the ranking does. Held out beyond
 the 10k it adds much less — 39 → 42 of 200 — because those goals are about
 arithmetic and cardinality, where a propositional abstraction sees only opaque
-atoms. See [docs/automated-proof-search.md](../docs/automated-proof-search.md) §6.
+atoms.
+
+`--quotient` adds the rest: the closer then computes **modulo the biconditionals
+the corpus has already proved**, so an atom the corpus characterises
+propositionally stops being an atom. `all` goes 58 → **63** of 200 in-corpus and
+42 → **44** held out. Which rewrites to allow is the whole result — the obvious
+test fires on 94.6 % of goals and buys nothing; see
+[docs/automated-proof-search.md](../docs/automated-proof-search.md) §6.
 
 ## What stops the other 78 %
 

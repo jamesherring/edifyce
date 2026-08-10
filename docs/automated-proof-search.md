@@ -255,6 +255,58 @@ propositional step plus three real lemmas. Depth counts are not comparable acros
 the two columns for exactly this reason — the closer turns what was a deep chain
 into one step.
 
+### Quotienting the atoms by proved equivalence
+
+§1 argued the useful algebra is a quotient by a *partial* theory. The closer as
+first built quotients by nothing: its atoms are the maximal subterms whose head
+is not a connective, and two atoms are the same only if structurally identical.
+`A ≠ B` and `¬(A = B)` are two different atoms to it, and the corpus proves them
+equal. [`quotient.py`](../experiments/lindenbaum/quotient.py) closes that gap — a
+premise-free `⊢ A ↔ B` is a licence to rewrite one side into the other inside any
+propositional context, so the closer computes modulo the biconditionals already
+established.
+
+**Which rewrites to allow is the entire result.** The obvious test — take a
+rewrite that *introduces a connective*, since the point is to reveal structure —
+is wrong, and wrong in a way that looks right. Both directions of `df-ne` get
+recorded, so the atom `A = B` is rewritten to `¬(A ≠ B)`: a connective appears, a
+new opaque atom replaces the old one, and the truth table now ranges over twice
+the vocabulary for no gain. That test fired on **94.6 %** of held-out goals and
+bought **nothing** — 41/200 against 42/200 without it.
+
+The test that works asks whether the expansion leaves the problem *less* opaque.
+Every atom the expansion introduces must either be **strictly smaller** than what
+was expanded — a definitional unfolding like `df-ifp`, which trades
+`if(φ, ψ, χ)` for its three components — or **already be an atom of this
+problem**, which is what makes `A ≠ B → ¬(A = B)` worth doing exactly when
+`A = B` is present and pointless when it is not. The second clause is a property
+of the problem rather than of the term, so abstraction becomes two passes: one to
+learn which atoms the goal and its hypotheses already have, one to rewrite under
+that knowledge. Both clauses are well-founded, so the walk terminates on its own.
+
+It then fires on 16.8 % of held-out goals, and the rewrites it picks are the ones
+a person would: `eqss` (`A = B ↔ A ⊆ B ∧ B ⊆ A`), `sspss`, `df-f`, `elpwb`,
+`19.21v`.
+
+| ranker | search alone | + closer | + closer + quotient |
+|---|---|---|---|
+| frequency | 31 (15.5 %) | 51 (25.5 %) | 52 (26.0 %) |
+| analogy | 37 (18.5 %) | 55 (27.5 %) | 59 (29.5 %) |
+| **all** | 42 (21.0 %) | 58 (29.0 %) | **63 (31.5 %)** |
+
+Held out beyond the 10k: **42 → 44** of 200. Modest, consistent across rankers,
+and it moves the needle in the domain where the plain closer was weakest.
+`unssd` now closes in a single step; `cdeqeq` and `cdeqal` in three.
+
+The gain is smaller than the closer's own eight points, and the reason is worth
+stating: an equivalence only helps when the *other* side is propositionally
+useful, and most of set.mm's biconditionals characterise one opaque notion in
+terms of another opaque notion under a quantifier. `dfss2` turns `A ⊆ B` into
+`∀x(x ∈ A → x ∈ B)`, and `∀` is not a connective this algebra has — so the whole
+thing is one atom again and the rewrite is correctly refused. Reaching those
+wants quantifier handling, not a better quotient.
+
+
 **Its reach is domain-bound, and that bound is the next thing to attack.** On
 held-out goals beyond the 10k — arithmetic and cardinality, where the atoms are
 opaque to a propositional abstraction — the closer adds only 1.5 points
@@ -272,16 +324,16 @@ Edifyce's kernel would accept it still needs expanding.
 
 Ordered by what §4 measured, not by what is most interesting.
 
-1. **Quotient the atoms by proved equivalence.** The cheapest large win, and the
-   one the framing of §1 predicts. The closer identifies two atoms only when they
-   are structurally identical; the corpus proves thousands of `↔` theorems, and
-   each is a licence to merge two atoms soundly. That is precisely "quotient by a
-   partial theory" — a real Lindenbaum quotient by the equivalences already
-   established, rather than by nothing (free) or by everything (degenerate).
-2. **Congruence closure over `wceq`/`wcel`, as a second closer.** Where §6's
-   reach ends. The held-out goals are about equalities between opaque terms, and
-   EUF is the same move one level down: quotient the *term* algebra by the
-   equations the corpus proves.
+1. **Quantifier handling in the closer.** Where the quotient's reach ends, and
+   now the clearest bound: most of set.mm's biconditionals characterise one
+   notion in terms of another *under a quantifier*, and `∀` is not a connective
+   this algebra has. A closer that treated `∀`/`∃` as more than opaque — even
+   just prenex handling and instantiation of a bound variable by a term already
+   in the problem — would unlock the `dfss2`-shaped rewrites the current
+   productivity test correctly refuses.
+2. **Congruence closure over `wceq`/`wcel`, as a second closer.** The held-out
+   goals are about equalities between opaque terms, and EUF is the same move one
+   level down: quotient the *term* algebra by the equations the corpus proves.
 3. **Forward saturation meeting the backward search.** The direct answer to a
    breadth wall: backward chaining commits to a decomposition, while a 12-lemma
    proof wants facts assembled bottom-up. Metamath proofs are natively forward,

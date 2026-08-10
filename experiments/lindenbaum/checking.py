@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from experiments.lindenbaum import certify
+from experiments.lindenbaum import certify, quotient
 from experiments.lindenbaum.prover import TAUTOLOGY
 from experiments.lindenbaum.unification import RIGID, Terms, disjoint_holds
 
@@ -39,11 +39,13 @@ class Checker:
         by_label: dict[str, Lemma],
         hypotheses: frozenset[int],
         goal_disjoint: frozenset[tuple[str, str]],
+        equivalences: quotient.Equivalences | None = None,
     ) -> None:
         self.terms = terms
         self.by_label = by_label
         self.hypotheses = hypotheses
         self.goal_disjoint = goal_disjoint
+        self.equivalences = equivalences
         self.counter = 0
         #: One substitution for the whole tree.
         #:
@@ -71,11 +73,9 @@ class Checker:
             # Re-decided here, not trusted: the search's claim is that the
             # hypotheses propositionally entail this, and a truth table settles
             # it in the checker as readily as in the prover.
-            atoms: dict[int, int] = {}
-            abstracted = certify.abstract(terms, conclusion, atoms)
-            assumptions = [
-                certify.abstract(terms, fact, atoms) for fact in sorted(self.hypotheses)
-            ]
+            abstracted, assumptions = quotient.abstract_problem(
+                terms, conclusion, sorted(self.hypotheses), self.equivalences
+            )
             if not certify.entailed(abstracted, assumptions):
                 return Rejection(step.label, "not propositionally entailed")
             return None
