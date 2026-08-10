@@ -2,7 +2,7 @@
 	import PartSection from './PartSection.svelte';
 	import EditSheet from '$lib/components/EditSheet.svelte';
 	import FormField from '$lib/components/FormField.svelte';
-	import RepeatableRows from './RepeatableRows.svelte';
+	import RepeatableRows from '$lib/components/RepeatableRows.svelte';
 	import { Label } from '$lib/components/ui/label';
 	import { Input } from '$lib/components/ui/input';
 	import { Button } from '$lib/components/ui/button';

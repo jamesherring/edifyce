@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/svelte';
 import Page from './+page.svelte';
 import { auth } from '$lib/auth.svelte';
-import { api } from '$lib/api';
+import { api, ApiError } from '$lib/api';
 import type {
 	LabelDescription,
 	ProofDetail,
@@ -17,10 +17,22 @@ vi.mock('$lib/api', () => ({
 	api: {
 		me: vi.fn(),
 		logout: vi.fn().mockResolvedValue(undefined),
-		proofs: { get: vi.fn(), verify: vi.fn(), structure: vi.fn() },
+		proofs: {
+			get: vi.fn(),
+			verify: vi.fn(),
+			structure: vi.fn(),
+			citationGraph: vi.fn(),
+			provenance: vi.fn()
+		},
 		systems: { get: vi.fn() }
 	},
-	ApiError: class ApiError extends Error {}
+	ApiError: class ApiError extends Error {
+		status: number;
+		constructor(status: number, detail: unknown, message?: string) {
+			super(message ?? String(detail));
+			this.status = status;
+		}
+	}
 }));
 
 const apiMock = api as unknown as {
@@ -30,6 +42,8 @@ const apiMock = api as unknown as {
 		get: ReturnType<typeof vi.fn>;
 		verify: ReturnType<typeof vi.fn>;
 		structure: ReturnType<typeof vi.fn>;
+		citationGraph: ReturnType<typeof vi.fn>;
+		provenance: ReturnType<typeof vi.fn>;
 	};
 	systems: { get: ReturnType<typeof vi.fn> };
 };
@@ -148,6 +162,11 @@ beforeEach(async () => {
 	apiMock.logout.mockResolvedValue(undefined);
 	apiMock.me.mockRejectedValue(new Error('anonymous'));
 	apiMock.systems.get.mockRejectedValue(new Error('not readable'));
+	// The two side panels: quiet by default, so a test that does not name them
+	// renders neither.
+	apiMock.proofs.citationGraph.mockRejectedValue(new Error('no graph'));
+	// A 409 — the never-verified case, which renders nothing at all.
+	apiMock.proofs.provenance.mockRejectedValue(new ApiError(409, 'verify it first'));
 	apiMock.proofs.structure.mockResolvedValue({
 		proof_id: 'p1',
 		stored: false,
@@ -368,6 +387,71 @@ describe('the proof detail page', () => {
 
 		await waitFor(() => expect(screen.getByText('x = x')).toBeInTheDocument());
 		expect(screen.queryByText('MP does not apply.')).toBeNull();
+	});
+
+	it('does not ask what a never-checked proof rests on', async () => {
+		// The route reads the citations a check *resolved*, so for an unchecked proof
+		// the request can only 409 — and producing the report costs a chain load.
+		apiMock.proofs.get.mockResolvedValue(detail({ valid: null }));
+		render(Page);
+
+		await waitFor(() => expect(screen.getByText('sqrt2irr')).toBeInTheDocument());
+		expect(apiMock.proofs.provenance).not.toHaveBeenCalled();
+	});
+
+	it('lets the check’s provenance read win over the page load’s, however they land', async () => {
+		// Both reads are for the same proof, so a page-level sequence cannot tell
+		// them apart — and the pre-verify one resolving last would report the
+		// previous check's debts as this one's, or none at all.
+		const assumed = {
+			theorem_id: 't1',
+			formal_system_id: 'sys1',
+			label: 'riemann',
+			statement: 'RH',
+			reason: 'Open.',
+			source: null
+		};
+		let releaseFirst: (value: unknown) => void = () => {};
+		apiMock.proofs.get.mockResolvedValue(detail());
+		apiMock.proofs.verify.mockResolvedValue({
+			success: true,
+			errors: [],
+			proof: { indicator: 'ok', lines: [payloadLine()] }
+		});
+		// The page load's read hangs; the check's read answers immediately.
+		apiMock.proofs.provenance
+			.mockImplementationOnce(
+				() =>
+					new Promise((resolve) => {
+						releaseFirst = resolve;
+					})
+			)
+			.mockResolvedValueOnce({
+				proof_id: 'p1',
+				assumes: [assumed],
+				unresolved: [],
+				unread_lemmas: [],
+				complete: true
+			});
+		await signIn();
+		render(Page);
+
+		await waitFor(() => expect(screen.getByRole('button', { name: 'Verify' })).toBeEnabled());
+		screen.getByRole('button', { name: 'Verify' }).click();
+
+		expect(await screen.findByRole('link', { name: 'riemann' })).toBeInTheDocument();
+
+		// Now the stale one lands, claiming the proof rests on nothing.
+		releaseFirst({
+			proof_id: 'p1',
+			assumes: [],
+			unresolved: [],
+			unread_lemmas: [],
+			complete: true
+		});
+		await waitFor(() =>
+			expect(screen.getByRole('link', { name: 'riemann' })).toBeInTheDocument()
+		);
 	});
 
 	it('shows a cached verdict’s lines instead of the source beside them', async () => {

@@ -271,9 +271,17 @@ async def list_public_assumptions(
         .join(FormalSystem, FormalSystem.id == PromotedTheoremRow.system_id)
         .outerjoin(dependents, dependents.c.assumption_id == PromotedTheoremRow.id)
         .where(*where)
-        # `label` breaks the tie: dependents is zero for most of them, and a page
-        # boundary that shuffles between requests loses rows silently.
-        .order_by(func.coalesce(dependents.c.dependents, 0).desc(), PromotedTheoremRow.label)
+        # `label` then `id` break the tie: dependents is zero for most of them, and
+        # a page boundary that shuffles between requests loses rows silently. `id`
+        # is what makes the order *total* — a label is unique within one system and
+        # this spans every published one, so two systems assuming `ax-choice` with
+        # the same dependent count would otherwise be free to swap places between
+        # the two requests that straddle them, dropping one and repeating the other.
+        .order_by(
+            func.coalesce(dependents.c.dependents, 0).desc(),
+            PromotedTheoremRow.label,
+            PromotedTheoremRow.id,
+        )
     )
     rows = (
         await session.execute(stmt.limit(params.limit).offset(params.offset))

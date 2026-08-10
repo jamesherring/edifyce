@@ -9,6 +9,7 @@
 	import LoadingSpinner from '$lib/components/LoadingSpinner.svelte';
 	import ProofResults from '$lib/components/ProofResults.svelte';
 	import Citations from '$lib/components/Citations.svelte';
+	import Provenance from '$lib/components/Provenance.svelte';
 	import Documentation from '$lib/components/Documentation.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
@@ -19,6 +20,7 @@
 		ApiError,
 		type ProofCitations,
 		type ProofDetail,
+		type ProofProvenance,
 		type ProofStructure,
 		type VerifyResponse
 	} from '$lib/api';
@@ -29,6 +31,7 @@
 	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import Layers from '@lucide/svelte/icons/layers';
+	import CircleHelp from '@lucide/svelte/icons/circle-help';
 
 	let proof = $state<ProofDetail | null>(null);
 	let systemName = $state<string | null>(null);
@@ -59,6 +62,13 @@
 	// read is served by every create and patch too, and none of those wants two
 	// extra joins over a corpus-sized `proof_lines`.
 	let citations = $state<ProofCitations | null>(null);
+	// What the proof rests on that nobody proved. Named for the question rather
+	// than `provenance`, which on this page is already the *system's* — where an
+	// imported corpus came from, a different fact about a different thing.
+	let restsOn = $state<ProofProvenance | null>(null);
+	// Why that report is missing, when it is missing for a reason other than the
+	// proof simply not having been checked yet.
+	let restsOnUnread = $state<string | null>(null);
 	// Whether the graph has anything to show. An imported proof often carries no
 	// comment at all, and its dependents are then the only thing the card holds.
 	const hasCitations = $derived(
@@ -68,6 +78,9 @@
 	// Bumped on every load so late responses from a previous id are dropped.
 	let loadSeq = 0;
 	let verifySeq = 0;
+	// Per-read tokens for the two side panels a check re-reads: see `loadRestsOn`.
+	let citationsSeq = 0;
+	let restsOnSeq = 0;
 	let notationSeq = 0;
 
 	async function load(id: string) {
@@ -76,6 +89,10 @@
 		// would otherwise render its lines, or its error, inside this page.
 		verifySeq++;
 		notationSeq++;
+		// Bumped here as well as at each call site: a detail fetch that fails returns
+		// before those calls, and the previous proof's panel reads would land anyway.
+		citationsSeq++;
+		restsOnSeq++;
 		verifying = false;
 		reading = false;
 		loading = true;
@@ -90,6 +107,8 @@
 		structure = null;
 		notationError = null;
 		citations = null;
+		restsOn = null;
+		restsOnUnread = null;
 		let detail: ProofDetail;
 		try {
 			detail = await api.proofs.get(id);
@@ -115,13 +134,49 @@
 		// Best-effort system name for the header link (readable proofs reference a
 		// readable system, so this normally resolves).
 		void loadSystemName(detail.formal_system_id, seq);
-		void loadCitations(id, seq);
+		void loadCitations(id);
+		// Only for a proof that has been checked. `valid` is null until one has run,
+		// and the route reads the citations a check *resolved* — so for the rest this
+		// is a request that can only 409, and the report costs a chain load to
+		// produce. Verifying refetches it (see `verify`).
+		if (detail.valid !== null) void loadRestsOn(id);
 	}
 
-	async function loadCitations(id: string, seq: number) {
+	async function loadRestsOn(id: string) {
+		// Its own token, not `loadSeq`: a check re-reads this for the *same* proof,
+		// so a page-level sequence cannot tell the pre-verify read from the one the
+		// check started — and the older one resolving last would report the
+		// previous check's debts as this one's.
+		const seq = ++restsOnSeq;
+		try {
+			const found = await api.proofs.provenance(id);
+			if (seq !== restsOnSeq) return;
+			restsOn = found;
+			restsOnUnread = null;
+		} catch (err) {
+			if (seq !== restsOnSeq) return;
+			// Cleared either way: a stale card surviving a failed re-read would
+			// report the *previous* check's debts as this one's.
+			restsOn = null;
+			// A proof that has never been verified has no resolved citations to read
+			// from, and the route says so with a 409 — nothing yet to report, and
+			// the verify button is right there. Anything else is a report that could
+			// not be produced, which silence would render as "rests on nothing".
+			const unverified = err instanceof ApiError && err.status === 409;
+			restsOnUnread = unverified
+				? null
+				: err instanceof ApiError
+					? err.message
+					: String(err);
+		}
+	}
+
+	async function loadCitations(id: string) {
+		// Same reasoning as `loadRestsOn`: a check re-reads the graph for this proof.
+		const seq = ++citationsSeq;
 		try {
 			const found = await api.proofs.citationGraph(id);
-			if (seq !== loadSeq) return;
+			if (seq !== citationsSeq) return;
 			citations = found;
 		} catch {
 			// Leave the graph unshown. It is context around the proof, not the proof:
@@ -243,9 +298,13 @@
 			void readIn(notation);
 			// The same staleness, one step further out: "Cites" is derived from the
 			// rules the stored lines resolved to, so a check that rewrote them
-			// rewrote it. Keyed on `loadSeq` because it belongs to this proof rather
-			// than to this check.
-			void loadCitations(proof.id, loadSeq);
+			// rewrote it. Both of these carry their own read tokens rather than this
+			// check's — a read belongs to the proof, and outlives the check that
+			// started it.
+			void loadCitations(proof.id);
+			// A check resolves the citations this reads, so a proof verified for the
+			// first time goes from "nothing to report" to its actual debts.
+			void loadRestsOn(proof.id);
 		} catch (err) {
 			if (seq !== verifySeq) return;
 			requestError = err instanceof ApiError ? err.message : String(err);
@@ -310,6 +369,21 @@
 				</div>
 			{/snippet}
 		</EntityHeader>
+
+		<!-- Ahead of everything, including the description: that a proof is
+		     *conditional* changes what reading it means, and a reader deciding
+		     whether to build on it should not learn that at the bottom. -->
+		{#if restsOn}
+			<Provenance provenance={restsOn} />
+		{:else if restsOnUnread}
+			<div class="flex items-start gap-2 rounded-md border px-3 py-2 text-xs">
+				<CircleHelp class="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+				<p class="text-muted-foreground">
+					What this proof rests on could not be read: {restsOnUnread} Nothing here says it
+					rests on nothing.
+				</p>
+			</div>
+		{/if}
 
 		<!-- Ahead of the proof: what a theorem says and who proved it is what a
 		     reader wants first, and the lines are long. -->
