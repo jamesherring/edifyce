@@ -343,6 +343,32 @@ def test_one_assumption_names_the_entries_that_rest_on_it(db, client):
     assert response.json()["dependents"] == 1
 
 
+def test_the_register_orders_two_systems_assuming_the_same_label(db, client):
+    # `(dependents, label)` is not a total order: a label is unique within one
+    # system and the register spans every published one, so two systems assuming
+    # `peirce` with nothing resting on either are free to swap places between the
+    # two requests that straddle them — dropping one and repeating the other,
+    # which the client's dedupe would then render as a complete list one short.
+    # `id` is what settles it. Found in review.
+    pc, fol, _zfc = tower(db, client, "assume-tied@example.com")
+    assert assume(client, pc)[0] == 201
+    assert assume(client, fol)[0] == 201
+
+    items = client.get("/api/assumptions/public").json()["items"]
+    tied = [item for item in items if item["label"] == "peirce"]
+    assert len(tied) == 2
+    assert [item["dependents"] for item in tied] == [0, 0]
+    assert [item["id"] for item in tied] == sorted(item["id"] for item in tied)
+
+    # And paging through them one at a time sees each exactly once.
+    paged = [
+        client.get("/api/assumptions/public", params={"limit": 1, "offset": offset})
+        .json()["items"][0]["id"]
+        for offset in range(len(items))
+    ]
+    assert paged == [item["id"] for item in items]
+
+
 # ---------------------------------------------------------------------------
 # Rejections, one per guard
 # ---------------------------------------------------------------------------

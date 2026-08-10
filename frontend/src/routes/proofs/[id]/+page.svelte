@@ -135,7 +135,11 @@
 		// readable system, so this normally resolves).
 		void loadSystemName(detail.formal_system_id, seq);
 		void loadCitations(id);
-		void loadRestsOn(id);
+		// Only for a proof that has been checked. `valid` is null until one has run,
+		// and the route reads the citations a check *resolved* — so for the rest this
+		// is a request that can only 409, and the report costs a chain load to
+		// produce. Verifying refetches it (see `verify`).
+		if (detail.valid !== null) void loadRestsOn(id);
 	}
 
 	async function loadRestsOn(id: string) {
@@ -294,8 +298,9 @@
 			void readIn(notation);
 			// The same staleness, one step further out: "Cites" is derived from the
 			// rules the stored lines resolved to, so a check that rewrote them
-			// rewrote it. Keyed on `loadSeq` because it belongs to this proof rather
-			// than to this check.
+			// rewrote it. Both of these carry their own read tokens rather than this
+			// check's — a read belongs to the proof, and outlives the check that
+			// started it.
 			void loadCitations(proof.id);
 			// A check resolves the citations this reads, so a proof verified for the
 			// first time goes from "nothing to report" to its actual debts.

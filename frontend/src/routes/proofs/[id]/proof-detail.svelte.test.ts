@@ -389,6 +389,16 @@ describe('the proof detail page', () => {
 		expect(screen.queryByText('MP does not apply.')).toBeNull();
 	});
 
+	it('does not ask what a never-checked proof rests on', async () => {
+		// The route reads the citations a check *resolved*, so for an unchecked proof
+		// the request can only 409 — and producing the report costs a chain load.
+		apiMock.proofs.get.mockResolvedValue(detail({ valid: null }));
+		render(Page);
+
+		await waitFor(() => expect(screen.getByText('sqrt2irr')).toBeInTheDocument());
+		expect(apiMock.proofs.provenance).not.toHaveBeenCalled();
+	});
+
 	it('lets the check’s provenance read win over the page load’s, however they land', async () => {
 		// Both reads are for the same proof, so a page-level sequence cannot tell
 		// them apart — and the pre-verify one resolving last would report the

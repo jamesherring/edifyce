@@ -78,6 +78,23 @@ describe('taking an assumption on', () => {
 		expect(payload.metavariables).toEqual({});
 	});
 
+	it('does not submit when Enter is pressed in the symbol palette’s search box', async () => {
+		// The palette's search box is a text input. Inside the form it would be a
+		// form control, and Enter in a form with a submit button submits it — POSTing
+		// a half-written assumption. It lives outside the form for that reason, and
+		// still types into the form's fields.
+		apiMock.assumptions.create.mockResolvedValue({ id: 'a1' });
+		render(AssumptionForm, { systemId: 'sys1', oncreated: vi.fn(), oncancel: vi.fn() });
+
+		// Filled first, or `save` would refuse on its own and the test would pass
+		// whichever side of the form the palette sat on.
+		await fillTheMinimum();
+		await userEvent.click(screen.getByRole('button', { name: /symbol/i }));
+		await userEvent.type(screen.getByPlaceholderText(/Search symbols/i), 'subset{Enter}');
+
+		expect(apiMock.assumptions.create).not.toHaveBeenCalled();
+	});
+
 	it('leaves the form usable after a success, rather than stuck on "Taking on…"', async () => {
 		// A host that keeps the form mounted — and `oncreated` runs outside the try,
 		// so a throw from it can never be reported as the API refusing an assumption

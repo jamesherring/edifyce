@@ -89,135 +89,141 @@
 	}
 </script>
 
-<form bind:this={form} class="flex flex-col gap-4 rounded-lg border p-4" onsubmit={save}>
+<div class="flex flex-col gap-3 rounded-lg border p-4">
+	<!-- Outside the form, as every other call site keeps it: the palette's own
+	     search box is a text input, and inside a form Enter in it would submit the
+	     half-written assumption. It still types into this form's fields — `root`
+	     is the element, not the ancestry. -->
 	<SymbolPalette root={form} {symbols} />
 
-	{#if error}
-		<Alert.Root variant="destructive">
-			<TriangleAlert class="size-4" />
-			<Alert.Title>Could not take this on</Alert.Title>
-			<Alert.Description>{error}</Alert.Description>
-		</Alert.Root>
-	{/if}
+	<form bind:this={form} class="flex flex-col gap-4" onsubmit={save}>
+		{#if error}
+			<Alert.Root variant="destructive">
+				<TriangleAlert class="size-4" />
+				<Alert.Title>Could not take this on</Alert.Title>
+				<Alert.Description>{error}</Alert.Description>
+			</Alert.Root>
+		{/if}
 
-	<div class="space-y-2">
-		<Label for="assumption-label">Label</Label>
-		<Input
-			id="assumption-label"
-			bind:value={label}
-			class="font-mono"
-			placeholder="e.g. lemma-2-1"
-			maxlength={128}
-		/>
-		<p class="text-xs text-muted-foreground">
-			What a proof cites it by. Proving it later and promoting the proof under this same
-			label discharges the assumption rather than leaving it beside the theorem.
-		</p>
-	</div>
-
-	<div class="space-y-2">
-		<Label for="assumption-statement">Statement</Label>
-		<Textarea
-			id="assumption-statement"
-			bind:value={statement}
-			rows={2}
-			class="font-mono"
-			data-symbol-field
-			placeholder="e.g. (p → (q → p))"
-		/>
-		<p class="text-xs text-muted-foreground">
-			Written in this system's own notation, as a theorem's is.
-		</p>
-	</div>
-
-	<RepeatableRows
-		bind:items={premises}
-		label="Premises"
-		hint="(optional)"
-		description="Hypotheses a citation must supply, in order."
-		addLabel="Add premise"
-		removeLabel="Remove premise"
-		blank={() => ({ value: '' })}
-	>
-		{#snippet row(premise)}
+		<div class="space-y-2">
+			<Label for="assumption-label">Label</Label>
 			<Input
-				bind:value={premise.value}
+				id="assumption-label"
+				bind:value={label}
+				class="font-mono"
+				placeholder="e.g. lemma-2-1"
+				maxlength={128}
+			/>
+			<p class="text-xs text-muted-foreground">
+				What a proof cites it by. Proving it later and promoting the proof under this same
+				label discharges the assumption rather than leaving it beside the theorem.
+			</p>
+		</div>
+
+		<div class="space-y-2">
+			<Label for="assumption-statement">Statement</Label>
+			<Textarea
+				id="assumption-statement"
+				bind:value={statement}
+				rows={2}
 				class="font-mono"
 				data-symbol-field
-				placeholder="e.g. p"
-				maxlength={512}
+				placeholder="e.g. (p → (q → p))"
 			/>
-		{/snippet}
-	</RepeatableRows>
+			<p class="text-xs text-muted-foreground">
+				Written in this system's own notation, as a theorem's is.
+			</p>
+		</div>
 
-	<RepeatableRows
-		bind:items={metavariables}
-		label="Metavariables"
-		hint="(optional)"
-		description="Leaves that stand for any term of a sort, making this a schema rather than one statement."
-		addLabel="Add metavariable"
-		removeLabel="Remove metavariable"
-		blank={() => ({ var: '', sort: '' })}
-	>
-		{#snippet row(metavariable)}
-			<Input bind:value={metavariable.var} placeholder="var" class="font-mono" />
-			<span class="text-muted-foreground">:</span>
-			<Input bind:value={metavariable.sort} placeholder="sort" class="font-mono" />
-		{/snippet}
-	</RepeatableRows>
+		<RepeatableRows
+			bind:items={premises}
+			label="Premises"
+			hint="(optional)"
+			description="Hypotheses a citation must supply, in order."
+			addLabel="Add premise"
+			removeLabel="Remove premise"
+			blank={() => ({ value: '' })}
+		>
+			{#snippet row(premise)}
+				<Input
+					bind:value={premise.value}
+					class="font-mono"
+					data-symbol-field
+					placeholder="e.g. p"
+					maxlength={512}
+				/>
+			{/snippet}
+		</RepeatableRows>
 
-	<RepeatableRows
-		bind:items={distinct}
-		label="Distinct variables"
-		hint="(optional)"
-		description="One disjoint(…) line each, as a rule's provisos are written."
-		addLabel="Add proviso"
-		removeLabel="Remove proviso"
-		blank={() => ({ value: '' })}
-	>
-		{#snippet row(proviso)}
+		<RepeatableRows
+			bind:items={metavariables}
+			label="Metavariables"
+			hint="(optional)"
+			description="Leaves that stand for any term of a sort, making this a schema rather than one statement."
+			addLabel="Add metavariable"
+			removeLabel="Remove metavariable"
+			blank={() => ({ var: '', sort: '' })}
+		>
+			{#snippet row(metavariable)}
+				<Input bind:value={metavariable.var} placeholder="var" class="font-mono" />
+				<span class="text-muted-foreground">:</span>
+				<Input bind:value={metavariable.sort} placeholder="sort" class="font-mono" />
+			{/snippet}
+		</RepeatableRows>
+
+		<RepeatableRows
+			bind:items={distinct}
+			label="Distinct variables"
+			hint="(optional)"
+			description="One disjoint(…) line each, as a rule's provisos are written."
+			addLabel="Add proviso"
+			removeLabel="Remove proviso"
+			blank={() => ({ value: '' })}
+		>
+			{#snippet row(proviso)}
+				<Input
+					bind:value={proviso.value}
+					class="font-mono"
+					data-symbol-field
+					placeholder="e.g. disjoint(x, p)"
+					maxlength={512}
+				/>
+			{/snippet}
+		</RepeatableRows>
+
+		<div class="space-y-2">
+			<Label for="assumption-reason">Reason</Label>
+			<Textarea
+				id="assumption-reason"
+				bind:value={reason}
+				rows={2}
+				placeholder="Why it is believed true, and why it is not proved here."
+			/>
+			<p class="text-xs text-muted-foreground">
+				Required. An assumption with no reason is an axiom nobody remembers adopting.
+			</p>
+		</div>
+
+		<div class="space-y-2">
+			<Label for="assumption-source">
+				Source <span class="text-muted-foreground">(optional)</span>
+			</Label>
 			<Input
-				bind:value={proviso.value}
-				class="font-mono"
-				data-symbol-field
-				placeholder="e.g. disjoint(x, p)"
-				maxlength={512}
+				id="assumption-source"
+				bind:value={source}
+				placeholder="A DOI, arXiv id, URL or textbook reference"
 			/>
-		{/snippet}
-	</RepeatableRows>
+		</div>
 
-	<div class="space-y-2">
-		<Label for="assumption-reason">Reason</Label>
-		<Textarea
-			id="assumption-reason"
-			bind:value={reason}
-			rows={2}
-			placeholder="Why it is believed true, and why it is not proved here."
-		/>
-		<p class="text-xs text-muted-foreground">
-			Required. An assumption with no reason is an axiom nobody remembers adopting.
-		</p>
-	</div>
-
-	<div class="space-y-2">
-		<Label for="assumption-source">
-			Source <span class="text-muted-foreground">(optional)</span>
-		</Label>
-		<Input
-			id="assumption-source"
-			bind:value={source}
-			placeholder="A DOI, arXiv id, URL or textbook reference"
-		/>
-	</div>
-
-	<div class="flex justify-end gap-2">
-		<Button type="button" variant="ghost" onclick={oncancel} disabled={saving}>Cancel</Button>
-		<Button type="submit" disabled={!canSave || saving}>
-			{#if saving}
-				<LoaderCircle class="size-4 animate-spin" /> Taking on…
-			{:else}
-				Take on
-			{/if}
-		</Button>
-	</div>
-</form>
+		<div class="flex justify-end gap-2">
+			<Button type="button" variant="ghost" onclick={oncancel} disabled={saving}>Cancel</Button>
+			<Button type="submit" disabled={!canSave || saving}>
+				{#if saving}
+					<LoaderCircle class="size-4 animate-spin" /> Taking on…
+				{:else}
+					Take on
+				{/if}
+			</Button>
+		</div>
+	</form>
+</div>
