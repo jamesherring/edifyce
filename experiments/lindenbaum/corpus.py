@@ -66,6 +66,13 @@ class Theorem:
     #: A theorem with hypotheses asserts a *rule*, not `⊢ φ`. Only a theorem
     #: with none of them can serve as a generator; see `formulas.py`.
     premises: int
+    #: Premise conclusion terms, in order; ``-1`` where none was stored. What
+    #: makes a theorem usable as a *rule* by the prover rather than only as a
+    #: fact.
+    premise_terms: tuple[int, ...]
+    #: `$d` constraints as metavariable-name pairs. The prover checks them; a
+    #: search that ignored them would propose steps Metamath refuses.
+    disjoint: tuple[tuple[str, str], ...]
     #: The corpus section it was declared in — the experiment's "family".
     section: str
     #: Which layer declared it, for a layered import.
@@ -102,6 +109,10 @@ class Corpus:
     theorems: list[Theorem]
     #: Citing label → the labels its proof cites.
     cites: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    #: Label → how many lines its stored proof has. The measure of "multi-step"
+    #: that does not come from the prover, so it can say what it found without
+    #: grading its own homework.
+    proof_length: dict[str, int] = field(default_factory=dict)
 
     def closed_theorems(self) -> list[Theorem]:
         return [t for t in self.theorems if t.closed]
@@ -206,11 +217,50 @@ def read_corpus(query: Query, systems: Sequence[str] | None = None) -> Corpus:
         edges[index[str(parent_id)]].append((_int(position), index[str(child_id)]))
     children = [tuple(child for _, child in sorted(slots)) for slots in edges]
 
+    # A statement that is a bare metavariable — `⊢ ph`, which is what `ax-mp`
+    # takes — composes to a `Var`, and the store keeps no term for one. Losing
+    # those would cost the prover modus ponens itself, so the single token is
+    # resolved back to the variable it names. Everything else stays a miss.
+    variable_named = {
+        name: term
+        for term, (row_kind, name) in enumerate(zip(kind, var_name, strict=True))
+        if row_kind == "var" and name is not None
+    }
+
+    def _resolve(term_id: Any, statement: Any) -> int:
+        if term_id is not None:
+            return index[str(term_id)]
+        token = str(statement or "").strip()
+        return variable_named.get(token, -1)
+
+    premise_rows = query(
+        "select p.theorem_id::text, p.position, p.term_id::text, p.statement "
+        "from promoted_theorem_premises p join promoted_theorems t on t.id = p.theorem_id "
+        f"where t.system_id in ({scope})"
+    )
+    premises_of: dict[str, list[tuple[int, int]]] = {}
+    for theorem_id, position, term_id, statement in premise_rows:
+        premises_of.setdefault(str(theorem_id), []).append(
+            (_int(position), _resolve(term_id, statement))
+        )
+
+    disjoint_rows = query(
+        "select s.promoted_theorem_id::text, s.left_name, s.right_name "
+        "from side_conditions s join promoted_theorems t on t.id = s.promoted_theorem_id "
+        f"where s.kind = 'disjoint' and t.system_id in ({scope})"
+    )
+    disjoint_of: dict[str, list[tuple[str, str]]] = {}
+    for theorem_id, left, right in disjoint_rows:
+        if left is None or right is None:
+            continue
+        disjoint_of.setdefault(str(theorem_id), []).append((str(left), str(right)))
+
     sections = _section_paths(query, scope)
     theorem_rows = query(
         """
         select t.label, t.position, t.statement_term_id::text, t.primitive,
-               coalesce(premise.count, 0), p.folder_id::text, t.system_id::text
+               coalesce(premise.count, 0), p.folder_id::text, t.system_id::text,
+               t.id::text, t.statement
         from promoted_theorems t
         -- An imported theorem's `proved_by_id` is not populated by the corpus
         -- walk, but a proof carries the label as its name and the pair is unique
@@ -228,15 +278,20 @@ def read_corpus(query: Query, systems: Sequence[str] | None = None) -> Corpus:
         Theorem(
             label=str(label),
             position=_int(position),
-            term=index[str(term_id)] if term_id is not None else -1,
+            term=_resolve(term_id, statement),
             primitive=_bool(primitive),
             premises=_int(premises),
+            premise_terms=tuple(
+                term for _, term in sorted(premises_of.get(str(identifier), []))
+            ),
+            disjoint=tuple(sorted(set(disjoint_of.get(str(identifier), [])))),
             section=sections.get(str(folder), "") if folder is not None else "",
             system=system_of[str(system_id)],
         )
-        for label, position, term_id, primitive, premises, folder, system_id in (
-            theorem_rows
-        )
+        for (
+            label, position, term_id, primitive, premises, folder, system_id,
+            identifier, statement,
+        ) in theorem_rows
     ]
 
     cited: dict[str, list[str]] = {}
@@ -247,8 +302,15 @@ def read_corpus(query: Query, systems: Sequence[str] | None = None) -> Corpus:
     ):
         cited.setdefault(str(source), []).append(str(target))
 
+    lengths = query(
+        "select p.name, count(*) from proof_lines line "
+        "join proofs p on p.id = line.proof_id "
+        f"where p.formal_system_id in ({scope}) group by p.name"
+    )
+
     return Corpus(
         systems=[name for _, name in chosen],
+        proof_length={str(name): _int(count) for name, count in lengths},
         kind=kind,
         constructor=constructor,
         literal=literal,
