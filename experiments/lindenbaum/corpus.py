@@ -113,6 +113,10 @@ class Corpus:
     #: that does not come from the prover, so it can say what it found without
     #: grading its own homework.
     proof_length: dict[str, int] = field(default_factory=dict)
+    #: Label → the longest chain of justifications in its stored proof. Lines
+    #: count *work*; this counts **nesting**, which is what a depth-limited
+    #: backward search is actually up against.
+    proof_depth: dict[str, int] = field(default_factory=dict)
 
     def closed_theorems(self) -> list[Theorem]:
         return [t for t in self.theorems if t.closed]
@@ -308,9 +312,52 @@ def read_corpus(query: Query, systems: Sequence[str] | None = None) -> Corpus:
         f"where p.formal_system_id in ({scope}) group by p.name"
     )
 
+    # The stored proof's justification DAG, for its longest chain. A line's
+    # antecedents always precede it, so one pass in `position` order settles
+    # every depth before it is needed.
+    line_rows = list(
+        paged(
+            query,
+            "select line.id::text, line.proof_id::text, line.position "
+            "from proof_lines line join proofs p on p.id = line.proof_id "
+            f"where p.formal_system_id in ({scope}) {{page}}",
+            "line.id",
+        )
+    )
+    proof_of = {str(row[0]): str(row[1]) for row in line_rows}
+    order_of = {str(row[0]): _int(row[2]) for row in line_rows}
+    antecedents: dict[str, list[str]] = {}
+    for line_id, parent in paged(
+        query,
+        "select a.line_id::text, a.antecedent_line_id::text "
+        "from proof_line_antecedents a join proof_lines line on line.id = a.line_id "
+        "join proofs p on p.id = line.proof_id "
+        f"where a.antecedent_line_id is not null and p.formal_system_id in ({scope}) "
+        "{page}",
+        "a.line_id",
+        unique=False,
+    ):
+        antecedents.setdefault(str(line_id), []).append(str(parent))
+    proof_name = query(
+        f"select id::text, name from proofs where formal_system_id in ({scope})"
+    )
+    label_of_proof = {str(row[0]): str(row[1]) for row in proof_name}
+    depth_of_line: dict[str, int] = {}
+    deepest: dict[str, int] = {}
+    for line_id in sorted(order_of, key=lambda key: (proof_of[key], order_of[key])):
+        depth = 1 + max(
+            (depth_of_line.get(parent, 0) for parent in antecedents.get(line_id, ())),
+            default=0,
+        )
+        depth_of_line[line_id] = depth
+        label = label_of_proof.get(proof_of[line_id])
+        if label is not None and depth > deepest.get(label, 0):
+            deepest[label] = depth
+
     return Corpus(
         systems=[name for _, name in chosen],
         proof_length={str(name): _int(count) for name, count in lengths},
+        proof_depth=deepest,
         kind=kind,
         constructor=constructor,
         literal=literal,

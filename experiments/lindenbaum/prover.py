@@ -323,6 +323,36 @@ def analogy_scorer(index: Index, neighbours: int = 24) -> Scorer:
     return score
 
 
+class OracleScorer:
+    """Ranks the lemmas the real proof cited first. Deliberately cheating.
+
+    Not a method — a *measuring instrument*. Comparing a computable ranker
+    against this separates the two ways a proof search fails: the ranking never
+    offered the right lemma, or the search could not use it when handed it. The
+    gap between a real ranker and the oracle is what better retrieval could still
+    buy; what the oracle *itself* fails to solve is what no amount of retrieval
+    will fix.
+    """
+
+    def __init__(self, index: Index) -> None:
+        self.index = index
+        self.wanted: frozenset[str] = frozenset()
+        self._mask = np.zeros(0, dtype=np.float32)
+
+    def aim(self, labels: frozenset[str]) -> None:
+        self.wanted = labels
+        self._mask = np.zeros(len(self.index.lemmas), dtype=np.float32)
+        for label in labels:
+            at = self.index.by_label.get(label)
+            if at is not None:
+                self._mask[at] = 1.0
+
+    def __call__(self, goal: int, candidates: Sequence[int]) -> np.ndarray:
+        if len(self._mask) < len(self.index.lemmas):
+            self.aim(self.wanted)
+        return self._mask[candidates]
+
+
 def size_scorer(index: Index) -> Scorer:
     """Prefer a lemma whose conclusion is close to the goal in size."""
 
@@ -405,7 +435,9 @@ class Prover:
         self.scorer = scorer
         self._orders: dict[int, list[int]] = {}
 
-    def attempt(self, attempt: Attempt, budget: Budget) -> Step | None:
+    def attempt(
+        self, attempt: Attempt, budget: Budget, *, allow_open: bool = False
+    ) -> Step | None:
         self._orders = {}
         goal = freeze(self.terms, attempt.goal)
         facts = tuple(freeze(self.terms, h) for h in attempt.hypotheses)
@@ -425,7 +457,7 @@ class Prover:
                 # obligations this does not track. Rather than hand the checker
                 # something it must refuse, refuse it here: the contract is that
                 # a returned proof verifies.
-                if not _open(self.terms, tree):
+                if allow_open or not _open(self.terms, tree):
                     return tree
             if budget.used > budget.steps:
                 break

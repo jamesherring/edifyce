@@ -1,0 +1,2253 @@
+{
+  "corpus": {
+    "theorems": 10177,
+    "systems": [
+      "Metamath"
+    ]
+  },
+  "budget": {
+    "steps": 1200,
+    "depth": 5,
+    "width": 14,
+    "deep_steps": 4000,
+    "deep_depth": 9,
+    "deep_width": 24
+  },
+  "goals": 150,
+  "outcomes": {
+    "solved": 33,
+    "budget": 1,
+    "retrieval": 10,
+    "structural": 106
+  },
+  "profiles": {
+    "solved": {
+      "goals": 33,
+      "share": 0.22,
+      "median_corpus_lines": 3,
+      "median_corpus_depth": 2,
+      "median_distinct_lemmas": 3,
+      "with_hypotheses": 14,
+      "deeper_than_search_cap": 0,
+      "cites_something_outside_the_library": 14,
+      "top_sections": [
+        [
+          "Logical conjunction",
+          7
+        ],
+        [
+          "Abbreviated conjunction and disjunction of three wff's",
+          4
+        ],
+        [
+          "The empty set",
+          4
+        ],
+        [
+          "Functions",
+          2
+        ],
+        [
+          "Logical implication",
+          1
+        ],
+        [
+          "Logical equivalence",
+          1
+        ]
+      ],
+      "top_roots": [
+        [
+          "wi",
+          19
+        ],
+        [
+          "wb",
+          7
+        ],
+        [
+          "wceq",
+          4
+        ],
+        [
+          "wnf",
+          1
+        ],
+        [
+          "wne",
+          1
+        ],
+        [
+          "wn",
+          1
+        ]
+      ]
+    },
+    "budget": {
+      "goals": 1,
+      "share": 0.006666666666666667,
+      "median_corpus_lines": 4,
+      "median_corpus_depth": 3,
+      "median_distinct_lemmas": 4,
+      "with_hypotheses": 1,
+      "deeper_than_search_cap": 0,
+      "cites_something_outside_the_library": 1,
+      "top_sections": [
+        [
+          "Logical equivalence",
+          1
+        ]
+      ],
+      "top_roots": [
+        [
+          "wi",
+          1
+        ]
+      ]
+    },
+    "retrieval": {
+      "goals": 10,
+      "share": 0.06666666666666667,
+      "median_corpus_lines": 3,
+      "median_corpus_depth": 3,
+      "median_distinct_lemmas": 3,
+      "with_hypotheses": 5,
+      "deeper_than_search_cap": 0,
+      "cites_something_outside_the_library": 5,
+      "top_sections": [
+        [
+          "Logical conjunction",
+          1
+        ],
+        [
+          "Implicational Calculus",
+          1
+        ],
+        [
+          "The empty domain of discourse",
+          1
+        ],
+        [
+          "Define proper substitution",
+          1
+        ],
+        [
+          "Axiom scheme ax-13 (Quantified Equality)",
+          1
+        ],
+        [
+          "Restricted universal and existential quantification",
+          1
+        ]
+      ],
+      "top_roots": [
+        [
+          "wi",
+          5
+        ],
+        [
+          "wb",
+          3
+        ],
+        [
+          "wceq",
+          1
+        ],
+        [
+          "wrel",
+          1
+        ]
+      ]
+    },
+    "structural": {
+      "goals": 106,
+      "share": 0.7066666666666667,
+      "median_corpus_lines": 9,
+      "median_corpus_depth": 4,
+      "median_distinct_lemmas": 8,
+      "with_hypotheses": 55,
+      "deeper_than_search_cap": 36,
+      "cites_something_outside_the_library": 55,
+      "top_sections": [
+        [
+          "The universal class",
+          14
+        ],
+        [
+          "Relations",
+          8
+        ],
+        [
+          "Functions",
+          6
+        ],
+        [
+          "Restricted universal and existential quantification",
+          5
+        ],
+        [
+          "Abbreviated conjunction and disjunction of three wff's",
+          3
+        ],
+        [
+          "Variable-to-class conversion for operations",
+          3
+        ]
+      ],
+      "top_roots": [
+        [
+          "wi",
+          72
+        ],
+        [
+          "wb",
+          21
+        ],
+        [
+          "wceq",
+          5
+        ],
+        [
+          "wcdeq",
+          2
+        ],
+        [
+          null,
+          1
+        ],
+        [
+          "wmo",
+          1
+        ]
+      ]
+    }
+  },
+  "records": [
+    {
+      "theorem": "2a1dd",
+      "section": "Logical implication",
+      "corpus_lines": 3,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 2,
+      "cited_not_in_library": [
+        "2a1dd.1"
+      ],
+      "hypotheses": 1,
+      "root": "wi",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "mpbii",
+      "section": "Logical equivalence",
+      "corpus_lines": 4,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 4,
+      "cited_not_in_library": [
+        "mpbii.maj",
+        "mpbii.min"
+      ],
+      "hypotheses": 2,
+      "root": "wi",
+      "outcome": "budget",
+      "found_depth": 0
+    },
+    {
+      "theorem": "a1bi",
+      "section": "Logical equivalence",
+      "corpus_lines": 3,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [
+        "a1bi.1"
+      ],
+      "hypotheses": 1,
+      "root": "wb",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "imp41",
+      "section": "Logical conjunction",
+      "corpus_lines": 3,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [
+        "imp4.1"
+      ],
+      "hypotheses": 1,
+      "root": "wi",
+      "outcome": "solved",
+      "found_depth": 3
+    },
+    {
+      "theorem": "adantl",
+      "section": "Logical conjunction",
+      "corpus_lines": 3,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [
+        "adantl.1"
+      ],
+      "hypotheses": 1,
+      "root": "wi",
+      "outcome": "solved",
+      "found_depth": 3
+    },
+    {
+      "theorem": "simplbda",
+      "section": "Logical conjunction",
+      "corpus_lines": 3,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [
+        "simplbda.1"
+      ],
+      "hypotheses": 1,
+      "root": "wi",
+      "outcome": "solved",
+      "found_depth": 3
+    },
+    {
+      "theorem": "pm5.42",
+      "section": "Logical conjunction",
+      "corpus_lines": 3,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wb",
+      "outcome": "retrieval",
+      "found_depth": 0
+    },
+    {
+      "theorem": "ancri",
+      "section": "Logical conjunction",
+      "corpus_lines": 3,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [
+        "ancri.1"
+      ],
+      "hypotheses": 1,
+      "root": "wi",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "anabs1",
+      "section": "Logical conjunction",
+      "corpus_lines": 3,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wb",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "anandis",
+      "section": "Logical conjunction",
+      "corpus_lines": 3,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [
+        "anandis.1"
+      ],
+      "hypotheses": 1,
+      "root": "wi",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "simp-10r",
+      "section": "Logical conjunction",
+      "corpus_lines": 2,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 2,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "pm4.52",
+      "section": "Mixed connectives",
+      "corpus_lines": 3,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wb",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "pm5.71",
+      "section": "Mixed connectives",
+      "corpus_lines": 7,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 7,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "3anbi3i",
+      "section": "Abbreviated conjunction and disjunction of three wff's",
+      "corpus_lines": 4,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [
+        "3anbi1i.1"
+      ],
+      "hypotheses": 1,
+      "root": "wb",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "syl3an3",
+      "section": "Abbreviated conjunction and disjunction of three wff's",
+      "corpus_lines": 4,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 4,
+      "cited_not_in_library": [
+        "syl3an3.1",
+        "syl3an3.2"
+      ],
+      "hypotheses": 2,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "simpr2",
+      "section": "Abbreviated conjunction and disjunction of three wff's",
+      "corpus_lines": 2,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 2,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "simpl23",
+      "section": "Abbreviated conjunction and disjunction of three wff's",
+      "corpus_lines": 2,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 2,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "syl112anc",
+      "section": "Abbreviated conjunction and disjunction of three wff's",
+      "corpus_lines": 7,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 7,
+      "cited_not_in_library": [
+        "syl112anc.5",
+        "syl3Xanc.4",
+        "syl3anc.1",
+        "syl3anc.2",
+        "syl3anc.3"
+      ],
+      "hypotheses": 5,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "3bior2fd",
+      "section": "Abbreviated conjunction and disjunction of three wff's",
+      "corpus_lines": 6,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 6,
+      "cited_not_in_library": [
+        "3biorfd.1",
+        "3biorfd.2"
+      ],
+      "hypotheses": 2,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "3orel2OLD",
+      "section": "Abbreviated conjunction and disjunction of three wff's",
+      "corpus_lines": 5,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 5,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "solved",
+      "found_depth": 1
+    },
+    {
+      "theorem": "inegd",
+      "section": "The false constant",
+      "corpus_lines": 4,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 4,
+      "cited_not_in_library": [
+        "inegd.1"
+      ],
+      "hypotheses": 1,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "impsingle-step25",
+      "section": "Implicational Calculus",
+      "corpus_lines": 7,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 5,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "retrieval",
+      "found_depth": 0
+    },
+    {
+      "theorem": "mercolem5",
+      "section": "Derive the Tarski-Bernays-Wajsberg axioms from Meredith's Second CO Axiom",
+      "corpus_lines": 10,
+      "corpus_depth": 5,
+      "distinct_lemmas_cited": 4,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "nfntht2",
+      "section": "Nonfreeness predicate",
+      "corpus_lines": 3,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "empty",
+      "section": "The empty domain of discourse",
+      "corpus_lines": 4,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 4,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wb",
+      "outcome": "retrieval",
+      "found_depth": 0
+    },
+    {
+      "theorem": "pm11.53v",
+      "section": "Axiom scheme ax-5 (Distinctness) - first use of $d",
+      "corpus_lines": 4,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 4,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wb",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "equtr2",
+      "section": "Axiom scheme ax-7 (Equality)",
+      "corpus_lines": 2,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 2,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "hbalw",
+      "section": "Axiom scheme ax-7 (Equality)",
+      "corpus_lines": 5,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 5,
+      "cited_not_in_library": [
+        "hbalw.1",
+        "hbalw.2"
+      ],
+      "hypotheses": 2,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "2sbbii",
+      "section": "Define proper substitution",
+      "corpus_lines": 3,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 2,
+      "cited_not_in_library": [
+        "sbbii.1"
+      ],
+      "hypotheses": 1,
+      "root": "wb",
+      "outcome": "retrieval",
+      "found_depth": 0
+    },
+    {
+      "theorem": "sbievwOLD",
+      "section": "Define proper substitution",
+      "corpus_lines": 4,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 4,
+      "cited_not_in_library": [
+        "sbievw.is"
+      ],
+      "hypotheses": 1,
+      "root": "wb",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "cleljustALT2",
+      "section": "Axiom scheme ax-12 (Substitution)",
+      "corpus_lines": 4,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 4,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wb",
+      "outcome": "solved",
+      "found_depth": 1
+    },
+    {
+      "theorem": "spimv",
+      "section": "Axiom scheme ax-13 (Quantified Equality)",
+      "corpus_lines": 3,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [
+        "spimv.1"
+      ],
+      "hypotheses": 1,
+      "root": "wi",
+      "outcome": "retrieval",
+      "found_depth": 0
+    },
+    {
+      "theorem": "axc14",
+      "section": "Axiom scheme ax-13 (Quantified Equality)",
+      "corpus_lines": 11,
+      "corpus_depth": 5,
+      "distinct_lemmas_cited": 11,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "moexexvw",
+      "section": "Unique existence: the unique existential quantifier",
+      "corpus_lines": 5,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 4,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "elisset",
+      "section": "Class membership",
+      "corpus_lines": 3,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "necon2bd",
+      "section": "Negated equality",
+      "corpus_lines": 4,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 4,
+      "cited_not_in_library": [
+        "necon2bd.1"
+      ],
+      "hypotheses": 1,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "necon2abii",
+      "section": "Negated equality",
+      "corpus_lines": 4,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [
+        "necon2abii.1"
+      ],
+      "hypotheses": 1,
+      "root": "wb",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "6ralimi",
+      "section": "Restricted universal and existential quantification",
+      "corpus_lines": 3,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [
+        "2ralimi.1"
+      ],
+      "hypotheses": 1,
+      "root": "wi",
+      "outcome": "solved",
+      "found_depth": 3
+    },
+    {
+      "theorem": "reximdv2",
+      "section": "Restricted universal and existential quantification",
+      "corpus_lines": 5,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 4,
+      "cited_not_in_library": [
+        "reximdv2.1"
+      ],
+      "hypotheses": 1,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "r19.21v",
+      "section": "Restricted universal and existential quantification",
+      "corpus_lines": 9,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 9,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wb",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "rspec",
+      "section": "Restricted universal and existential quantification",
+      "corpus_lines": 3,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [
+        "rspec.1"
+      ],
+      "hypotheses": 1,
+      "root": "wi",
+      "outcome": "retrieval",
+      "found_depth": 0
+    },
+    {
+      "theorem": "ralrimd",
+      "section": "Restricted universal and existential quantification",
+      "corpus_lines": 6,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 6,
+      "cited_not_in_library": [
+        "ralrimd.1",
+        "ralrimd.2",
+        "ralrimd.3"
+      ],
+      "hypotheses": 3,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "rexcom",
+      "section": "Restricted universal and existential quantification",
+      "corpus_lines": 5,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 4,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wb",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "rexeqf",
+      "section": "Restricted universal and existential quantification",
+      "corpus_lines": 7,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 6,
+      "cited_not_in_library": [
+        "raleqf.1",
+        "raleqf.2"
+      ],
+      "hypotheses": 2,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "rabid2im",
+      "section": "Restricted class abstraction",
+      "corpus_lines": 8,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 8,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "el3v",
+      "section": "The universal class",
+      "corpus_lines": 5,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [
+        "el3v.1"
+      ],
+      "hypotheses": 1,
+      "root": null,
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "abv",
+      "section": "The universal class",
+      "corpus_lines": 11,
+      "corpus_depth": 6,
+      "distinct_lemmas_cited": 11,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wb",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "ceqsralv",
+      "section": "The universal class",
+      "corpus_lines": 9,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 8,
+      "cited_not_in_library": [
+        "ceqsralv.2"
+      ],
+      "hypotheses": 1,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "gencbval",
+      "section": "The universal class",
+      "corpus_lines": 10,
+      "corpus_depth": 5,
+      "distinct_lemmas_cited": 9,
+      "cited_not_in_library": [
+        "gencbval.1",
+        "gencbval.2",
+        "gencbval.3",
+        "gencbval.4"
+      ],
+      "hypotheses": 4,
+      "root": "wb",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "vtocldf",
+      "section": "The universal class",
+      "corpus_lines": 11,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 10,
+      "cited_not_in_library": [
+        "vtocld.1",
+        "vtocld.2",
+        "vtocld.3",
+        "vtocldf.4",
+        "vtocldf.5",
+        "vtocldf.6"
+      ],
+      "hypotheses": 6,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "vtoclb",
+      "section": "The universal class",
+      "corpus_lines": 6,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 6,
+      "cited_not_in_library": [
+        "vtoclb.1",
+        "vtoclb.2",
+        "vtoclb.3",
+        "vtoclb.4"
+      ],
+      "hypotheses": 4,
+      "root": "wb",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "spc2gv",
+      "section": "The universal class",
+      "corpus_lines": 6,
+      "corpus_depth": 5,
+      "distinct_lemmas_cited": 6,
+      "cited_not_in_library": [
+        "spc2egv.1"
+      ],
+      "hypotheses": 1,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "rspcimedv",
+      "section": "The universal class",
+      "corpus_lines": 7,
+      "corpus_depth": 5,
+      "distinct_lemmas_cited": 7,
+      "cited_not_in_library": [
+        "rspcimdv.1",
+        "rspcimedv.2"
+      ],
+      "hypotheses": 2,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "ceqsrexbv",
+      "section": "The universal class",
+      "corpus_lines": 11,
+      "corpus_depth": 7,
+      "distinct_lemmas_cited": 11,
+      "cited_not_in_library": [
+        "ceqsrexv.1"
+      ],
+      "hypotheses": 1,
+      "root": "wb",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "elabd3",
+      "section": "The universal class",
+      "corpus_lines": 4,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 4,
+      "cited_not_in_library": [
+        "elabd3.ex",
+        "elabd3.is"
+      ],
+      "hypotheses": 2,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "elab2",
+      "section": "The universal class",
+      "corpus_lines": 5,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 5,
+      "cited_not_in_library": [
+        "elab2.1",
+        "elab2.2",
+        "elab2.3"
+      ],
+      "hypotheses": 3,
+      "root": "wb",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "moeq3",
+      "section": "The universal class",
+      "corpus_lines": 26,
+      "corpus_depth": 8,
+      "distinct_lemmas_cited": 24,
+      "cited_not_in_library": [
+        "moeq3.1",
+        "moeq3.2",
+        "moeq3.3"
+      ],
+      "hypotheses": 3,
+      "root": "wmo",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "2reu5",
+      "section": "The universal class",
+      "corpus_lines": 29,
+      "corpus_depth": 13,
+      "distinct_lemmas_cited": 23,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wb",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "2rexreu",
+      "section": "The universal class",
+      "corpus_lines": 8,
+      "corpus_depth": 5,
+      "distinct_lemmas_cited": 8,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "cdeqal",
+      "section": "Conditional equality (experimental)",
+      "corpus_lines": 4,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 4,
+      "cited_not_in_library": [
+        "cdeqnot.1"
+      ],
+      "hypotheses": 1,
+      "root": "wcdeq",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "cdeqeq",
+      "section": "Conditional equality (experimental)",
+      "corpus_lines": 6,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 5,
+      "cited_not_in_library": [
+        "cdeqeq.1",
+        "cdeqeq.2"
+      ],
+      "hypotheses": 2,
+      "root": "wcdeq",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "nfsbc1",
+      "section": "Proper substitution of classes for sets",
+      "corpus_lines": 4,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 4,
+      "cited_not_in_library": [
+        "nfsbc1.1"
+      ],
+      "hypotheses": 1,
+      "root": "wnf",
+      "outcome": "solved",
+      "found_depth": 3
+    },
+    {
+      "theorem": "spesbcd",
+      "section": "Proper substitution of classes for sets",
+      "corpus_lines": 3,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [
+        "spesbcd.1"
+      ],
+      "hypotheses": 1,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "rmob2",
+      "section": "Proper substitution of classes for sets",
+      "corpus_lines": 12,
+      "corpus_depth": 5,
+      "distinct_lemmas_cited": 12,
+      "cited_not_in_library": [
+        "rmoi2.1",
+        "rmoi2.2",
+        "rmoi2.3",
+        "rmoi2.4",
+        "rmoi2.5"
+      ],
+      "hypotheses": 5,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "difeq2d",
+      "section": "The difference of two classes",
+      "corpus_lines": 3,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [
+        "difeq1d.1"
+      ],
+      "hypotheses": 1,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "unssd",
+      "section": "The union of two classes",
+      "corpus_lines": 5,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 5,
+      "cited_not_in_library": [
+        "unssd.1",
+        "unssd.2"
+      ],
+      "hypotheses": 2,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "nel2nelin",
+      "section": "The intersection of two classes",
+      "corpus_lines": 2,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 2,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "inidm",
+      "section": "The intersection of two classes",
+      "corpus_lines": 2,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 2,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wceq",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "dfss5",
+      "section": "Combinations of difference, union, and intersection of two classes",
+      "corpus_lines": 4,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 4,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wb",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "dif32",
+      "section": "Combinations of difference, union, and intersection of two classes",
+      "corpus_lines": 5,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 4,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wceq",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "difrab",
+      "section": "Class abstractions with difference, union, and intersection of two classes",
+      "corpus_lines": 19,
+      "corpus_depth": 10,
+      "distinct_lemmas_cited": 15,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wceq",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "dfrab2",
+      "section": "Class abstractions with difference, union, and intersection of two classes",
+      "corpus_lines": 3,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wceq",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "ne0ii",
+      "section": "The empty set",
+      "corpus_lines": 3,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [
+        "n0ii.1"
+      ],
+      "hypotheses": 1,
+      "root": "wne",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "reu0",
+      "section": "The empty set",
+      "corpus_lines": 3,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wn",
+      "outcome": "solved",
+      "found_depth": 3
+    },
+    {
+      "theorem": "ab0ALT",
+      "section": "The empty set",
+      "corpus_lines": 6,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 6,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wb",
+      "outcome": "solved",
+      "found_depth": 1
+    },
+    {
+      "theorem": "0un",
+      "section": "The empty set",
+      "corpus_lines": 3,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wceq",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "2reu4lem",
+      "section": "The empty set",
+      "corpus_lines": 65,
+      "corpus_depth": 14,
+      "distinct_lemmas_cited": 39,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "dedth2v",
+      "section": "The weak deduction theorem for set theory",
+      "corpus_lines": 5,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 5,
+      "cited_not_in_library": [
+        "dedth2v.1",
+        "dedth2v.2",
+        "dedth2v.3"
+      ],
+      "hypotheses": 3,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "pweqi",
+      "section": "Power classes",
+      "corpus_lines": 3,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [
+        "pweqi.1"
+      ],
+      "hypotheses": 1,
+      "root": "wceq",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "ssdifsn",
+      "section": "Unordered and ordered pairs",
+      "corpus_lines": 7,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 7,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wb",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "intsn",
+      "section": "The intersection of a class",
+      "corpus_lines": 3,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [
+        "intsn.1"
+      ],
+      "hypotheses": 1,
+      "root": "wceq",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "trun",
+      "section": "Transitive classes",
+      "corpus_lines": 12,
+      "corpus_depth": 7,
+      "distinct_lemmas_cited": 11,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "intv",
+      "section": "Theorems requiring empty set existence",
+      "corpus_lines": 3,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wceq",
+      "outcome": "retrieval",
+      "found_depth": 0
+    },
+    {
+      "theorem": "eusv1",
+      "section": "Introduce the Axiom of Power Sets",
+      "corpus_lines": 9,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 8,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wb",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "sbcop",
+      "section": "Ordered pair theorem",
+      "corpus_lines": 15,
+      "corpus_depth": 6,
+      "distinct_lemmas_cited": 14,
+      "cited_not_in_library": [
+        "sbcop.z"
+      ],
+      "hypotheses": 1,
+      "root": "wb",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "iunopeqopOLD",
+      "section": "Ordered pair theorem",
+      "corpus_lines": 42,
+      "corpus_depth": 13,
+      "distinct_lemmas_cited": 40,
+      "cited_not_in_library": [
+        "iunopeqop.b",
+        "iunopeqop.c",
+        "iunopeqop.d"
+      ],
+      "hypotheses": 3,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "ssopab2b",
+      "section": "Ordered-pair class abstractions (cont.)",
+      "corpus_lines": 14,
+      "corpus_depth": 5,
+      "distinct_lemmas_cited": 9,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wb",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "poeq2",
+      "section": "Partial and total orderings",
+      "corpus_lines": 7,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 5,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "nfwe",
+      "section": "Founded and well-ordering relations",
+      "corpus_lines": 7,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 7,
+      "cited_not_in_library": [
+        "nffr.a",
+        "nffr.r"
+      ],
+      "hypotheses": 2,
+      "root": "wnf",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "optocl",
+      "section": "Relations",
+      "corpus_lines": 10,
+      "corpus_depth": 7,
+      "distinct_lemmas_cited": 10,
+      "cited_not_in_library": [
+        "optocl.1",
+        "optocl.2",
+        "optocl.3"
+      ],
+      "hypotheses": 3,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "relop",
+      "section": "Relations",
+      "corpus_lines": 102,
+      "corpus_depth": 20,
+      "distinct_lemmas_cited": 76,
+      "cited_not_in_library": [
+        "relop.1",
+        "relop.2"
+      ],
+      "hypotheses": 2,
+      "root": "wb",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "elrnmptdv",
+      "section": "Relations",
+      "corpus_lines": 8,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 8,
+      "cited_not_in_library": [
+        "elrnmptdv.1",
+        "elrnmptdv.2",
+        "elrnmptdv.3",
+        "elrnmptdv.4"
+      ],
+      "hypotheses": 4,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "dmcoss",
+      "section": "Relations",
+      "corpus_lines": 14,
+      "corpus_depth": 7,
+      "distinct_lemmas_cited": 12,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wss",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "resexg",
+      "section": "Relations",
+      "corpus_lines": 3,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "reldisjunOLD",
+      "section": "Relations",
+      "corpus_lines": 7,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 7,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "nfimad",
+      "section": "Relations",
+      "corpus_lines": 16,
+      "corpus_depth": 6,
+      "distinct_lemmas_cited": 13,
+      "cited_not_in_library": [
+        "nfimad.2",
+        "nfimad.3"
+      ],
+      "hypotheses": 2,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "elimasng1",
+      "section": "Relations",
+      "corpus_lines": 6,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 5,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "ssxpb",
+      "section": "Relations",
+      "corpus_lines": 23,
+      "corpus_depth": 9,
+      "distinct_lemmas_cited": 16,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "frpoins3g",
+      "section": "Well-founded induction (variant)",
+      "corpus_lines": 6,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 6,
+      "cited_not_in_library": [
+        "frpoins3g.1",
+        "frpoins3g.2",
+        "frpoins3g.3"
+      ],
+      "hypotheses": 3,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "oneluni",
+      "section": "Ordinals",
+      "corpus_lines": 4,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 4,
+      "cited_not_in_library": [
+        "on.1"
+      ],
+      "hypotheses": 1,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "sniota",
+      "section": "Definite description binder (inverted iota)",
+      "corpus_lines": 11,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 11,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "fncnv",
+      "section": "Functions",
+      "corpus_lines": 29,
+      "corpus_depth": 12,
+      "distinct_lemmas_cited": 27,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wb",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "isarep2",
+      "section": "Functions",
+      "corpus_lines": 18,
+      "corpus_depth": 8,
+      "distinct_lemmas_cited": 18,
+      "cited_not_in_library": [
+        "isarep2.1",
+        "isarep2.2"
+      ],
+      "hypotheses": 2,
+      "root": "wex",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "fnresin2",
+      "section": "Functions",
+      "corpus_lines": 3,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "fimass",
+      "section": "Functions",
+      "corpus_lines": 3,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "retrieval",
+      "found_depth": 0
+    },
+    {
+      "theorem": "fvelimab",
+      "section": "Functions",
+      "corpus_lines": 22,
+      "corpus_depth": 8,
+      "distinct_lemmas_cited": 20,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "dffv2",
+      "section": "Functions",
+      "corpus_lines": 129,
+      "corpus_depth": 27,
+      "distinct_lemmas_cited": 101,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wceq",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "eldmrexrn",
+      "section": "Functions",
+      "corpus_lines": 6,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 6,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "solved",
+      "found_depth": 3
+    },
+    {
+      "theorem": "fsn2",
+      "section": "Functions",
+      "corpus_lines": 27,
+      "corpus_depth": 10,
+      "distinct_lemmas_cited": 26,
+      "cited_not_in_library": [
+        "fsn2.1"
+      ],
+      "hypotheses": 1,
+      "root": "wb",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "fsnunres",
+      "section": "Functions",
+      "corpus_lines": 9,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 9,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "riotaxfrd",
+      "section": "Restricted iota (description binder)",
+      "corpus_lines": 35,
+      "corpus_depth": 9,
+      "distinct_lemmas_cited": 32,
+      "cited_not_in_library": [
+        "riotaxfrd.1",
+        "riotaxfrd.2",
+        "riotaxfrd.3",
+        "riotaxfrd.4",
+        "riotaxfrd.5",
+        "riotaxfrd.6"
+      ],
+      "hypotheses": 6,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "caovcand",
+      "section": "Variable-to-class conversion for operations",
+      "corpus_lines": 7,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 7,
+      "cited_not_in_library": [
+        "caovcand.2",
+        "caovcand.3",
+        "caovcand.4",
+        "caovcang.1"
+      ],
+      "hypotheses": 4,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "caov12",
+      "section": "Variable-to-class conversion for operations",
+      "corpus_lines": 10,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 9,
+      "cited_not_in_library": [
+        "caov.1",
+        "caov.2",
+        "caov.3",
+        "caov.ass",
+        "caov.com"
+      ],
+      "hypotheses": 5,
+      "root": "wceq",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "imaeqalov",
+      "section": "Variable-to-class conversion for operations",
+      "corpus_lines": 21,
+      "corpus_depth": 7,
+      "distinct_lemmas_cited": 15,
+      "cited_not_in_library": [
+        "imaeqexov.1"
+      ],
+      "hypotheses": 1,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "ofmresval",
+      "section": "Function operation",
+      "corpus_lines": 4,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 4,
+      "cited_not_in_library": [
+        "ofmresval.f",
+        "ofmresval.g"
+      ],
+      "hypotheses": 2,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "orduniorsuc",
+      "section": "Ordinals (continued)",
+      "corpus_lines": 16,
+      "corpus_depth": 8,
+      "distinct_lemmas_cited": 16,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "nlimsucg",
+      "section": "Ordinals (continued)",
+      "corpus_lines": 16,
+      "corpus_depth": 7,
+      "distinct_lemmas_cited": 16,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "omsucne",
+      "section": "The natural numbers (i.e., finite ordinals)",
+      "corpus_lines": 10,
+      "corpus_depth": 5,
+      "distinct_lemmas_cited": 10,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "omun",
+      "section": "The natural numbers (i.e., finite ordinals)",
+      "corpus_lines": 13,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 10,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "elxp4",
+      "section": "Relations and functions (cont.)",
+      "corpus_lines": 42,
+      "corpus_depth": 12,
+      "distinct_lemmas_cited": 27,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wb",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "ot3rdg",
+      "section": "First and second members of an ordered pair",
+      "corpus_lines": 6,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 6,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "mptmpoopabovd",
+      "section": "First and second members of an ordered pair",
+      "corpus_lines": 10,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 9,
+      "cited_not_in_library": [
+        "mptmpoopabbrd.g",
+        "mptmpoopabbrd.x",
+        "mptmpoopabbrd.y",
+        "mptmpoopabovd.m"
+      ],
+      "hypotheses": 4,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "suppvalfn",
+      "section": "The support of functions",
+      "corpus_lines": 11,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 10,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "wfrrel",
+      "section": "Well-ordered recursion",
+      "corpus_lines": 4,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 4,
+      "cited_not_in_library": [
+        "wfrrel.1"
+      ],
+      "hypotheses": 1,
+      "root": "wrel",
+      "outcome": "retrieval",
+      "found_depth": 0
+    },
+    {
+      "theorem": "smofvon",
+      "section": "Functions on ordinals; strictly monotone ordinal functions",
+      "corpus_lines": 3,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "tfrlem12",
+      "section": "\"Strong\" transfinite recursion",
+      "corpus_lines": 38,
+      "corpus_depth": 9,
+      "distinct_lemmas_cited": 34,
+      "cited_not_in_library": [
+        "tfrlem.1",
+        "tfrlem.3"
+      ],
+      "hypotheses": 2,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "rdgval",
+      "section": "Recursive definition generator",
+      "corpus_lines": 2,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 2,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "solved",
+      "found_depth": 2
+    },
+    {
+      "theorem": "rdglimg",
+      "section": "Recursive definition generator",
+      "corpus_lines": 10,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 10,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "frsucmpt2",
+      "section": "Finite recursion",
+      "corpus_lines": 12,
+      "corpus_depth": 6,
+      "distinct_lemmas_cited": 10,
+      "cited_not_in_library": [
+        "frsucmpt2.1",
+        "frsucmpt2.2",
+        "frsucmpt2.3"
+      ],
+      "hypotheses": 3,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "1ellim",
+      "section": "Ordinal arithmetic",
+      "corpus_lines": 12,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 9,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "oa0r",
+      "section": "Ordinal arithmetic",
+      "corpus_lines": 33,
+      "corpus_depth": 6,
+      "distinct_lemmas_cited": 19,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "ertr",
+      "section": "Equivalence relations and classes",
+      "corpus_lines": 26,
+      "corpus_depth": 7,
+      "distinct_lemmas_cited": 21,
+      "cited_not_in_library": [
+        "ersymb.1"
+      ],
+      "hypotheses": 1,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "erthi",
+      "section": "Equivalence relations and classes",
+      "corpus_lines": 5,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 5,
+      "cited_not_in_library": [
+        "erthi.1",
+        "erthi.2"
+      ],
+      "hypotheses": 2,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "elmapssresd",
+      "section": "The mapping operation",
+      "corpus_lines": 4,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 4,
+      "cited_not_in_library": [
+        "elmapssresd.1",
+        "elmapssresd.2"
+      ],
+      "hypotheses": 2,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "ixpeq2",
+      "section": "Infinite Cartesian products",
+      "corpus_lines": 9,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 7,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "ixp0",
+      "section": "Infinite Cartesian products",
+      "corpus_lines": 7,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 7,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "brdom2",
+      "section": "Equinumerosity",
+      "corpus_lines": 9,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 7,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wb",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "reuen1",
+      "section": "Equinumerosity",
+      "corpus_lines": 3,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wb",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "xpdom1",
+      "section": "Equinumerosity",
+      "corpus_lines": 3,
+      "corpus_depth": 2,
+      "distinct_lemmas_cited": 3,
+      "cited_not_in_library": [
+        "xpdom1.2"
+      ],
+      "hypotheses": 1,
+      "root": "wi",
+      "outcome": "retrieval",
+      "found_depth": 0
+    },
+    {
+      "theorem": "fsuppmptdm",
+      "section": "Finitely supported functions",
+      "corpus_lines": 6,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 6,
+      "cited_not_in_library": [
+        "fsuppmptdm.a",
+        "fsuppmptdm.f",
+        "fsuppmptdm.y",
+        "fsuppmptdm.z"
+      ],
+      "hypotheses": 4,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "fiin",
+      "section": "Finite intersections",
+      "corpus_lines": 34,
+      "corpus_depth": 11,
+      "distinct_lemmas_cited": 28,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "wemapso",
+      "section": "Ordinal isomorphism, Hartogs's theorem",
+      "corpus_lines": 31,
+      "corpus_depth": 8,
+      "distinct_lemmas_cited": 28,
+      "cited_not_in_library": [
+        "wemapso.t"
+      ],
+      "hypotheses": 1,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "inf3lemc",
+      "section": "Axiom of Infinity equivalents",
+      "corpus_lines": 6,
+      "corpus_depth": 4,
+      "distinct_lemmas_cited": 5,
+      "cited_not_in_library": [
+        "inf3lem.2"
+      ],
+      "hypotheses": 4,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "rankidb",
+      "section": "Rank",
+      "corpus_lines": 17,
+      "corpus_depth": 8,
+      "distinct_lemmas_cited": 15,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "finacn",
+      "section": "Cardinal numbers",
+      "corpus_lines": 24,
+      "corpus_depth": 12,
+      "distinct_lemmas_cited": 21,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "dfac5lem5",
+      "section": "Axiom of Choice equivalents",
+      "corpus_lines": 52,
+      "corpus_depth": 16,
+      "distinct_lemmas_cited": 49,
+      "cited_not_in_library": [
+        "dfac5lem.1",
+        "dfac5lem.2",
+        "dfac5lem.3"
+      ],
+      "hypotheses": 3,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "djudoml",
+      "section": "Cardinal number arithmetic",
+      "corpus_lines": 7,
+      "corpus_depth": 3,
+      "distinct_lemmas_cited": 7,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "ackbij1lem10",
+      "section": "The Ackermann bijection",
+      "corpus_lines": 20,
+      "corpus_depth": 10,
+      "distinct_lemmas_cited": 20,
+      "cited_not_in_library": [
+        "ackbij.f"
+      ],
+      "hypotheses": 1,
+      "root": "wf",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "cfsmo",
+      "section": "Cofinality (without Axiom of Choice)",
+      "corpus_lines": 15,
+      "corpus_depth": 7,
+      "distinct_lemmas_cited": 13,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    },
+    {
+      "theorem": "ssfin2",
+      "section": "Eight inequivalent definitions of finite set",
+      "corpus_lines": 15,
+      "corpus_depth": 6,
+      "distinct_lemmas_cited": 15,
+      "cited_not_in_library": [],
+      "hypotheses": 0,
+      "root": "wi",
+      "outcome": "structural",
+      "found_depth": 0
+    }
+  ],
+  "runtime_seconds": 742.4377629756927
+}

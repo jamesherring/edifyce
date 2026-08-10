@@ -390,6 +390,59 @@ the prover refuses its own answer when a variable came out undetermined: that is
 Metamath's *dummy variable*, legal only against `$d` obligations this does not
 track, so the contract is that a returned proof verifies.
 
+## What stops the other 78 %
+
+A solve rate says how far the prover gets, not what is stopping it, and those
+want different fixes. `run_failures.py` runs the same 150 goals three times and
+partitions the outcome by what it takes to change it:
+
+1. the combined ranker at the standard budget;
+2. an **oracle ranker** — the lemmas the real proof cited, ranked first — at the
+   *same* budget. What this adds was lost to **retrieval**;
+3. the oracle again at depth 9, width 24, 4,000 steps. What this adds was lost to
+   **budget**; what it still cannot reach is **structural**.
+
+| outcome | goals | share |
+|---|---|---|
+| solved | 33 | 22 % |
+| lost to retrieval | 10 | 7 % |
+| lost to budget | 1 | 1 % |
+| **structural** | **106** | **71 %** |
+
+**Retrieval is 7 % of the gap.** That is the surprise, and it redirects the
+effort: a perfect premise selector, at this budget, would take the prover from
+22 % to 29 %. Everything else is unreachable *even when the search is told
+exactly which lemmas to use*.
+
+### The wall is proof size, not depth and not ranking
+
+| | solved | structural failure |
+|---|---|---|
+| distinct lemmas the real proof cites | 3.1 mean, 3 median | **12.5 mean, 8 median** |
+| stored proof lines | 3 median | 14.6 mean, 9 median |
+| stored proof depth | 2 median | 4 median |
+
+44 of the 106 cite ten or more distinct lemmas. Depth is *not* the binding
+constraint — 36 of the 106 nest deeper than the standard depth-5 cap, but the
+oracle ran at depth 9 and solved one more. What defeats it is **breadth**: a
+proof assembled from a dozen different lemmas is a wide conjunction of subgoals,
+and iterative deepening with a width cap cannot hold that many partial
+commitments at once.
+
+Only 19 of the 106 look small (depth ≤ 3 and ≤ 4 distinct lemmas), and those are
+the ones worth reading one at a time. One named mechanism came out of doing so:
+**dummy variables** — a proof that must introduce a variable the goal does not
+determine. `elisset` (`A ∈ V → ∃x x = A`) is the shape. The prover refuses those
+because their `$d` obligations are not tracked, and re-running the 106 with the
+refusal lifted turns exactly **3** of them into proofs. A real but small
+mechanism, worth fixing for correctness rather than for coverage.
+
+One diagnostic that looks alarming and is not: "cites something outside the
+library" fires on 55 of the 106. Every such label is a `$e` hypothesis of the
+theorem itself — `mpbii.maj`, `syl3an3.1` — not a missing theorem. The library is
+complete.
+
+
 ## Premise selection, and a geometry that is not free
 
 `run_retrieval.py`, six seconds, ground truth already in the database:
@@ -450,6 +503,7 @@ estimate difficulty.
 | `lindenbaum/run_certify.py` | The certification walk; writes `certification.json` |
 | `lindenbaum/run_search.py` | The proof-search evaluation; writes `search.json` |
 | `lindenbaum/run_retrieval.py` | Premise selection and signature geometry; writes `retrieval.json` |
+| `lindenbaum/run_failures.py` | The oracle ablation; writes `failures.json` |
 
 Nothing here is imported by `app/` or `website/`, and the suite does not read it
 — it is an experiment, kept beside the code it measures rather than inside it.
