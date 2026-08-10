@@ -288,6 +288,150 @@ generators actually live in, so that logically related theorems get correlated
 coordinates and there is something for structure to predict. That is a different
 experiment, and this one is the baseline it would have to beat.
 
+## Proof search: finding steps nobody supplied
+
+Certification proves what a truth table reaches. The remaining question — the
+one the whole roadmap is for — is whether a corpus plus a geometry can find
+proofs it was never told, several steps deep. `lindenbaum/prover.py` is a
+backward prover that tries.
+
+```bash
+uv run --with numpy --with scikit-learn python -m experiments.lindenbaum.run_search \
+    --out experiments/results --goals 200 --steps 1200 --min-lines 2 \
+    --rankers random,frequency,structural,analogy,all
+```
+
+The corpus is walked in declaration order and each sampled theorem is handed
+**only what preceded it** — no citations, no proof length, nothing from its own
+proof. Whatever comes back is re-derived by `checking.py`, which shares nothing
+with the search, before it counts.
+
+### What makes it a search
+
+A Metamath rule's premises routinely name variables its conclusion does not.
+`syl` concludes `φ → χ` from `φ → ψ` and `ψ → χ`, and **nothing in the goal says
+what ψ is** — every use of it invents an intermediate statement. That is the
+step that cannot be looked up, and getting it required one specific thing:
+solving the *most constrained* subgoal first. Attack `ψ` directly and the prover
+unifies an unconstrained variable against the whole library; attack its sibling
+first and the sibling determines it. With that ordering `syl` is found at depth 3
+in 93 unifications, by exactly set.mm's own route (`mpd` over `a1i`).
+
+### Does the geometry help?
+
+Same goals, same budget (1,200 unifications, breadth 14, depth 5); the only
+difference is which lemma the search tries first. `analogy` ranks a candidate by
+what the library entries whose *statements* look most like the goal cited in
+their own proofs; `all` is that combined with usage frequency and structural
+similarity.
+
+| ranker | solved / 200 | multi-step (depth ≥ 2) | depth ≥ 3 | different lemmas from set.mm |
+|---|---|---|---|---|
+| random | 13 (6.5 %) | 8 | 1 | 13 |
+| frequency | 31 (15.5 %) | 26 | 0 | 26 |
+| structural | 31 (15.5 %) | 26 | 4 | 23 |
+| analogy | 37 (18.5 %) | 32 | 5 | 31 |
+| **all** | **42 (21.0 %)** | **37** | **8** | 36 |
+
+Frequency — "try what the library uses most" — is the baseline any premise
+selector has to beat, and it more than doubles random. Analogy beats *it* by a
+fifth, and the combination is better again. **Every proof counted here verifies**;
+the checker rejected none.
+
+Note the last column. Of 42 proofs, 36 use a different set of lemmas than set.mm
+does. That is a different *route*, not new mathematics — the prover is shallow
+and reaches for whatever high-level lemma the library already had — but it does
+mean these are searched proofs rather than recovered ones.
+
+### Held out: theorems beyond the library
+
+The stronger test. A second import runs to 14,000 theorems; goals are drawn from
+**position 10,000 onward**, so their statements were never in the searched
+library and are largely about arithmetic and cardinality, subjects the first
+10,000 theorems barely reach.
+
+| ranker | solved / 200 | multi-step | depth ≥ 3 |
+|---|---|---|---|
+| frequency | 13 (6.5 %) | 6 | 0 |
+| analogy | 18 (9.0 %) | 11 | 0 |
+| **all** | **39 (19.5 %)** | **32** | **4** |
+
+The solved theorems' *own* proofs average 7.3 lines, against 3.3 in-corpus — the
+prover is finding short routes to statements set.mm reached the long way round.
+`gchxpidm`, whose stored proof is 57 lines, comes out at depth 2 from `gchinf`,
+`infxpidm2`, `numth3` and `syl2an2r` in 118 unifications.
+
+Two honest deductions from that table. The depth-1 solves — 7 of 39 held out, 5
+of 42 in-corpus — are single citations, and several are `ALT`/`OLD` duplicates
+(`qexALT` from `qex`, `1lt10OLD` from `1lt10`) where an identical earlier theorem
+exists. Finding those is genuinely useful library hygiene and it is not proof
+search, so they are counted separately above. And nothing here goes deeper than
+three chained rules: this is a shallow prover with a 1,200-unification budget,
+not a competitor to a tuned ATP.
+
+### Four bugs the checker caught
+
+Worth recording, because each would have read as a result:
+
+- siblings did not share the substitution from the premise branch, so one
+  variable could be bound two ways in a single "proof";
+- a variable's sort was compared against a node's, and a declared production's
+  node carries no sort in the store — so every binding of a variable to a term
+  was refused, `ax-mp` included, and the prover could not do modus ponens;
+- hypotheses were closed by equality rather than unification, which is exactly
+  what a rule with an undetermined middle term needs;
+- children came back in the order the search solved them rather than the order
+  the rule listed its premises, and a proof with permuted children verifies
+  against the wrong premise.
+
+`$d` is checked twice — before a branch and again after it — because checked only
+once up front it passes vacuously, against bindings that do not exist yet. And
+the prover refuses its own answer when a variable came out undetermined: that is
+Metamath's *dummy variable*, legal only against `$d` obligations this does not
+track, so the contract is that a returned proof verifies.
+
+## Premise selection, and a geometry that is not free
+
+`run_retrieval.py`, six seconds, ground truth already in the database:
+`proof_lines.rule` is what each proof actually reached for. Recall@k over 800
+goals, each ranked against the library as it stood when the theorem was written:
+
+| ranker | @10 | @50 | @100 | @200 |
+|---|---|---|---|---|
+| analogy | **13.5 %** | **33.2 %** | **44.0 %** | **56.6 %** |
+| structural | 12.9 % | 27.9 % | 35.1 % | 43.0 % |
+| frequency | 10.7 % | 22.5 % | 29.6 % | 38.4 % |
+| random | 0.6 % | 2.7 % | 5.0 % | 9.7 % |
+
+### The coordinate system that is *not* free
+
+This is the answer to [The gap](#the-gap-structure-does-not-predict-semantics),
+and it is the most useful thing in this directory.
+
+The sampled-assignment space gives each generator an independent random sign, so
+two propositionally equivalent theorems land in uncorrelated places — which is
+why structure predicted nothing about it (ρ = 0.0002). A theorem's **transitive
+axiom dependencies** are the opposite kind of coordinate: computable from the
+citation DAG, different for theorems that are all equally provable, and not free
+at all. Over the 10,176 theorems with a stored statement there are 3,517 distinct
+signatures. Asking the same question of them:
+
+| | free Boolean space | axiom-dependency signature |
+|---|---|---|
+| ρ (structural distance vs. coordinate distance) | 0.0002 | **0.489** (p ≈ 4 × 10⁻²⁴⁰) |
+| predicting a coordinate from syntax | 50.9 % (chance) | **74.7 %** vs. 54.5 % majority |
+
+So syntax says almost nothing about where a formula sits in the free Boolean
+algebra, and a great deal about **which axioms its proof will need**. The
+embedding worth building is over provenance, not over truth values — and Edifyce
+already stores everything it needs (`scripts/check_provenance.py` computes the
+same closure for its own reasons).
+
+Proof length is weakly visible too: predicting `log` lines from the same features
+gives ρ = 0.36, R² = 0.20 — enough to order a search frontier, not enough to
+estimate difficulty.
+
+
 ## Layout
 
 | File | What it does |
@@ -299,8 +443,13 @@ experiment, and this one is the baseline it would have to beat.
 | `lindenbaum/structural.py` | Experiment 1's 526-dimensional embedding |
 | `lindenbaum/semantic.py` | Experiment 2's ±1 embedding, the algebra, and the random projection |
 | `lindenbaum/certify.py` | Propositional abstraction, and the two sound certificates over it |
+| `lindenbaum/unification.py` | The prover's term store: interning, freezing, refreshing, unification, `$d` |
+| `lindenbaum/prover.py` | Backward search, the fingerprint index, and the rankers |
+| `lindenbaum/checking.py` | An independent re-derivation of a found proof |
 | `lindenbaum/run.py` | The embedding experiments; writes `dev-database.json` |
 | `lindenbaum/run_certify.py` | The certification walk; writes `certification.json` |
+| `lindenbaum/run_search.py` | The proof-search evaluation; writes `search.json` |
+| `lindenbaum/run_retrieval.py` | Premise selection and signature geometry; writes `retrieval.json` |
 
 Nothing here is imported by `app/` or `website/`, and the suite does not read it
 — it is an experiment, kept beside the code it measures rather than inside it.

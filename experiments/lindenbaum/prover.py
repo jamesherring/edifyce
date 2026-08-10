@@ -417,7 +417,16 @@ class Prover:
                 # made later while proving its siblings can still refine it. So
                 # the tree is resolved once against the substitution the whole
                 # search finished with, and only then is it a proof of anything.
-                return resolve(self.terms, steps[0], subst)
+                tree = resolve(self.terms, steps[0], subst)
+                # …and only if every variable came out determined. A search can
+                # close every subgoal while leaving one variable free — the step
+                # then asserts a schema rather than a statement, which is
+                # Metamath's *dummy variable*, legal only against `$d`
+                # obligations this does not track. Rather than hand the checker
+                # something it must refuse, refuse it here: the contract is that
+                # a returned proof verifies.
+                if not _open(self.terms, tree):
+                    return tree
             if budget.used > budget.steps:
                 break
         return None
@@ -573,6 +582,13 @@ class Prover:
                 if name[:1] not in ("?", RIGID):
                     found[name] = terms.sort[variable]
         return list(found.items())
+
+
+def _open(terms: Terms, step: Step) -> bool:
+    """Whether any step of the tree still carries an undetermined variable."""
+    if any(terms.is_flexible(v) for v in terms.variables(step.conclusion)):
+        return True
+    return any(_open(terms, child) for child in step.children)
 
 
 def _splice(steps: tuple[Step, ...], step: Step, at: int) -> tuple[Step, ...]:
