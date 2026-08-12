@@ -43,8 +43,10 @@ they moved the recommendation rather than confirming it. In short:
   useful: similarity is not subsumption. It belongs to dedup and related-lemma
   browsing, not goal-directed retrieval.
 - **Definitional reach is worth 40% more matches** (E8), so the phase's premise
-  holds — collected by **bounded expansion** over the shipped index, which is exact,
-  costs 2.5 ms, and keeps the subsumption semantics.
+  holds — and **E9** shows the cheapest way to collect it is a second fingerprint
+  taken from each theorem's *unfolded* conclusion: recall of those matches goes from
+  ~70% to **100%** for a candidate set growing 1.3% → 2.2% of the library, in one
+  lookup, exact by construction rather than by enumeration.
 - The intended use is **retrieval, not dedup**, which removes the need for a stored
   canonical digest and the three decisions that come with it.
 
@@ -746,7 +748,54 @@ but a different geometry: **asymmetric embeddings** — order, box, or cone
 embeddings — are designed for entailment hierarchies. Cosine is the wrong tool and
 no amount of combiner tuning repairs it.
 
-### What the eight settle
+### E9. Index the unfolded form instead? — the collapse is real and does not matter
+
+The alternative to expanding the query is to store a *second* fingerprint per
+theorem, taken from its fully unfolded conclusion, and query with the unfolded
+goal. One lookup, no branching. The stated risk was that unfolding drives
+everything toward primitives and collapses the index. It does collapse it —
+and the collapse turns out to be harmless.
+
+**Partition quality** (distinct FP7 keys over the conclusions):
+
+| corpus | | distinct FP7 | mean bucket | max bucket | distinct roots |
+|---|---|---|---|---|---|
+| pc+fol (2,656) | folded | 955 | 2.78 | 91 | 17 |
+| | **unfolded** | **480** | 5.53 | 343 | 6 |
+| ZF (813 sample) | folded | 483 | 1.68 | 16 | 29 |
+| | **unfolded** | **328** | 2.48 | 32 | 13 |
+
+Distinct keys drop by a third to a half, and the biggest bucket doubles to
+quadruples. So the concern was well founded as stated.
+
+**But the number that decides it is the candidate set**, measured the way Phase 1
+measured its own:
+
+| corpus | | mean candidate set | of library | recall of true matches |
+|---|---|---|---|---|
+| pc+fol | folded (today) | 334.6 | 12.6% | **71.7%** |
+| | **unfolded** | 446.4 | 16.8% | **100.0%** |
+| ZF | folded (today) | 10.3 | 1.3% | **69.0%** |
+| | **unfolded** | 17.5 | 2.2% | **100.0%** |
+
+Both corpora agree: the candidate set grows by roughly a third to two thirds in
+relative terms while staying small in absolute terms, and recall of the
+up-to-definitions matches goes from ~70% to **100%**.
+
+That is a good trade, and it is **exact by construction rather than by
+enumeration**: two definitionally equal statements have identical unfolded forms,
+hence identical fingerprints, hence guaranteed compatibility. Nothing has to be
+enumerated and no variant can be missed.
+
+It also supersedes bounded query expansion on its own terms — one lookup instead of
+7.6, no bucket-size policy to tune, and a recall guarantee rather than a recall
+that depends on having generated the right variants. What expansion keeps is the
+**bridge**: it knows which definition it applied where, so it can tell an author
+"apply `df-ss` first", whereas the normalised index knows only that the two forms
+agree. That is recoverable — the unfolding was computed either way — but it is a
+real difference, and it is decision 4 resurfacing.
+
+### What the nine settle
 
 - **Congruence is harvestable** (E2), so decision 1's second half is derivation, not
   declaration, and obligations demote to a 0.12% formality.
@@ -763,8 +812,11 @@ no amount of combiner tuning repairs it.
   subsumption. It belongs to the similarity tasks: dedup, "have we got this",
   related-lemma browsing.
 - **Definitional reach is worth 40% more matches** (E8), so the phase's premise
-  holds; what changes is which mechanism collects it — bounded expansion, which
-  preserves subsumption semantics, rather than the fold, which inverts them.
+  holds; what changes is which mechanism collects it. **E9 settles that too: index
+  the unfolded conclusion.** One extra fingerprint column takes recall of
+  up-to-definitions matches from ~70% to 100% for a candidate set that grows from
+  1.3% to 2.2% of the library (ZF), in one lookup, exactly rather than by
+  enumeration.
 - **The equational half's demand is thin on set.mm** (E1) — 57 conclusion pairs —
   though that is corpus-specific and mathlib would very likely differ.
 ## The shape the measurements suggest: retrieval, not a stored digest
@@ -971,20 +1023,27 @@ equational half is a Phase 3 idea that should be argued for on its own evidence.
 
 ## Recommendation
 
-**Extend Phase 1 with bounded definitional expansion, and build forward search
-beside it. Do not use the embedding for citation search.**
+**Store a second fingerprint per theorem taken from its fully unfolded conclusion,
+query with the unfolded goal, and build forward search beside it. Do not use the
+embedding for citation search.**
 
-This is the second revision, and the second one the data forced. The note first
-recommended building the definitional half; E3 undercut that (no `Definition` rows
-exist). It then recommended the definition-aware fold as the retrieval mechanism;
-**E8 refutes that too** — the fold loses to the unranked Phase 1 bucket on the very
-task it was proposed for. What survives:
+This is the third revision, and all three were forced by measurement. The note
+first recommended building the definitional half; **E3** undercut it (no
+`Definition` rows exist anywhere). It then recommended the definition-aware fold as
+the retrieval mechanism; **E8** refuted that (the fold loses to the unranked Phase 1
+bucket on the task it was proposed for). It then recommended bounded query
+expansion; **E9** supersedes that with something simpler. What survives:
 
 1. **The premise holds.** Definitional reach is worth **40% more matches** (E8), so
    there is real value here and it is worth collecting.
-2. **Bounded expansion collects it and the fold does not** (E4/E8). Expansion is
-   exact, costs 2.5 ms at mean branching, and preserves the subsumption semantics
-   citation search depends on. The fold inverts them: cosine ranks general schemas
+2. **An unfolded-form index collects it, in one lookup** (E9). Recall of
+   up-to-definitions matches goes from ~70% to **100%** for a candidate set that
+   grows from 1.3% to 2.2% of the library on ZF, and it is exact by construction:
+   definitionally equal statements have identical unfolded forms and therefore
+   identical fingerprints. Bounded expansion (E4) reaches the same place through
+   7.6 lookups, a bucket-size policy, and a recall that depends on enumerating the
+   right variants — worse on every axis except that it knows the bridge.
+3. **The fold is not the retrieval mechanism** (E8). Cosine ranks general schemas
    last, and general schemas are the useful citations.
 3. **The fold is still worth having — for other work.** Its measured invariance
    (E5/E6) is real: exact on 147 definitions, α-invariant, nesting free. That makes
@@ -997,13 +1056,24 @@ task it was proposed for. What survives:
 5. **Retrieval, not dedup, is the use** — so a stored canonical digest, and the
    three decisions it drags in, remain avoidable.
 
-Order: bounded expansion over the Phase 1 index (cyclic heads opaque, bucket-size
-threshold), then forward search over antecedents and hypotheses, then the harvester
-(E2) whenever the equational path is taken up. The e-graph is settled as the
-*structure* for that path (decision 2) but is not the first thing to build. The
+Order: the unfolded-conclusion fingerprint (cyclic heads opaque; one nullable
+column, computed on the same write path as `conclusion_fingerprint`, invalidated
+only when a definition changes — which the interned DAG scopes to "terms mentioning
+that head"), then forward search over antecedents and hypotheses, then the
+harvester (E2) whenever the equational path is taken up. The e-graph is settled as
+the *structure* for that path (decision 2) but is not the first thing to build. The
 fold is a separate, later feature aimed at similarity, and if it is ever wanted for
 subsumption it needs an asymmetric geometry (order/box embeddings), not a better
 combiner.
+
+Two things this ordering leaves open, both small. The confirm must run against
+unfolded forms too, or a candidate retrieved by the unfolded key fails a syntactic
+`unify` — E8 computed exactly that comparison over thousands of statements without
+trouble, so it is cheap, but it is a change to the confirm and not only the filter.
+And the **bridge** — telling an author *which* definitional steps connect their goal
+to the match — is the one thing expansion gave for free and the normalised index
+does not. It is recoverable from the unfolding, and it is decision 4 in concrete
+form.
 
 The original split argument follows, for the authored-systems case where it still
 holds.
