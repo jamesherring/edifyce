@@ -77,7 +77,6 @@ from app.db import (
     load_citable_theorems,
     load_proof_lines,
     load_schema_terms,
-    load_theorems,
     read_library,
     store_definition_terms,
     store_proof_lines,
@@ -1929,9 +1928,8 @@ async def read_proof_provenance(
     # every part row of every ancestor to use one list of ids, measured at two
     # orders of magnitude more than the walk it replaces. The proofs that predate
     # the column still need it, and asking is one indexed query.
-    reached, _unread = await session.run_sync(
-        lambda sync: reference_closure(sync, proof_id)
-    )
+    closure = await session.run_sync(lambda sync: reference_closure(sync, proof_id))
+    reached, _unread = closure
     legacy = await session.run_sync(lambda sync: unresolved_proofs(sync, reached))
     systems: list[uuid.UUID] = []
     if legacy:
@@ -1945,7 +1943,11 @@ async def read_proof_provenance(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=effective.errors)
         systems = effective.library.system_ids
 
-    found = await session.run_sync(lambda sync: rests_on(sync, proof_id, systems))
+    # Handed the closure this route already walked: deciding whether to build the
+    # library order is what needed it, and the walk is a query per generation.
+    found = await session.run_sync(
+        lambda sync: rests_on(sync, proof_id, systems, closure)
+    )
     return ProofProvenance(
         proof_id=proof_id,
         assumes=[

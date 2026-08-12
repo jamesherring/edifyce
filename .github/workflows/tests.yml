@@ -7,9 +7,9 @@ name: Tests
 # The paths below are "what pytest reads", which is wider than app/ + website/:
 # six test modules import from scripts/ (check_layering, import_metamath,
 # rebuild_markup, restore_proofs, backfill_line_citations), so a change there
-# must re-run the suite. What
-# is deliberately absent is deliberately untested — benchmarks/ is measured
-# rather than asserted, tools/ is Atlas's model loader and rides migrations.yml.
+# must re-run the suite. What is deliberately absent is deliberately untested —
+# benchmarks/ is measured rather than asserted, tools/ is Atlas's model loader
+# and rides migrations.yml.
 
 on:
   pull_request:

@@ -592,7 +592,10 @@ def cited_entries(
 
 
 def rests_on(
-    session: Session, proof_id: uuid.UUID, systems: Sequence[uuid.UUID]
+    session: Session,
+    proof_id: uuid.UUID,
+    systems: Sequence[uuid.UUID],
+    closure: tuple[Sequence[uuid.UUID], tuple[str, ...]] | None = None,
 ) -> RestsOn:
     """What one proof transitively assumes, from rows alone.
 
@@ -605,8 +608,15 @@ def rests_on(
     ``systems`` covers every proof reached, not only the seed: a proof may
     reference only proofs in its own system (which is what lets one lock cover a
     whole reference closure, `_common.lock_system`), so they share a chain.
+
+    ``closure`` is :func:`reference_closure`'s answer, for a caller that already
+    has it. The walk is a query per generation, and a caller that had to know
+    *which* proofs are reached before it could decide whether to build the
+    library order — `read_proof_provenance` — would otherwise pay for it twice.
     """
-    proofs, unread = reference_closure(session, proof_id)
+    proofs, unread = (
+        reference_closure(session, proof_id) if closure is None else closure
+    )
     entries, unresolved = cited_entries(session, proofs, systems)
     return RestsOn(
         assumptions=hydrate(session, closure_of(session, list(entries))),

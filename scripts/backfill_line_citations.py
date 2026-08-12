@@ -27,9 +27,14 @@ proof in one shares it: the chain is loaded once and spent over all of that
 system's proofs.
 
 **Idempotent.** A proof already carrying the flag is skipped, so a re-run costs
-one query. A proof whose system no longer builds is left alone and counted — it
-keeps the flag ``False`` and goes on being read the old way, which is correct
-rather than merely safe.
+one query. Two kinds are deliberately left unflagged and counted instead, both on
+the same rule — the flag is a *claim*, and a claim nothing resolved is worse than
+no claim. A proof whose **system no longer builds** has no order to resolve
+against. And a proof citing a label the library **cannot account for** — one that
+names neither an entry, nor a rule of the chain, nor a hypothesis of the theorem
+it proves — would have that citation silently reclassified as "cited no entry" by
+the flag, where the old read path reports it as unresolved. Both go on being read
+the old way, which is correct rather than merely safe.
 
 Needs ``DATABASE_URL`` (or ``POSTGRES_URL``) pointing at the database to fill in.
 """
@@ -39,6 +44,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+import uuid
 from pathlib import Path
 
 # The script lives under `scripts/`, so the repo root is not on the path when it
@@ -48,7 +54,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import func, select, update  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
-from app.db.assumptions import resolve_labels  # noqa: E402
+from app.db.assumptions import explained_labels, resolve_labels  # noqa: E402
 from app.db.models import Proof  # noqa: E402
 from app.db.proof_lines import ProofLineRow  # noqa: E402
 from app.db.session import get_engine, get_sessionmaker  # noqa: E402
@@ -70,7 +76,9 @@ def _arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def _library_order(session: AsyncSession, system_id) -> list | None:
+async def _library_order(
+    session: AsyncSession, system_id: uuid.UUID
+) -> list[uuid.UUID] | None:
     """Where a citation in this system resolves, or None if it no longer builds."""
     system = await load_system(session, system_id)
     if system is None:
@@ -113,25 +121,27 @@ async def backfill(session: AsyncSession, dry_run: bool) -> dict[str, int]:
             tally["skipped"] += pending
             continue
 
+        # Paged by **key**, not by "what is left in the predicate". A real page
+        # mostly leaves it, but not always — a proof citing a label this library
+        # cannot account for is left unflagged on purpose (see `withheld` below)
+        # and would otherwise be handed back forever — and a dry run flags
+        # nothing at all, so with no key it would re-read its first page and
+        # report a corpus as `CHUNK` proofs. The id is what makes the pages
+        # partition the set either way.
+        after: uuid.UUID | None = None
         while True:
+            page = select(Proof.id).where(
+                Proof.formal_system_id == system_id,
+                Proof.citations_stored.is_(False),
+            )
+            if after is not None:
+                page = page.where(Proof.id > after)
             proofs = (
-                await session.scalars(
-                    select(Proof.id)
-                    .where(
-                        Proof.formal_system_id == system_id,
-                        Proof.citations_stored.is_(False),
-                    )
-                    # By id, so the pages of one run partition the set: an
-                    # unordered LIMIT/OFFSET may show a row twice and skip another.
-                    # No OFFSET, because each page is flagged and so leaves the
-                    # predicate — except on a dry run, which changes nothing and
-                    # would loop forever on the same page.
-                    .order_by(Proof.id)
-                    .limit(CHUNK)
-                )
+                await session.scalars(page.order_by(Proof.id).limit(CHUNK))
             ).all()
             if not proofs:
                 break
+            after = proofs[-1]
 
             labels = (
                 await session.scalars(
@@ -148,24 +158,62 @@ async def backfill(session: AsyncSession, dry_run: bool) -> dict[str, int]:
             )
             tally["proofs"] += len(proofs)
 
+            # A label that resolves to no entry is usually an inference rule or a
+            # hypothesis, and neither is a dependency — but it can also be an
+            # entry this database does not hold, which the report is *meant* to
+            # name. Flagging such a proof would turn "unresolved" into "cited no
+            # entry" and lose it, so `explained_labels` draws the same line the
+            # read path draws and the proofs citing what is left over keep the
+            # flag down.
+            theorem_ids = list(
+                await session.scalars(
+                    select(Proof.theorem_id).where(
+                        Proof.id.in_(list(proofs)), Proof.theorem_id.is_not(None)
+                    )
+                )
+            )
+            explained = await session.run_sync(
+                lambda sync: explained_labels(sync, order, theorem_ids)
+            )
+            unaccounted = [
+                label
+                for label in labels
+                if label not in entries and label not in explained
+            ]
+            withheld: set[uuid.UUID] = set()
+            if unaccounted:
+                withheld = set(
+                    await session.scalars(
+                        select(ProofLineRow.proof_id)
+                        .where(
+                            ProofLineRow.proof_id.in_(list(proofs)),
+                            ProofLineRow.rule.in_(unaccounted),
+                        )
+                        .distinct()
+                    )
+                )
+            resolvable = [pid for pid in proofs if pid not in withheld]
+            tally["skipped"] += len(withheld)
+
             if dry_run:
-                # Count what would be written, then stop: nothing left the
-                # predicate, so a second page would be the first one again.
-                tally["lines"] += await session.scalar(
+                counted = await session.scalar(
                     select(func.count())
                     .select_from(ProofLineRow)
                     .where(
-                        ProofLineRow.proof_id.in_(list(proofs)),
+                        ProofLineRow.proof_id.in_(resolvable),
                         ProofLineRow.rule.in_(list(entries)),
                     )
-                ) or 0
-                break
+                )
+                tally["lines"] += counted or 0
+                continue
 
+            if not resolvable:
+                continue
             for label, theorem_id in entries.items():
                 result = await session.execute(
                     update(ProofLineRow)
                     .where(
-                        ProofLineRow.proof_id.in_(list(proofs)),
+                        ProofLineRow.proof_id.in_(resolvable),
                         ProofLineRow.rule == label,
                     )
                     .values(theorem_id=theorem_id)
@@ -177,7 +225,7 @@ async def backfill(session: AsyncSession, dry_run: bool) -> dict[str, int]:
             # resolution it does not hold.
             await session.execute(
                 update(Proof)
-                .where(Proof.id.in_(list(proofs)))
+                .where(Proof.id.in_(resolvable))
                 .values(citations_stored=True)
             )
             await session.commit()
@@ -200,7 +248,8 @@ async def main() -> int:
     print(
         f"{tally['systems']} systems, {tally['proofs']} proofs, "
         f"{tally['lines']} lines resolved"
-        + (f", {tally['skipped']} proofs skipped (system does not build)"
+        + (f", {tally['skipped']} proofs left unflagged (system does not build, "
+           "or a citation the library cannot account for)"
            if tally["skipped"] else "")
         + (" (dry run, nothing written)" if args.dry_run else "")
     )

@@ -7,9 +7,10 @@ is what tells the two apart.
 
 The two things worth proving about the upgrade path are the same two the markup
 rebuild had to prove: that it lands on exactly what a fresh import writes, and
-that running it twice does not undo the first run. A third matters here because
-the flag is a *claim* — a system that no longer builds must be left unflagged
-rather than marked resolved on no resolution at all.
+that running it twice does not undo the first run. Two more matter here because
+the flag is a *claim*: a system that no longer builds, and a proof citing a label
+the library cannot account for, must both be left unflagged rather than marked
+resolved on no resolution at all.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ pytest.importorskip("aiosqlite")
 pytest.importorskip("regex")
 
 from sqlalchemy import NullPool, create_engine, select
+from sqlalchemy import delete as sa_delete
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
@@ -32,6 +34,7 @@ from app.db import Base
 from app.db.metamath_store import import_corpus
 from app.db.models import FormalSystem, Proof
 from app.db.proof_lines import ProofLineRow
+from app.db.promoted_theorems import PromotedTheoremRow
 from scripts.backfill_line_citations import backfill
 from tests.database import async_url, database_url, enable_foreign_keys
 from tests.test_metamath_persistence import PROPOSITIONAL
@@ -178,3 +181,46 @@ def test_a_system_that_no_longer_builds_is_left_unflagged(db):
     assert tally["lines"] == 0
     assert tally["skipped"] > 0
     assert all(flag is False for _rule, _id, flag in _state(db).values())
+
+
+def test_a_citation_the_library_cannot_account_for_is_left_unflagged(db):
+    # The other way the flag can be a claim nothing backs. A label naming no
+    # entry is usually a rule or a hypothesis — neither a dependency — but it can
+    # also be an entry this database does not hold, which the report exists to
+    # name. Flagging that proof would reclassify the citation as "cited no entry"
+    # and lose it silently, so only the proofs that cite it stay behind.
+    _import(db)
+    fresh = _state(db)
+    missing = next(rule for rule, recorded, _flag in fresh.values() if recorded)
+    _unresolved(db)
+
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            session.execute(
+                sa_delete(PromotedTheoremRow).where(
+                    PromotedTheoremRow.label == missing
+                )
+            )
+            session.commit()
+    finally:
+        engine.dispose()
+
+    tally = _run(db)
+
+    state = _state(db)
+    citing = {name for (name, _at), (rule, _id, _flag) in state.items() if rule == missing}
+    assert citing, "the fixture must actually cite the entry that went missing"
+    assert all(
+        flag is False
+        for (name, _at), (_rule, _id, flag) in state.items()
+        if name in citing
+    )
+    assert tally["skipped"] == len(citing)
+    # The rest of the system is unaffected: one unaccountable label is one
+    # proof's problem, not the corpus's.
+    assert any(
+        flag is True
+        for (name, _at), (_rule, _id, flag) in state.items()
+        if name not in citing
+    )

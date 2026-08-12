@@ -551,6 +551,39 @@ def test_an_unstorable_theorem_costs_that_theorem_not_the_run(
     assert report.lines == len(session.scalars(select(ProofLineRow)).all())
 
 
+def test_a_proof_citing_an_entry_that_did_not_store_keeps_the_flag_down(
+    session, database, monkeypatch
+):
+    # `citations_stored` is a *claim* that every citation's resolution is on the
+    # line. The walk promotes into the in-memory system before it stores, so a
+    # library row that fails to write leaves a proof that checked fine citing a
+    # label with no entry behind it — and recording null there would read as
+    # "this line cited a rule" and drop the dependency, where the label path
+    # still reports it as unresolved. Only `a1i` cites `ax-1`, so the rest of the
+    # corpus is the control.
+    real = metamath_store.store_theorem
+
+    def refuse(session_, system, spec, *args, **kwargs):
+        if spec.label == "ax-1":
+            raise RuntimeError("no room at the inn")
+        return real(session_, system, spec, *args, **kwargs)
+
+    monkeypatch.setattr(metamath_store, "store_theorem", refuse)
+    import_corpus(session, database, name="Propositional")
+
+    flags = dict(session.execute(select(Proof.name, Proof.citations_stored)).all())
+    assert flags["a1i"] is False
+    assert all(flags[name] is True for name in ("mp2", "2a1i", "a2i"))
+    # And nothing was half-written: the flag being down means the columns it
+    # speaks for were left alone.
+    assert all(
+        line.theorem_id is None
+        for line in session.scalars(
+            select(ProofLineRow).join(Proof).where(Proof.name == "a1i")
+        )
+    )
+
+
 def _lines(session: Session, proof: str) -> list[ProofLineRow]:
     return list(
         session.scalars(
