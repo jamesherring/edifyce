@@ -7,42 +7,40 @@ tests check both that sharing happens and that equality is unchanged, including
 for hand-built (un-interned) terms.
 """
 
+import gc
+import weakref
 from copy import copy
 
 import pytest
 
 pytest.importorskip("regex")
 
-from website.logical.compiler import compile as compile_formal_system
-from website.logical.kernel import Node, Var, from_match, from_pattern, intern, match
+from website.logical.declarative import SystemSpec, build_spec, build_system
+from website.logical.kernel import Node, Var, constructor_for, from_match, intern, match
 from website.logical.kernel.terms import _node
-from website.logical.matching import StringPattern
+from website.logical.matching import RegexPattern, StringPattern
+from tests.spec_helpers import brackets, regex_prod, statement_line, template_prod
+from tests.test_definition_step_bridge import alias_spec
 
 
-def build(code):
-    result = compile_formal_system(code)
-    assert "errors" not in result, result.get("errors")
-    system = result["system"]
+def build(spec):
+    system = build_system(spec)
     context = copy(system.context)
     context.variables.update(system.build_context.variables)
     return system, context
 
 
-FOPL = """FormalSystem FOPL:
-
-    Regex atom:
-        ^[a-z]$
-
-    UnionPattern formula:
-        atom
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p -> q)
-
-    formula:
-        implication
-"""
+# First-order logic with a single ASCII-arrow `implication` production over
+# single-letter atoms — the grammar these interning tests build terms through.
+FOPL = SystemSpec(
+    name="FOPL",
+    brackets=brackets(),
+    productions=[
+        regex_prod("formula", "atom", "[a-z]"),
+        template_prod("formula", "implication", "(p -> q)", [("p", "formula"), ("q", "formula")]),
+    ],
+    lines=[statement_line()],
+)
 
 
 @pytest.fixture(scope="module")
@@ -55,7 +53,7 @@ def term(fopl, string):
     _system, context, formula = fopl
     matched = formula.match(string, context)
     assert matched is not None, string
-    return from_match(matched, context)
+    return from_match(matched)
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +95,7 @@ def test_intern_bridges_a_hand_built_term(fopl):
     atom = system.build_context.variables["atom"]
 
     # A term assembled by hand (not through a kernel producer) is not shared...
-    hand = Node(implication, {"p": Node(atom, literal="a"), "q": Node(atom, literal="b")})
+    hand = Node(constructor_for(implication), {"p": Node(constructor_for(atom), literal="a"), "q": Node(constructor_for(atom), literal="b")})
     assert hand is not term(fopl, "(a -> b)")
 
     # ...until interned, when it becomes the canonical shared instance.
@@ -115,7 +113,7 @@ def test_equal_still_holds_for_uninterned_terms(fopl):
     atom = system.build_context.variables["atom"]
     implication = system.build_context.variables["implication"]
 
-    hand = Node(implication, {"p": Node(atom, literal="a"), "q": Node(atom, literal="b")})
+    hand = Node(constructor_for(implication), {"p": Node(constructor_for(atom), literal="a"), "q": Node(constructor_for(atom), literal="b")})
     canonical = term(fopl, "(a -> b)")
 
     # Different objects (hand is un-interned)...
@@ -128,7 +126,7 @@ def test_equal_still_holds_for_uninterned_terms(fopl):
 def test_substitution_result_is_interned(fopl):
     system, context, formula = fopl
     implication = system.build_context.variables["implication"]
-    schema = Node(implication, {"p": Var("p", formula), "q": Var("q", formula)})
+    schema = Node(constructor_for(implication), {"p": Var("p", constructor_for(formula)), "q": Var("q", constructor_for(formula))})
 
     reified = schema.substitute(
         {"p": term(fopl, "a"), "q": term(fopl, "b")}, context
@@ -147,8 +145,8 @@ def test_nodes_differing_only_in_sort_are_not_merged(fopl):
     system, context, formula = fopl
     atom = system.build_context.variables["atom"]
 
-    plain = intern(Node(atom, literal="a"))
-    with_sort = intern(Node(atom, literal="a", sort=formula))
+    plain = intern(Node(constructor_for(atom), literal="a"))
+    with_sort = intern(Node(constructor_for(atom), literal="a", sort=formula))
 
     # Interning keeps them distinct (sort is part of the key)...
     assert plain is not with_sort
@@ -170,12 +168,44 @@ def test_different_constructors_are_not_merged(fopl):
         "antecedent", "(p -> q)", variables={"p": formula, "q": formula}
     )
     # Build the schema-substituted node FIRST, then the parsed production node.
-    node_schema = _node(pattern=schema_pattern, children={"p": a, "q": b})
-    node_production = _node(pattern=implication, children={"p": a, "q": b})
+    node_schema = _node(constructor_for(schema_pattern), children={"p": a, "q": b})
+    node_production = _node(constructor_for(implication), children={"p": a, "q": b})
 
     assert node_schema is not node_production
-    assert node_production.pattern is implication  # kept its production
+    # Kept its own constructor: one is built per production, so two productions
+    # of the same shape stay distinct objects even though they compare equal.
+    assert node_production.constructor is constructor_for(implication)
     # ...and equal ignores the constructor identity, still calling them equal.
     assert node_schema.equal(node_production, context)
     # A formula variable therefore still binds to the parsed production node.
-    assert match(Var("phi", formula), node_production, context) is not None
+    assert match(Var("phi", constructor_for(formula)), node_production, context) is not None
+
+
+def test_defined_notation_interns_like_a_production():
+    # A match made through a *definition* re-parents the sub-matches of its
+    # defined form. Those must be shared, not copied: a copy used to carry a
+    # copied `Pattern`, and since a node's interning key is its constructor's
+    # identity, every definition-backed subterm then missed the table — so two
+    # parses of `a sub b` built disjoint DAGs while `(a ∈ b)` shared one.
+    system = build_spec(alias_spec())["system"]
+    lines = system.parse("a sub b [HYP]\na sub b [HYP]").proof_lines
+    first, second = (line.formula_term for line in lines)
+
+    assert first is second
+    assert all(first.children[label] is second.children[label] for label in first.children)
+
+
+def test_a_constructor_is_reclaimed_with_its_production():
+    # The projection memo lives on the production, not in a module-level cache.
+    # It cannot live in one: a grammar is mutually recursive — `implication`'s
+    # slot sort is the `formula` union that contains it — so a cache entry's
+    # value reaches back to its own key and keeps itself alive. A system rebuilt
+    # per request would then grow the process without bound.
+    def build_and_drop() -> weakref.ref:
+        pattern = RegexPattern("throwaway", "^x$")
+        assert constructor_for(pattern) is constructor_for(pattern)  # memoised
+        return weakref.ref(pattern)
+
+    refs = [build_and_drop() for _ in range(20)]
+    gc.collect()
+    assert all(ref() is None for ref in refs)

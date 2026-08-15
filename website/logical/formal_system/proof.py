@@ -6,23 +6,40 @@ from copy import copy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from ..graphs import find_cycle, saturating_matching, topological_order
+from ..graphs import saturating_matching
+from ..kernel.definitions import check_definitional_step
 from ..kernel.side_conditions import Not, Occurs
-from ..kernel.terms import from_match
-from ..matching import Match, MatchSet, get_by_path, parse_arguments, parse_path
-from .definitions import follows_by_definition
+from .diagnostics import Failure, numbers
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable, Sequence
+
+    from ..kernel.definitions import Definition
+    from ..kernel.terms import Term
     from ..matching.context import Context
-    from ..matching.definitions import Definition
+    from .diagnostics import FailureCode, SlotReport
     from .rules import InferenceRule
 
 
 # Generous upper bound on how many antecedents a single line may cite. The
 # assignment search is pruned and fast-rejected (see Proof._first_valid_assignment),
 # so this is only a guard against a pathological citation, not the old factorial
-# permutation limit; no real proof approaches it.
-MAX_CITED_ANTECEDENTS = 16
+# permutation limit.
+#
+# It was 16, on the reasoning that no real proof approaches it. Real proofs do:
+# 437 of set.mm's assertions take more than 16 essential hypotheses, so a proof
+# applying one cites more than 16 lines, and the largest (`aks6d1c2lem3`) takes
+# 35. A citation that big is still cheap here, because a proof imported from
+# Metamath cites in the rule's own hypothesis order, so the first assignment the
+# search tries is the one that works.
+MAX_CITED_ANTECEDENTS = 64
+
+# How many binding assignments a *diagnosis* will enumerate before giving up on
+# naming the proviso that blocked (see `Proof._binding_assignments`). A failed
+# citation with many admissible orderings is exactly where the search is
+# expensive, and this runs after the line has already failed — a slower, sharper
+# answer is worth having, an unbounded one is not.
+_EXPLAINED_ASSIGNMENTS = 8
 
 # The justification keyword for a definitional step: a line cited as
 # `[Def, <line>]` claims to be the cited line with one definition unfolded (or
@@ -32,6 +49,41 @@ MAX_CITED_ANTECEDENTS = 16
 # still wins, since rules are resolved first, so a system is free to repurpose
 # the keyword.
 DEFINITION_KEY = "Def"
+
+# The justification keyword for an **open goal**: a line cited `[?]` states a
+# formula it does not claim to have proved. Later lines may cite it and check
+# against it — that is what makes a proof writable top-down — and the proof as a
+# whole stays invalid until it is filled, so nothing is claimed on its strength
+# (see docs/authoring-and-ingestion-roadmap.md §8).
+#
+# A keyword rather than a line type, following `DEFINITION_KEY`: an inference rule
+# of the same label still wins, since rules are resolved first, so a system is free
+# to repurpose it. The one thing a hole inherits from the grammar is that the
+# system's *reference part* must admit these characters — the Metamath importer's
+# `_REFERENCE_REGEX` is widened for it, and a hand-authored system declares its own.
+HOLE_KEY = "?"
+
+# What separates a citation's parts: `[MP, 4, 6]` is the rule `MP` applied to
+# lines 4 and 6. A constant because two places need to agree about it — the
+# reader below, and `citation_text`, which composes one from a rule and some line
+# numbers so a caller need not know a system's citation syntax to write one.
+CITATION_SEPARATOR = ", "
+
+
+def citation_text(rule: str, antecedents: Sequence[int] = ()) -> str:
+    """The citation text a rule applied to some lines is written as.
+
+    ``citation_text("MP", [4, 6])`` is ``"MP, 4, 6"`` — the *reference* only, not
+    the brackets around it, which belong to the line type's shape.
+
+    Trivial, and it exists so a caller proposing a justification *structurally*
+    never has to know a system's citation syntax: a label and some integers are
+    already unambiguous, and making a client format them is exactly where a
+    projection creeps back into a structured path. A free function rather than a
+    `FormalSystem` method because it needs no grammar — which matters, since a
+    caller that wanted only this would otherwise have to build one.
+    """
+    return CITATION_SEPARATOR.join([rule, *(str(n) for n in antecedents)])
 
 
 class Subproof:
@@ -78,17 +130,17 @@ class Subproof:
         # The subproof's result: its last formula-bearing logical line.
         for line in reversed(self.lines):
             if line.line_type is not None and line.line_type.behaviour == "logical" \
-                    and line.formula is not None:
+                    and line.formula_term is not None:
                 return line
         return None
 
     @property
-    def eigenvariable(self) -> Match | None:
+    def eigenvariable(self) -> Term | None:
         # The fresh variable a "variable" subproof introduces (its opener's
-        # formula match), or None for other kinds.
+        # formula term), or None for other kinds.
         if self.kind != "variable" or self.assumption is None:
             return None
-        return self.assumption.formula
+        return self.assumption.formula_term
 
     def is_ancestor_of(self, other: Subproof | None) -> bool:
         # Whether this subproof encloses `other` (reflexively).
@@ -117,25 +169,31 @@ class Subproof:
         # structurally on kernel terms via the closed side-condition algebra
         # (kernel.side_conditions) - the graph representation, not strings. This
         # is the algebra's own worked example: Not(Occurs("x", "phi")).
-        eigenvariable = self.eigenvariable
-        if eigenvariable is None:
+        eigenvariable_term = self.eigenvariable
+        if eigenvariable_term is None:
             return False
 
-        eigenvariable_term = from_match(eigenvariable, context)
         fresh = Not(Occurs("eigenvariable", "hypothesis"))
 
         for assumption in self.enclosing_assumptions():
-            if assumption.formula is None:
+            if assumption.formula_term is None:
                 continue
 
             binding = {
                 "eigenvariable": eigenvariable_term,
-                "hypothesis": from_match(assumption.formula, context),
+                "hypothesis": assumption.formula_term,
             }
             if not fresh.check(binding, context):
                 return False
 
         return True
+
+
+def _proof_lines(items: Iterable[object]) -> list[ProofLine]:
+    # The proof lines among a resolved citation's antecedents. A reference may
+    # resolve to other things (a whole proof, a folder), which a diagnosis has
+    # nothing to say about and must not trip over.
+    return [item for item in items if isinstance(item, ProofLine)]
 
 
 def line_is_accessible(citing_line: ProofLine, cited_line: ProofLine) -> bool:
@@ -167,13 +225,12 @@ class InferenceReference:
     """A reference that resolves to an inference rule application.
 
     Returned by :meth:`Proof.get_reference` when a reference string names an
-    inference rule (optionally with antecedent lines and a variable mapping).
+    inference rule (optionally with antecedent lines).
     """
 
     inference_rule: object
     key: str
     antecedents: list = field(default_factory=list)
-    mapping: dict = field(default_factory=dict)
 
 
 @dataclass(eq=False)
@@ -194,18 +251,20 @@ class DefinitionReference:
 
 
 @dataclass(eq=False)
-class ImportResult:
-    """The outcome of :meth:`Proof.import_path`."""
+class HoleReference:
+    """A reference that declares the line an **open goal** rather than justifying it.
 
-    success: bool
-    error_message: str | None = None
-    target: object = None
+    Returned by :meth:`Proof.get_reference` for :data:`HOLE_KEY`. It carries only
+    the keyword because a hole cites nothing — that is what makes it a hole.
+    """
+
+    key: str
 
 
 class Proof:
     """A proof in a formal system."""
 
-    def __init__(self, formal_system, reference_proofs=None, result=None):
+    def __init__(self, formal_system, result=None):
 
         # The system in which this proof belongs
         self.formal_system = formal_system
@@ -222,17 +281,15 @@ class Proof:
         # The proof lines leading to the result
         self.proof_lines = []
 
-        # A dictionary of references to other proofs - given on proof creation
-        self.reference_proofs = reference_proofs
+        # The subset of `proof_lines` a citation can name, in citation order, so
+        # `numbered_lines[n - 1]` is the line written `n`. Kept separate from
+        # `proof_lines` (which holds every physical line, blanks included) so
+        # that adding a blank line or a comment never renumbers the steps below.
+        self.numbered_lines = []
 
-        # A reference for labelled lines
+        # Labelled lines, plus any lemma proofs the caller pre-seeds under an
+        # alias so this proof can cite them (see app/routers/proofs.py).
         self.reference_context = {}
-
-        # Keep a set of proof models referenced from this one (no folders)
-        self.proofs_used = set()
-
-        # The proof model id
-        self.model_id = None
 
         # The root subproof and the live scope stack, built during parsing.
         # `root_scope` stays None until the first line is assigned, so a proof
@@ -245,6 +302,16 @@ class Proof:
         # opener. Called in source order, so by the time a discharge line is
         # reached the subproofs it cites are already built and closed.
 
+        line_type = proof_line.line_type
+
+        # Commentary takes no part in the proof's structure. Skipping it here is
+        # what stops an unindented note from dedenting out of the subproof it
+        # sits in and silently closing it — the author would then get an
+        # out-of-scope error on a line they never touched. Blank lines are
+        # skipped before this point for the same reason.
+        if line_type is not None and line_type.behaviour == "comment":
+            return
+
         if self.root_scope is None:
             self.root_scope = Subproof(kind=None, open_indent=-1)
             self._scope_stack = [self.root_scope]
@@ -254,8 +321,6 @@ class Proof:
         # Dedenting past a subproof's opener closes it.
         while len(stack) > 1 and proof_line.indent <= stack[-1].open_indent:
             stack.pop()
-
-        line_type = proof_line.line_type
 
         if line_type is not None and line_type.scope in ("assumption", "variable"):
             sub = Subproof(
@@ -274,12 +339,27 @@ class Proof:
             stack[-1].lines.append(proof_line)
 
     def get_proof_line(self, line_number):
-        # Get a proof line by line number
-        # Line numbers are 1-based, matching how references are written in proofs.
-        if not 1 <= line_number <= len(self.proof_lines):
+        # Get a proof line by citation number (1-based, as written in proofs).
+        # Not a text-line index: blank lines and commentary carry no number.
+        if not 1 <= line_number <= len(self.numbered_lines):
             return None
 
-        return self.proof_lines[line_number - 1]
+        return self.numbered_lines[line_number - 1]
+
+    def assign_line_number(self, proof_line: ProofLine) -> None:
+        # Give the line the number a citation names it by. Called in source
+        # order once the line's type is known.
+        #
+        # Commentary is skipped: it asserts nothing, so nothing can cite it, and
+        # leaving it unnumbered is what makes prose free to insert. A line that
+        # matched no line type is still numbered - the author meant it as a step,
+        # and renumbering everything below a typo would be worse than the typo.
+        line_type = proof_line.line_type
+        if line_type is not None and line_type.behaviour == "comment":
+            return
+
+        self.numbered_lines.append(proof_line)
+        proof_line.number = len(self.numbered_lines)
 
     def add_proof_line(self, text, context):
         proof_line = ProofLine(self, text, context=copy(context))
@@ -303,12 +383,61 @@ class Proof:
             "lines": [line.data() for line in self.proof_lines]
         }
 
+    @property
+    def holes(self) -> list[ProofLine]:
+        """The lines stated as open goals rather than proved (`HOLE_KEY`).
+
+        What a caller needs to tell an *unfinished* proof from a wrong one: both
+        report `valid = False`, and only this says which. A proof with holes and no
+        other failure is one whose shape checks and whose remaining work is
+        enumerated here.
+        """
+        return [
+            line
+            for line in self.proof_lines
+            if line.failure is not None and line.failure.code == "hole"
+        ]
+
+    @property
+    def only_holes(self) -> bool:
+        """Whether every failing line is an open goal.
+
+        The predicate a top-down author (or an elaboration loop) works against:
+        true means nothing is *wrong*, there is just work left. False with holes
+        present means both, and the errors are the ones to fix first — filling a
+        goal beneath a broken step proves nothing.
+        """
+        failing = [line for line in self.proof_lines if not line.valid]
+        return bool(failing) and all(
+            line.failure is not None and line.failure.code == "hole"
+            for line in failing
+        )
+
     def logical_lines(self):
         # Count the logical lines in the proof
         return len([
             line for line in self.proof_lines
             if (not line.empty) and (line.line_type is not None) and line.line_type.behaviour == "logical"
         ])
+
+    def _resolve_antecedents(self, refs: list[str], context: Context) -> list[ProofLine]:
+        # Resolve the cited-line refs following a rule/theorem label into the
+        # antecedent lines. Shared by the inference-rule and promoted-theorem
+        # branches of get_reference. A ref that does not resolve to a proof line
+        # is an error.
+        antecedents: list[ProofLine] = []
+        for r in refs:
+            try:
+                item = self.get_reference(r, context)
+            except Exception:
+                raise Exception(f"{r} is not a proof line.") from None
+
+            if not isinstance(item, ProofLine):
+                raise Exception(f"{r} is not a proof line.")
+
+            antecedents.append(item)
+
+        return antecedents
 
     def get_reference(self, ref, context):
         # Get the referenced line from a ref string
@@ -317,55 +446,47 @@ class Proof:
         if ref in self.reference_context:
             return self.reference_context[ref]
 
-        for ir in self.formal_system.inference_rules:
-            # Compare against the ir label and formatted label
-            if ref == ir.label or ref == self.formal_system.format_string(ir.label):
-                return InferenceReference(inference_rule=ir, key=ref)
+        rule = self.formal_system.rule_by_label(ref)
+        if rule is not None:
+            return InferenceReference(inference_rule=rule, key=ref)
 
-        if ", " in ref:
+        # A zero-premise proved/imported theorem cited by its label alone. The
+        # ephemeral rule is built per citation (see promotion) rather than kept
+        # among the system's primitive rules.
+        promoted = self.formal_system.promoted_theorems.get(ref)
+        if promoted is not None:
+            return InferenceReference(inference_rule=promoted.as_rule(), key=ref)
+
+        # An open goal. After the rule and theorem lookups, so a system that names
+        # something `?` keeps its own meaning — the same precedence `Def` has.
+        if ref == HOLE_KEY:
+            return HoleReference(key=ref)
+
+        if CITATION_SEPARATOR in ref:
             # Split the ref into parts
-            ref_parts = ref.split(", ")
+            ref_parts = ref.split(CITATION_SEPARATOR)
             key = ref_parts[0]
 
-            for ir in self.formal_system.inference_rules:
-                if key == ir.label:
-                    # It's an inference rule
+            rule = self.formal_system.rule_by_label(key)
+            if rule is not None:
+                antecedents = self._resolve_antecedents(ref_parts[1:], context)
+                return InferenceReference(inference_rule=rule, key=key, antecedents=antecedents)
 
-                    # Get the antecedent lines
-                    antecedents = []
-                    mapping = {}
-                    last_proof_line = None
-                    for r in ref_parts[1:]:
-                        try:
-                            item = self.get_reference(r, context)
-
-                            if isinstance(item, ProofLine):
-                                antecedents.append(item)
-                                last_proof_line = item
-                                continue
-
-                        except Exception:
-                            # if item is None and last_proof_line is not None:
-                            # Probably a mapping
-                            try:
-                                if last_proof_line is not None:
-                                    mapping.update(self.get_reference_mapping(r, last_proof_line, context))
-                                    continue
-
-                            except Exception:
-                                pass
-
-                        # Otherwise this is not a proof line
-                        raise Exception(f"{r} is not a proof line.")
-
-                    return InferenceReference(
-                        inference_rule=ir, key=key, antecedents=antecedents, mapping=mapping
-                    )
+            # A proved/imported theorem applied to cited premises, `[<Thm>, i, ...]`.
+            # Resolved exactly like a rule - its schematic statement is
+            # re-instantiated against the premises and goal by unification, and its
+            # `$d` provisos (now `disjoint` side-conditions) are enforced.
+            promoted = self.formal_system.promoted_theorems.get(key)
+            if promoted is not None:
+                antecedents = self._resolve_antecedents(ref_parts[1:], context)
+                return InferenceReference(
+                    inference_rule=promoted.as_rule(), key=key, antecedents=antecedents
+                )
 
             # A definitional step: `[<name>, <line>]` cites a named definition,
             # or `[Def, <line>]` leaves the applicable definition to be searched
             # for. Either way it cites exactly one source line.
-            named = self._definition_by_label(key, context)
+            named = self._definition_by_label(key)
             if named is not None or key == DEFINITION_KEY:
                 sources = [
                     item for r in ref_parts[1:]
@@ -404,26 +525,6 @@ class Proof:
         # Nothing works
         raise Exception(f"Invalid reference: {ref}")
 
-    @staticmethod
-    def get_reference_mapping(ref, source_proof_line, context):
-        # Get the mapping on a proof line with reference to the source proof line.
-
-        if " mapsto " not in ref:
-            return {}
-
-        source, target = ref.split(" mapsto ")
-
-        # Get the source pattern using the source line context
-        pattern = get_by_path(None, source, source_proof_line.context)
-
-        # Use the same pattern with the current context to get a target match
-        target_match = pattern.match(target, context)
-
-        if target_match is None:
-            raise Exception(f"Cannot map {source} to {target}.")
-
-        return {source: target_match}
-
     def check_logical_line(self, proof_line, context):
         # Check if the given proof line is valid.
 
@@ -435,10 +536,15 @@ class Proof:
             # Easy case
             return True
 
-        if proof_line.formula is None:
-            # No formula
+        if proof_line.formula_term is None:
+            # No formula. Parsing may already have said something more specific -
+            # that the formula was there but could not be projected into a term
+            # (see FormalSystem.parse) - so don't flatten that to the generic
+            # message.
             proof_line.valid = False
-            proof_line.invalid_message = "No formula defined for logical line."
+            if proof_line.invalid_message is None:
+                proof_line.invalid_message = "No formula defined for logical line."
+            proof_line.fail("no-formula")
             return False
 
         # Get the reference
@@ -447,6 +553,7 @@ class Proof:
         except Exception as e:
             proof_line.invalid_message = str(e)
             proof_line.valid = False
+            proof_line.fail("bad-reference", reference=proof_line.reference_string)
             return False
 
         # A definitional step: this line is the cited line with one definition
@@ -454,16 +561,25 @@ class Proof:
         if isinstance(reference, DefinitionReference):
             return self.check_definitional_line(proof_line, reference, context)
 
+        # An open goal: stated, not proved. Invalid, so `proof.valid` is False and
+        # everything gated on validity (promotion above all) refuses it for free;
+        # the code is what lets a *reader* tell an unfinished step from a wrong one.
+        if isinstance(reference, HoleReference):
+            proof_line.valid = False
+            proof_line.invalid_message = "Open goal: this line is stated but not proved."
+            proof_line.fail("hole")
+            return False
+
         if not isinstance(reference, InferenceReference):
             proof_line.invalid_message = f"Invalid reference '{proof_line.reference_string}'."
             proof_line.valid = False
+            proof_line.fail("bad-reference", reference=proof_line.reference_string)
             return False
 
         # Otherwise, it's an inference rule
 
         inference_rule = reference.inference_rule
         key = reference.key
-        proof_line.reference_mapping = reference.mapping
 
         # Get the antecedent lines
         antecedents = reference.antecedents
@@ -480,9 +596,10 @@ class Proof:
             if isinstance(ant, ProofLine) and not line_is_accessible(proof_line, ant):
                 proof_line.valid = False
                 proof_line.invalid_message = (
-                    f"Line {ant.index() + 1} is out of scope "
+                    f"Line {ant.number} is out of scope "
                     "(it is inside a closed subproof)."
                 )
+                proof_line.fail("out-of-scope", rule=key, lines=numbers([ant]))
                 return False
 
         if len(antecedents) == 0 and len(inference_rule.antecedents) == 0:
@@ -493,11 +610,27 @@ class Proof:
                     deduction=proof_line,
                     context=context
             ):
-                # It's a valid line
+                # Record the rule as every other justifying branch does, so a
+                # zero-premise step is not the one kind of line whose
+                # justification is left unattributed.
+                proof_line.inference_rule = inference_rule
                 return True
 
-        elif len(antecedents) == 0 and len(inference_rule.antecedents) < 5:
-            # Antecedents not provided. Try to justify:
+        elif (
+            len(antecedents) == 0
+            and len(inference_rule.antecedents) <= MAX_CITED_ANTECEDENTS
+        ):
+            # Antecedents not provided. Try to justify from the lines above.
+            #
+            # Bounded by the same constant the explicit path uses, not by an arity
+            # of its own: the old `< 5` was the permutation guard the assignment
+            # search retired (see `MAX_CITED_ANTECEDENTS` below), left behind when
+            # it was replaced. What it cost was a lie rather than only a
+            # restriction — a five-premise rule cited with none was told it
+            # "requires 5 antecedent(s)", which reads as too few given when in
+            # fact the checker declined to look. `set.mm` reaches it: `cbvald`'s
+            # step 6 cites `cbv2` with the five lines immediately above it, which
+            # is exactly what this branch infers.
             return self.justify(
                 deduction=proof_line,
                 context=context,
@@ -509,12 +642,31 @@ class Proof:
             # Not enough antecedents
             proof_line.valid = False
             proof_line.invalid_message = f"{key} requires {len(inference_rule.antecedents)!s} antecedent(s)."
+            cited = _proof_lines(antecedents)
+            proof_line.fail(
+                "antecedent-count",
+                rule=key,
+                expected=len(inference_rule.antecedents),
+                given=len(antecedents),
+                # Which slots the lines they *did* cite could fill, so an author
+                # short of a premise is told which one is missing rather than only
+                # that a count is wrong.
+                slots=inference_rule.slot_reports(
+                    cited, inference_rule.admissibility(cited, context)
+                ),
+            )
             return False
 
         if len(antecedents) > len(inference_rule.antecedents) and not inference_rule.allow_extra_antecedents:
             # Too many antecedents
             proof_line.valid = False
             proof_line.invalid_message = f"{key} requires exactly {len(inference_rule.antecedents)!s} antecedent(s)."
+            proof_line.fail(
+                "antecedent-count",
+                rule=key,
+                expected=len(inference_rule.antecedents),
+                given=len(antecedents),
+            )
             return False
 
         if len(antecedents) > MAX_CITED_ANTECEDENTS:
@@ -527,6 +679,12 @@ class Proof:
             proof_line.valid = False
             proof_line.invalid_message = (
                 f"{key} cites too many antecedents ({len(antecedents)}; max {MAX_CITED_ANTECEDENTS})."
+            )
+            proof_line.fail(
+                "too-many-antecedents",
+                rule=key,
+                expected=MAX_CITED_ANTECEDENTS,
+                given=len(antecedents),
             )
             return False
 
@@ -543,10 +701,118 @@ class Proof:
             proof_line.inference_rule = inference_rule
             return True
 
-        # No admissible, consistent assignment: not a valid line.
+        # No admissible, consistent assignment: not a valid line. What *kind* of
+        # "does not apply" it was is worked out here, on the failure path only, so
+        # a corpus whose proofs all check pays nothing for it.
         proof_line.valid = False
         proof_line.invalid_message = f"{key} does not apply."
+        self._explain_assignment(proof_line, inference_rule, list(antecedents), key, context)
         return False
+
+    def _explain_assignment(
+        self,
+        proof_line: ProofLine,
+        inference_rule: InferenceRule,
+        lines: list[ProofLine],
+        key: str,
+        context: Context,
+    ) -> None:
+        # Work out which kind of "does not apply" this was, and record it. Runs
+        # only after the line has already failed, so the checking path is untouched
+        # and this may ask every question rather than stopping at the first.
+        #
+        # The order is by how actionable the answer is, not by how the check runs.
+        cited = numbers(lines)
+
+        # 1. Ordering. Cheap, unambiguous, and it explains a citation that looks
+        #    perfectly well shaped: a rule may not conclude from a later line.
+        for line in lines:
+            if proof_line.proof is line.proof and proof_line.index() <= line.index():
+                proof_line.fail("ordering", rule=key, lines=numbers([line]))
+                return
+
+        # The slot/line graph, built once: every question below is asked of it,
+        # and building it is a unification per edge.
+        adjacency = inference_rule.admissibility(lines, context)
+
+        # 2. A slot no cited line can fill *on its own*. The most useful answer
+        #    there is — that slot's schema is a premise this proof does not have,
+        #    which is exactly the next goal for anyone working backwards.
+        unsatisfied = inference_rule.unsatisfied_slots(adjacency)
+        if unsatisfied:
+            proof_line.fail("slot-unsatisfied", rule=key, lines=cited, slots=unsatisfied)
+            return
+
+        # 3. Every slot has candidates, so the failure is about them holding
+        #    *together* — unless a proviso is what blocked. That is asked first
+        #    because it is the sharper answer, and it needs an assignment that
+        #    binds to be checked against; where several bind, the first that trips
+        #    a proviso is reported.
+        for candidate in self._binding_assignments(
+            inference_rule, lines, proof_line, context, adjacency
+        ):
+            proviso = inference_rule.failing_proviso(candidate, proof_line, context)
+            if proviso is not None:
+                proof_line.fail(
+                    "side-condition",
+                    rule=key,
+                    lines=numbers(candidate),
+                    proviso=proviso,
+                )
+                return
+
+        # 4. Otherwise: either no assignment to distinct lines exists, or one does
+        #    and the shared metavariables will not agree across it. Both are the
+        #    same advice — the citation is individually plausible and jointly not —
+        #    so they share a code and the slot graph is what distinguishes them.
+        proof_line.fail(
+            "inconsistent-binding",
+            rule=key,
+            lines=cited,
+            slots=inference_rule.slot_reports(lines, adjacency),
+        )
+
+    def _binding_assignments(
+        self,
+        inference_rule: InferenceRule,
+        lines: list[ProofLine],
+        deduction: ProofLine,
+        context: Context,
+        adjacency: dict[int, list[int]],
+    ) -> list[tuple[ProofLine, ...]]:
+        # Assignments of cited lines to slots that unify, ignoring provisos — the
+        # candidates a side-condition could be what rejected. Diagnosis only: the
+        # search in `_first_valid_assignment` stops at the first assignment that
+        # passes everything, and this one keeps going past the provisos precisely
+        # to find out whether they are the reason it found none.
+        #
+        # Bounded exactly as that search is — the same admissibility graph, the
+        # same fast reject when no system of distinct representatives exists, and
+        # the same prefix pruning — so it explores what that search explored and no
+        # more, up to `_EXPLAINED_ASSIGNMENTS`.
+        required = len(inference_rule.antecedents)
+        if saturating_matching(range(required), adjacency) is None:
+            return []
+        found: list[tuple[ProofLine, ...]] = []
+
+        def walk(slot: int, chosen: list[int]) -> None:
+            if len(found) >= _EXPLAINED_ASSIGNMENTS:
+                return
+            if slot == required:
+                found.append(tuple(lines[j] for j in chosen))
+                return
+            for j in adjacency[slot]:
+                if j in chosen:
+                    continue
+                candidate = [*chosen, j]
+                if not inference_rule.prefix_binding_exists(
+                    [lines[k] for k in candidate], deduction, context
+                ):
+                    continue
+                walk(slot + 1, candidate)
+
+        walk(0, [])
+        return found
 
     def _first_valid_assignment(
         self,
@@ -567,10 +833,7 @@ class Proof:
         # assignments instead of every permutation. Each complete candidate is
         # confirmed by the authoritative, binding-consistent InferenceRule.check.
         required = len(inference_rule.antecedents)
-        adjacency = {
-            slot: [j for j, line in enumerate(lines) if inference_rule.slot_admits(slot, line, context)]
-            for slot in range(required)
-        }
+        adjacency = inference_rule.admissibility(lines, context)
 
         if saturating_matching(range(required), adjacency) is None:
             # Some slot has no admissible line, or no system of distinct
@@ -634,6 +897,9 @@ class Proof:
         if len(openers) != 1:
             proof_line.valid = False
             proof_line.invalid_message = f"{key} requires exactly one subproof reference."
+            proof_line.fail(
+                "no-subproof", rule=key, expected=1, given=len(openers)
+            )
             return False
 
         opener = openers[0]
@@ -641,7 +907,8 @@ class Proof:
 
         if subproof is None:
             proof_line.valid = False
-            proof_line.invalid_message = f"Line {opener.index() + 1} does not open a subproof."
+            proof_line.invalid_message = f"Line {opener.number} does not open a subproof."
+            proof_line.fail("no-subproof", rule=key, lines=numbers([opener]))
             return False
 
         # The subproof must be a *completed* one, in scope to discharge from
@@ -651,23 +918,27 @@ class Proof:
                 or subproof.is_ancestor_of(proof_line.scope):
             proof_line.valid = False
             proof_line.invalid_message = (
-                f"Subproof at line {opener.index() + 1} is out of scope to discharge here."
+                f"Subproof at line {opener.number} is out of scope to discharge here."
+            )
+            proof_line.fail(
+                "subproof-out-of-scope", rule=key, lines=numbers([opener])
             )
             return False
 
         if inference_rule.check_discharge(subproof, proof_line, context):
             proof_line.inference_rule = inference_rule
+            proof_line.discharged_scope = subproof
             return True
 
         proof_line.valid = False
         proof_line.invalid_message = f"{key} does not apply."
+        proof_line.fail("discharge-mismatch", rule=key, lines=numbers([opener]))
         return False
 
-    @staticmethod
-    def _definition_by_label(label: str, context: Context) -> "Definition | None":
-        # The definition in scope cited by this label, or None. Used to resolve a
+    def _definition_by_label(self, label: str) -> Definition | None:
+        # The system's definition cited by this label, or None. Used to resolve a
         # `[<name>, <line>]` citation to the specific named definition.
-        for definition in context.definitions:
+        for definition in self.formal_system.definitions:
             if definition.label == label:
                 return definition
         return None
@@ -688,7 +959,10 @@ class Proof:
         if not line_is_accessible(proof_line, source):
             proof_line.valid = False
             proof_line.invalid_message = (
-                f"Line {source.index() + 1} is out of scope (it is inside a closed subproof)."
+                f"Line {source.number} is out of scope (it is inside a closed subproof)."
+            )
+            proof_line.fail(
+                "out-of-scope", rule=reference.key, lines=numbers([source])
             )
             return False
 
@@ -696,6 +970,7 @@ class Proof:
         if source.proof is proof_line.proof and proof_line.index() <= source.index():
             proof_line.valid = False
             proof_line.invalid_message = f"{reference.key} must cite an earlier line."
+            proof_line.fail("ordering", rule=reference.key, lines=numbers([source]))
             return False
 
         # The cited line must be a formula-bearing logical line: a definitional
@@ -703,238 +978,46 @@ class Proof:
         # non-logical citation is a clean invalid line, not an AttributeError
         # inside follows_from_definition (which dereferences line_type.behaviour).
         if source.line_type is None or source.line_type.behaviour != "logical" \
-                or source.formula is None:
+                or source.formula_term is None:
             proof_line.valid = False
-            proof_line.invalid_message = f"Line {source.index() + 1} is not a formula line."
+            proof_line.invalid_message = f"Line {source.number} is not a formula line."
+            proof_line.fail("no-formula", rule=reference.key, lines=numbers([source]))
             return False
 
         candidates = [reference.definition] if reference.definition is not None \
-            else list(context.definitions)
+            else list(self.formal_system.definitions)
 
         for definition in candidates:
-            if proof_line.follows_from_definition(source, definition, {}, context):
+            if proof_line.follows_from_definition(source, definition, context):
                 proof_line.valid = True
                 proof_line.antecedents = (source,)
+                proof_line.applied_definition = definition
                 source.dependent_lines.add(proof_line)
                 return True
 
         proof_line.valid = False
         if reference.definition is not None:
             proof_line.invalid_message = (
-                f"{reference.key} does not apply between this line and line {source.index() + 1}."
+                f"{reference.key} does not apply between this line and line "
+                f"{source.number}."
             )
         else:
             proof_line.invalid_message = (
                 f"{reference.key} does not apply: no definition in scope relates this line "
-                f"to line {source.index() + 1}."
+                f"to line {source.number}."
             )
+        proof_line.fail(
+            "definition-mismatch",
+            rule=reference.key,
+            lines=numbers([source]),
+            # `Definition.label` is declared and may be None (an unnamed
+            # definition is legal); the ones with a name are the ones a caller
+            # could cite explicitly, so they are what is worth reporting.
+            definitions=tuple(
+                d.label for d in candidates if d is not None and d.label is not None
+            ),
+        )
         return False
-
-    def import_path(self, path, label, context):
-        # Import a result using the given path
-
-        def add_reference(obj):
-            # Add a reference to the given object - if it can be associated with a proof
-            if isinstance(obj, Proof):
-                self.proofs_used.add(obj)
-
-            elif isinstance(obj, ProofLine):
-                self.proofs_used.add(obj.proof)
-
-            elif hasattr(obj, "proof"):
-                self.proofs_used.add(obj.proof)
-
-            if self in self.proofs_used:
-                self.proofs_used.remove(self)
-
-        if path in self.reference_proofs:
-            # Found it
-            item = self.reference_proofs[path]
-            if "errorMessage" in item:
-                add_reference(item["target"])
-                return ImportResult(success=False, error_message=item["errorMessage"], target=item["target"])
-
-            ref_item = item["target"]
-
-        elif path in self.reference_context:
-            # Found it
-            ref_item = self.reference_context[path]
-
-            if hasattr(ref_item, "proof"):
-                # This is probably a ProofModel
-                ref_item = ref_item.proof
-
-        else:
-            parts = path.split(".")
-
-            initial = parts[0]
-            remainder = ".".join(parts[1:])
-
-            if initial in self.reference_context:
-                # Check reference context first
-                obj = self.reference_context[initial]
-
-                try:
-                    ref_item = obj.get_reference(remainder, context)
-
-                    if hasattr(ref_item, "proof"):
-                        # This is probably a ProofModel
-                        ref_item = ref_item.proof
-
-                except Exception as e:
-                    return ImportResult(success=False, error_message=str(e))
-
-            elif initial in self.reference_proofs:
-                # Found it
-                ref_dict = self.reference_proofs[initial]
-
-                if "errorMessage" in ref_dict:
-                    # This is an error string
-                    add_reference(ref_dict["target"])
-                    return ImportResult(success=False, error_message=ref_dict["errorMessage"], target=ref_dict["target"])
-
-                ref_target = ref_dict["target"]
-                ref_item = ref_target.get_reference(remainder, context)
-
-                if ref_item is None:
-                    # No such label in the ref proof
-                    add_reference(ref_target)
-                    return ImportResult(
-                        success=False,
-                        error_message=f"{initial} does not have a line with label {remainder}.",
-                        target=ref_target,
-                    )
-
-                if isinstance(ref_target, Proof) and (ref_target.has_warnings or not ref_target.valid):
-                    # Referenced proof has errors
-                    add_reference(ref_target)
-                    return ImportResult(
-                        success=False,
-                        error_message=f"{path} has unresolved errors.",
-                        target=ref_target,
-                    )
-
-            else:
-                # Don't recognise the path
-                return ImportResult(success=False, error_message=f"Could not find '{path}'.")
-
-        # Add the reference, snapshotting enough state to back the import out
-        # cleanly if it turns out to close a cycle. `had_label` distinguishes "the
-        # label had no prior binding" from "it was bound to something" so the
-        # rejection path restores the shadowed binding instead of erasing it.
-        previous_proofs_used = set(self.proofs_used)
-        had_label = label in self.reference_context
-        previous_binding = self.reference_context.get(label)
-        self.reference_context[label] = ref_item
-        add_reference(ref_item)
-
-        # Reject a circular import: a theorem that (transitively) depends on this
-        # proof cannot soundly justify it. add_reference has just recorded the new
-        # dependency edge, so a cycle now reachable through proofs_used means this
-        # import closes a loop. Restore the prior state (including any label this
-        # import shadowed) and fail rather than admit it.
-        if self.circular_dependency() is not None:
-            self.proofs_used = previous_proofs_used
-            if had_label:
-                self.reference_context[label] = previous_binding
-            else:
-                self.reference_context.pop(label, None)
-            return ImportResult(
-                success=False,
-                error_message=f"Importing '{path}' would create a circular dependency.",
-                target=ref_item,
-            )
-
-        # Add any definitions we have imported
-        if isinstance(ref_item, ProofLine) and ref_item.line_type is not None and ref_item.line_type.behaviour == "definition":
-            context.definitions.add(ref_item.definition)
-            self.import_definition(ref_item.definition, context)
-
-        elif isinstance(ref_item, Proof):
-            for line in ref_item.proof_lines:
-                if isinstance(line, ProofLine) and line.line_type is not None and line.line_type.behaviour == "definition":
-                    context.definitions.add(line.definition)
-                    self.import_definition(line.definition, context)
-
-        return ImportResult(success=True, target=ref_item)
-
-    def import_definition(self, definition, context):
-        # Import the given definition from one proof to another. Requires careful handling with inherited patterns
-
-        build_context = self.formal_system.build_context
-
-        # Get the pattern name
-        pattern_name = definition.pattern.name
-
-        # Get the instance of this pattern in this formal system
-        pattern = build_context.variables[pattern_name]
-
-        # Get a copy of context to add the variables needed for this pattern
-        context_copy = copy(context)
-        context_copy.string_variables.update(definition.variables)
-
-        # Use the build context pattern if it exists
-        for key, value in definition.variables.items():
-            name = value.name
-            if name in build_context.variables:
-                context_copy.string_variables[key] = build_context.variables[name]
-
-        # Carry the binder declarations and `where` proviso across the import so
-        # the proviso is still enforced (or, if it cannot be rebuilt in this
-        # context, the kernel path refuses the step - never silently drops it).
-        result = pattern.add_definition(definition.lower.pattern, definition.higher.pattern, context_copy,
-                                        require_lower_match=False,
-                                        fresh=definition.fresh or None,
-                                        kernel_condition=definition.kernel_condition)
-
-        if result is None:
-            raise Exception(f"Failed to import definition: {definition.higher.pattern}")
-
-        # Remove any existing (possibly duplicate) conditions
-        if result not in context.definitions:
-            remove_items = set()
-
-            for defn in context.definitions:
-                if defn.higher.pattern == result.higher.pattern and defn.pattern.can_map_to(pattern, context):
-                    # Can be removed
-                    remove_items.add(defn)
-
-            for item in remove_items:
-                context.definitions.remove(item)
-
-            # Add the definition to context
-            context.definitions.add(result)
-
-    def _dependency_graph(self) -> dict[Proof, set[Proof]]:
-        # The import/theorem dependency graph reachable from this proof: each
-        # proof mapped to the proofs it uses (proofs_used, populated as imports
-        # are resolved). Only Proof vertices are followed - proofs_used holds
-        # Proof objects - so the walk terminates at proofs with no dependencies.
-        graph: dict[Proof, set[Proof]] = {}
-        stack: list[Proof] = [self]
-        while stack:
-            proof = stack.pop()
-            if proof in graph:
-                continue
-            dependencies = {dep for dep in proof.proofs_used if isinstance(dep, Proof)}
-            graph[proof] = dependencies
-            stack.extend(dep for dep in dependencies if dep not in graph)
-        return graph
-
-    def dependency_order(self) -> list[Proof]:
-        # The proofs this one transitively depends on (and itself), ordered so
-        # every proof comes after the proofs it uses - the order in which they
-        # could be checked from the ground up. Raises graphlib.CycleError if the
-        # imports are circular; call circular_dependency to report the cycle
-        # instead of raising.
-        return topological_order(self._dependency_graph())
-
-    def circular_dependency(self) -> list[Proof] | None:
-        # A circular import/theorem dependency reachable from this proof, as a
-        # list of proofs whose last entry repeats the first, or None if the
-        # dependency graph is acyclic. A theorem that (transitively) cites itself
-        # is not a sound justification, which this makes detectable.
-        return find_cycle(self._dependency_graph())
 
     def justify(self, deduction, context, inference_rule=None):
         # Artificially try to find a justification for the given reference. Optionally specify a inference rule.
@@ -943,7 +1026,7 @@ class Proof:
 
             logical_lines = [
                 line for line in self.proof_lines[:deduction.index()]
-                if line.line_type is not None and line.line_type.behaviour in ("logical", "definition")
+                if line.line_type is not None and line.line_type.behaviour == "logical"
                 and line_is_accessible(deduction, line)
             ][-len(inference_rule.antecedents):]
 
@@ -951,6 +1034,12 @@ class Proof:
                 # Not enough previous logical lines
                 deduction.valid = False
                 deduction.invalid_message = "Antecedent lines couldn't be inferred."
+                deduction.fail(
+                    "antecedent-count",
+                    rule=inference_rule.label,
+                    expected=len(inference_rule.antecedents),
+                    given=len(logical_lines),
+                )
                 return False
 
             # Same admissible-assignment search as an explicit citation: the
@@ -967,7 +1056,9 @@ class Proof:
             # Otherwise, no justification found
             deduction.valid = False
             deduction.invalid_message = f"{inference_rule.label} does not apply."
-
+            self._explain_assignment(
+                deduction, inference_rule, logical_lines, inference_rule.label, context
+            )
             return False
 
         # Otherwise, no inference rule specified.
@@ -995,23 +1086,32 @@ class ProofLine:
         self.reference_string = reference_string
         self.reference_string_display = reference_string
 
-        # A reference mapping given on the line
-        self.reference_mapping = {}
-
         # The label for this line (if any)
         self.label = label
 
-        # The formula match (if any) on this line
-        self.formula = None
+        # The number a citation names this line by, assigned during parsing.
+        # None for a line no citation can reach: a blank line or commentary.
+        self.number = None
 
-        # The definition created (if any) on this line
-        self.definition = None
+        # The line's formula as a kernel term, projected during parsing (see
+        # FormalSystem.parse). This is what every check runs on: rule
+        # unification, side-conditions, definitional steps. None for a line that
+        # declares no formula field, or whose field is absent from the parse.
+        self.formula_term: Term | None = None
+
+        # The formula's surface string, read by the string-rewriting path (a
+        # semi-Thue system like MIU matches flat text rather than structure -
+        # see InferenceRule._string_pairs). Set by the parse; *derived* from the
+        # term otherwise - see the `formula_string` property below.
+        self._formula_string: str | None = None
+        # Memo for that derivation, and the term it was derived from. Keyed by
+        # the term rather than a bare flag so a re-projected formula cannot be
+        # answered from a stale render.
+        self._rendered_string: str | None = None
+        self._rendered_from: Term | None = None
 
         # The LineType used for this line
         self.line_type = None
-
-        # The match with the line type pattern
-        self.match = None
 
         # The indentation of this line
         self.indent = len(self.text) - len(self.text.lstrip())
@@ -1025,13 +1125,33 @@ class ProofLine:
 
         # This line may be an axiom
         self.is_axiom = False
-        self.axiom_pattern = None
-
-        # The axiom this line uses (if any)
-        self.axiom = None
 
         # The inference instance with this line as the deduction
         self.inference = None
+
+        # The inference rule that justified this line, once one has (None while
+        # unchecked, for an unjustified line, and for a definitional step).
+        self.inference_rule = None
+
+        # The definition a definitional step unfolded or folded, once one has.
+        # Recorded because a generic `[Def, n]` citation names none: the checker
+        # searches the definitions in scope, so which one applied is knowable
+        # only here, and a reader cannot recover it from the citation text.
+        self.applied_definition: Definition | None = None
+
+        # The cited lines this line was justified from: those filling the rule's
+        # declared antecedent slots, and any surplus lines an
+        # `allow_extra_antecedents` rule tolerated. Declared here (rather than
+        # attached ad hoc by the checker) so every line carries them and a reader
+        # -- the proof-line snapshot in `app/db/proofs_mapping.py` -- can walk the
+        # justification graph without probing for the attribute.
+        self.antecedents: tuple[ProofLine, ...] = ()
+        self.extra_antecedents: tuple[ProofLine, ...] = ()
+
+        # The subproof a discharge rule consumed to justify this line, or None.
+        # A discharge cites a *block*, not lines, so it is recorded apart from
+        # `antecedents` rather than flattened into them.
+        self.discharged_scope: Subproof | None = None
 
         # Whether this step in the proof is valid
         self.valid = True
@@ -1042,12 +1162,55 @@ class ProofLine:
         # Invalid message
         self.invalid_message = None
 
+        # Why this line is not established, as data — the same verdict
+        # `invalid_message` states in a sentence, plus what the checker knew and
+        # used to discard. None while the line stands. See `.diagnostics`.
+        self.failure: Failure | None = None
+
         # Warning message
         self.warning_message = None
 
         # Line may be empty
         self.empty = len(self.text) == 0
 
+    @property
+    def formula_string(self) -> str | None:
+        """The formula's surface string — as parsed, or rendered from the term.
+
+        A parse records the substring it matched, and that is authoritative. A
+        line rebuilt from its stored row has no substring to record, so the
+        string is *rendered* from the term instead (`Term.to_string`), which is
+        exact: a term renders through its constructor's template pieces, a ground
+        leaf renders its own literal, and the matcher accepts no source spelling
+        that differs from those. See docs/verification-from-rows.md §4.
+
+        Derived rather than asked for, because no caller is in a position to know
+        whether it will be needed. The string is read only by the string-matching
+        path, and what selects that path can be an inference rule *or* a promoted
+        theorem — and the library is resolved after a proof's lines are populated,
+        so a load-time "does this system need strings?" question is asked before
+        its answer exists. It got the answer wrong, and a proof that verified when
+        parsed failed when checked from its rows.
+        """
+        if self._formula_string is not None:
+            return self._formula_string
+        if self.formula_term is None:
+            return None
+        # Memoised because the string path reads this *many* times per check —
+        # once per slot per candidate line while the bipartite assignment graph
+        # is built (`slot_admits`), then again per prefix the search tries
+        # (`_string_pairs`). Measured at 8.6 reads per line on a seven-line MIU
+        # proof with four rules, against the one render per line the load path
+        # used to do; a structured semi-Thue grammar would pay a DAG walk each
+        # time.
+        if self._rendered_from is not self.formula_term:
+            self._rendered_string = self.formula_term.to_string()
+            self._rendered_from = self.formula_term
+        return self._rendered_string
+
+    @formula_string.setter
+    def formula_string(self, value: str | None) -> None:
+        self._formula_string = value
     def execute(self, context):
         # Execute this proof line in the system.
 
@@ -1063,66 +1226,27 @@ class ProofLine:
                 # the duration of its subproof, a fresh variable is simply
                 # introduced. Neither asserts anything until a discharge rule
                 # consumes the subproof, so there is nothing to justify here.
-                self.valid = True
+                #
+                # "Nothing to justify" is not "nothing can be wrong", though: if
+                # parsing already rejected the line (its formula would not
+                # project), granting it anyway would hide the fault here and
+                # surface it as an unexplained discharge failure further down.
+                if self.invalid_message is None:
+                    self.valid = True
             else:
                 # Logical lines for parsing
                 self.proof.check_logical_line(self, context)
 
         elif line_type.behaviour == "axiom":
-            # Introduce an axiom to the system
-
+            # An axiom line asserts its own formula, so it needs no justification:
+            # `check_logical_line` short-circuits on `is_axiom`. It used to also
+            # generalise the formula into a reusable schema by round-tripping the
+            # match back into a pattern, but nothing ever read the result - a
+            # promoted theorem is the typed mechanism for that now (see
+            # `promotion.PromotedTheorem`).
             self.is_axiom = True
 
-            self.axiom_pattern = self.formula.create_pattern(context.string_variables)
-            self.axiom_pattern.name = self.label
-
-        elif line_type.behaviour == "definition":
-            # Introduce a new definition to context
-
-            try:
-                # Get the higher and lower strings, and the pattern it should apply to.
-                lower = self.match.get_by_path("lower()", context)
-                higher = self.match.get_by_path("higher()", context)
-                pattern = self.match.get_by_path("for()", context)
-            except Exception:
-                # Not a valid definition
-                self.valid = False
-                self.invalid_message = "Missing higher or lower for definition."
-                return
-
-            if pattern.match(lower.string, context) is None:
-                self.valid = False
-                self.invalid_message = f"{lower.string} is not an instance of {pattern.name}."
-                return
-
-            # Add the definition (an in-proof alias; provisos are expressed with
-            # `where` on a system-level `Define`, not on this line type).
-            self.definition = pattern.add_definition(lower.formatted_string(), higher.formatted_string(), context)
-
-        elif line_type.behaviour == "import":
-            # Import a file or result
-
-            try:
-
-                if self.label is None:
-                    self.valid = False
-                    self.invalid_message = "Line has missing label."
-                    return
-
-                path = self.match.get_by_path("path()", context)
-                result = self.proof.import_path(path, self.label, context)
-
-                if not result.success:
-                    # Error
-                    self.valid = False
-                    self.invalid_message = result.error_message
-
-            except Exception as e:
-                # No valid path or label
-                self.valid = False
-                self.invalid_message = f"Could not get path or label from import line: {e!s}"
-
-        elif line_type.behaviour in ("none", "comment"):
+        elif line_type.behaviour == "comment":
             # Don't need to do anything :)
             pass
 
@@ -1130,331 +1254,75 @@ class ProofLine:
         # Get the index of this line in the proof
         return self.proof.proof_lines.index(self)
 
-    def get_by_path(self, path, context, recurse=True):
-        # Get an attribute of the proof line given a path s
+    def fail(
+        self,
+        code: FailureCode,
+        *,
+        rule: str | None = None,
+        reference: str | None = None,
+        lines: tuple[int, ...] = (),
+        expected: int | None = None,
+        given: int | None = None,
+        slots: tuple[SlotReport, ...] = (),
+        proviso: str | None = None,
+        definitions: tuple[str, ...] = (),
+    ) -> None:
+        """Record *why* this line is not established, beside the sentence.
 
-        if context.reference_object is None:
-            context = copy(context)
-            context.reference_object = self
+        Called wherever `invalid_message` is set, and it takes the message *from*
+        that field rather than restating it — two independently written texts for
+        one verdict drift, and the sentence is already the one a reader sees.
 
-        initial, remainder = parse_path(path)
+        Never overwrites. The first thing to fail is the reason, and a later,
+        vaguer diagnosis (`_explain_assignment` falling through to its default)
+        must not bury a sharper one that already landed.
+        """
+        if self.failure is not None:
+            return
+        self.failure = Failure(
+            code=code,
+            message=self.invalid_message or "",
+            rule=rule,
+            reference=reference,
+            lines=lines,
+            expected=expected,
+            given=given,
+            slots=slots,
+            proviso=proviso,
+            definitions=definitions,
+        )
 
-        if remainder:
-            # Use generic get by path
-            return get_by_path(self, path, context)
-
-        # Otherwise, only one part
-        if path == "text()":
-            return self.text
-
-        if path == "match()":
-            # Get the match
-            return self.match
-
-        if path == "pattern()":
-            return self.line_type.pattern
-
-        if path == "formula()":
-            return self.formula
-
-        if path == "label()":
-            return self.label
-
-        if path == "definition()":
-            return self.definition
-
-        if path == "conditions()":
-            return self.context.conditions
-
-        if path == "reference_mapping()":
-            return copy(self.reference_mapping)
-
-        if path == "previous_formulae()":
-            return self.previous_formulae()
-
-        if "(" in path and path[:path.index("(")] in self.line_type.inherited_functions(context):
-            # An attribute function with parameters
-
-            index = path.index("(")
-            name = path[:index]
-
-            args_strings = path[index + 1:-1]
-            args, kwargs = parse_arguments(args_strings, self, context)
-
-            return self.run_function(name, context, args=args, kwargs=kwargs)
-
-        if path.startswith("check_condition(") and path[-1] == ")":
-            inner = path[16:-1]
-            kwargs = parse_arguments(inner, self, context, arg_names=("condition", "mapping"))[1]
-
-            return self.check_condition(kwargs["condition"], context, kwargs["mapping"])
-
-        if path.startswith("follows_from_definition(") and path[-1] == ")":
-            # Follows from definition
-            inner = path[24:-1]
-            kwargs = parse_arguments(inner, self, context, arg_names=("other", "definition", "mapping"))[1]
-
-            return self.follows_from_definition(kwargs["other"], kwargs["definition"], kwargs["mapping"], context)
-
-        # Try to get path using the frozen context
-        if path in self.context.logical:
-            return self.context.logical[path]
-
-        if recurse:
-            # Try generic get_by_path
-            return get_by_path(self, path, context, recurse=False)
-
-        raise Exception(f"Could not find value from path '{path}'.")
-
-    def check_condition(self, condition, context, mapping=None):
-        # Check a condition using the given context. Optionally specify a string variable mapping
-
-        # Work with a copy of context
-        context = copy(context)
-
-        if mapping is not None:
-            # Set context mapping
-            if not isinstance(mapping, dict):
-                raise ValueError(f"Mapping dictionary must be a dictionary, not {type(mapping)!s}.")
-            context.mapping = mapping
-
-        # Set string variable matches
-        context.set_string_variable_matches()
-
-        try:
-            return condition.check_condition(self, context)
-        except Exception:
-            return False
-
-    def follows_from_definition(self, other, definition, mapping, context):
-        # Check if this proof line follows from the other by means of a definition.
+    def follows_from_definition(self, other, definition, context):
+        # Check if this proof line follows from the other by means of a definition:
+        # one structural unfold over the shared-DAG term representation, checked in
+        # either direction, with no re-parsing (see formal_system/definitions.py).
 
         if (not self.line_type.behaviour == "logical") or (not other.line_type.behaviour == "logical"):
             # Must be logical lines
             return False
 
-        # Prefer the term-based checker: a definitional step is one structural
-        # unfold over the shared-DAG term representation, no re-parsing (see
-        # formal_system/definitions.py). It returns None when this definition is
-        # not soundly expressible as a kernel one (an undeclared binder the Define
-        # DSL cannot carry) - only then do we fall back to the string-based
-        # check_application. The kernel check covers both directions, and derives
-        # variable consistency structurally, so it applies only when no
-        # caller-supplied mapping constrains the match.
-        if not mapping and self.formula is not None and other.formula is not None:
-            kernel_result = follows_by_definition(self.formula, other.formula, definition, context)
-            if kernel_result is not None:
-                return kernel_result
-
-        # The kernel path is unavailable. A definition carrying a `where` proviso
-        # can only be enforced by that path - the string-based check_application
-        # enforces no proviso - so falling back would silently drop it and accept
-        # steps it should block. Refuse instead (the step is not verified).
-        if definition.kernel_condition is not None:
+        if self.formula_term is None or other.formula_term is None:
             return False
 
-        # Check if the definition applies - in either direction
-        return definition.check_application(
-            lower=other.formula,
-            higher=self.formula,
-            context=context,
-            mapping=mapping
-        ) or definition.check_application(
-            lower=self.formula,
-            higher=other.formula,
-            context=context,
-            mapping=mapping
+        return check_definitional_step(
+            self.formula_term, other.formula_term, definition, context
         )
-
-    def edit_context(self, context):
-        # Edit the proof context according to the rule on this line type
-
-        if self.line_type.add_context is None:
-            # Nothing to change
-            return context
-
-        # Otherwise, changes to make
-        for key, value in self.line_type.add_context.items():
-
-            if key not in context.__dict__ and key not in context.logical:
-                raise Exception(f"Can't find '{key}' in proof context.")
-
-            # Get the current value and target dictionary
-            if key in context.logical:
-                current_value = context.logical[key]
-                target = context.logical
-            else:
-                current_value = getattr(context, key)
-                target = context.__dict__
-
-            if type(current_value) is dict:
-                # Dictionary type context entry
-
-                for sub_key_string, sub_value_string in value.items():
-
-                    # Try get by path
-                    sub_key = self.get_by_path(sub_key_string, context)
-
-                    # Get the value
-                    sub_value = self.get_by_path(sub_value_string, context)
-
-                    if isinstance(sub_key, (list, tuple, set)):
-                        # Need to add each item
-                        for item in sub_key:
-                            target[key][item] = sub_value
-
-                    elif type(sub_key) is Match:
-                        # Just one match
-                        target[key][sub_key.string] = sub_value
-
-                    else:
-                        # Add directly
-                        target[key][sub_key] = sub_value
-
-            elif type(current_value) is set:
-                # Set type context entry
-
-                for edit_type, sub_value_string in value.items():
-
-                    # Get the value
-                    sub_value = self.get_by_path(sub_value_string, context)
-
-                    # Get the attribute function of the set
-                    attr = getattr(current_value, edit_type)
-
-                    # Run this with the given value
-                    result = attr(sub_value)
-
-                    if result is not None:
-                        # Update the target value
-                        target[key] = result
-
-                    # Otherwise ok - could be just a function that changes the existing value but doesn't return
-                    # anything, e.g. set.add()
-
-            elif type(current_value) is MatchSet:
-                # MatchSet type context entry
-
-                for edit_type, sub_value_string in value.items():
-
-                    # Get the value
-                    sub_value = self.get_by_path(sub_value_string, context)
-
-                    if edit_type == "union":
-                        # Union the set with the value
-
-                        if type(sub_value) is Match:
-                            target[key] = current_value.add(sub_value, context)
-
-                        elif type(sub_value) is MatchSet:
-                            target[key] = current_value.union(sub_value, context)
-
-                        else:
-                            # Has to be a match or a match set
-                            raise Exception(f"Cannot union a set with object of type '{type(sub_value)!s}'.")
-
-                    elif edit_type == "add":
-                        # Add the value to the set
-                        if type(sub_value) is not Match:
-                            # Has to be a match
-                            raise Exception("Cannot add a non-match to a match set")
-
-                        current_value.add(sub_value, context)
-
-                    else:
-                        raise Exception(f"Cannot edit a set with operator '{edit_type}'.")
-
-        return context
 
     def data(self):
         # Get data for this proof line
         return {
             "valid": self.valid,
+            "number": self.number,
             "behaviour": self.line_type.behaviour if self.line_type is not None else None,
             "name": self.line_type.name if self.line_type is not None else None,
             "invalid_message": self.invalid_message,
+            "failure": self.failure.as_dict() if self.failure is not None else None,
             "warning_message": self.warning_message,
             "reference": self.reference_string_display,
             "label": self.label,
             "display": self.display,
             "indent": self.indent
         }
-
-    def run_function(self, name, context, args=None, kwargs=None):
-        # Run a custom function with the given name, args and kwargs
-
-        fn = self.line_type.get_function(name, context)
-
-        if fn is None:
-            raise Exception(f"'{self.line_type.name}' does not have function '{name}'.")
-
-        # Check the params matches have the correct pattern
-        if args is None:
-            args = []
-
-        if kwargs is None:
-            kwargs = {}
-
-        arg_count = len(args) + len(kwargs)
-        if not arg_count == len(fn.params):
-            # Wrong number of parameters provided
-            raise Exception(f"'{name}' expected {len(fn['params'])!s} argument(s), {arg_count!s} provided.")
-
-        # Build a parameter mapping
-        param_mapping = {}
-
-        # Check args
-        for given, fn_param in zip(args, fn.params[:len(args)]):
-            param_mapping[fn_param[0]] = given
-
-        # kwargs don't have to be in order
-        remaining_fn_params = fn.params[len(args):]
-        remaining_fn_param_dict = {param[0]: param[1] for param in remaining_fn_params}
-
-        # Check kwargs
-        for given_name, given in kwargs.items():
-            if given_name not in remaining_fn_param_dict:
-                raise Exception(f"'{name}' does not accept parameter '{given_name}.")
-
-            param_mapping[given_name] = given
-
-        # Create a copy of proof line context
-        context_copy = copy(context)
-
-        # Run the tree as a function
-        tree = fn.tree
-
-        return tree.run_function(item=self, context=context_copy, params=param_mapping, param_types=fn.params)
-
-    def previous_formulae(self):
-        # Return a matchset of formulae that have been proven before this statement in the proof and share the same
-        # logical context.
-
-        # N.B. we don't require that the previous proof lines are valid
-        formulae = MatchSet(allow_multiple=False)
-        indent = self.indent
-
-        # Loop through the previous lines and select only those that are parents/siblings of this line context
-        for i in range(self.index() - 1, -1, -1):
-            line = self.proof.proof_lines[i]
-
-            if line.indent > indent:
-                # This line is more indented - ignore
-                continue
-
-            if line.indent < indent:
-                # This line is less indented - ie. it's a parent line in the abstract syntax tree.
-                indent = line.indent
-                continue
-
-            if line.line_type is None or not line.line_type.behaviour == "logical":
-                # It's not a logical line
-                continue
-
-            # Otherwise, it's a relevant logical line
-            formulae.add(line.formula, self.context)
-
-        return formulae
 
     def __str__(self):
         return f"ProofLine: {self.text}"

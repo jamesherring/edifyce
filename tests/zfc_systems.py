@@ -1,130 +1,62 @@
-"""Edifyce source for the ZFC-style system used by the proof tests.
+"""The ZFC-style scoped natural-deduction system, as a programmatic ``SystemSpec``.
 
-``SCOPED_ZFC`` is a first-order natural-deduction system (membership ``∈``,
-implication ``→``, negation ``¬``, universal ``∀``) built on the scoped-subproof
-engine: a single ``scope: assumption`` line type, first-class subproofs,
-discharge rules that consume a subproof as a unit, and a freshness side-condition
-for ``∀I``. See ``tests/test_zfc_scoped.py``.
+``scoped_zfc_spec()`` returns a first-order natural-deduction system (membership
+``∈``, implication ``→``, negation ``¬``, universal ``∀``) exercised by
+``tests/test_zfc_scoped.py``: ``assumption``/``variable`` scope line types that
+open first-class subproofs, discharge rules (``CP``, ``UG``) that consume a
+subproof as a unit, and ``∀I``'s freshness. It is assembled directly from the
+declarative model and built with ``declarative.build_system`` -- there is no
+``.edi`` source. (The same system was previously the hand-authored ``.edi``
+fixture ``SCOPED_ZFC``; scope + subproof are now first-class in ``SystemSpec``,
+so the fixture is retired in favour of this factory.)
 """
 
-# ---------------------------------------------------------------------------
-# Shared first-order language fragment (identical text in both systems).
-# ---------------------------------------------------------------------------
-_LANGUAGE = r"""
-    Regex setvar:
-        ^[a-z][a-z0-9]*$
+from __future__ import annotations
 
-    UnionPattern formula:
-        membership
+from website.logical.declarative import LineSpec, Rule, Subproof, SystemSpec
 
-    Pattern membership:
-        with x as setvar, y as setvar:
-            x ∈ y
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p → q)
-
-    Pattern negation:
-        with p as formula:
-            ¬p
-
-    Pattern universal:
-        with x as setvar, p as formula:
-            ∀x p
-
-    formula:
-        membership
-        implication
-        negation
-        universal
-
-    Regex reference:
-        ^[A-Za-z0-9, ]+$
-
-    Pattern statement:
-        with f as formula, r as reference:
-            f [r]
-
-    statement.formula():
-        return self.f
-
-    statement.reference():
-        return self.r
-"""
-
-
-SCOPED_ZFC = (
-    "FormalSystem ScopedZFC:\n"
-    + _LANGUAGE
-    + r"""
-    Pattern assumption_pattern:
-        with phi as formula:
-            assume phi
-
-    assumption_pattern.formula():
-        return self.phi
-
-    Pattern variable_pattern:
-        with x as setvar:
-            let x
-
-    variable_pattern.formula():
-        return self.x
-
-    LineType claim:
-        pattern: statement
-        behaviour: logical
-
-    LineType assume:
-        pattern: assumption_pattern
-        behaviour: logical
-        scope: assumption
-
-    LineType introduce:
-        pattern: variable_pattern
-        behaviour: logical
-        scope: variable
-
-    with p as formula, q as formula, x as setvar:
-
-        InferenceRule reiteration:
-            label:
-                R
-            antecedents:
-                p
-            deduction:
-                p
-
-        InferenceRule modus_ponens:
-            label:
-                MP
-            antecedents:
-                p
-                (p → q)
-            deduction:
-                q
-
-        InferenceRule conditional_proof:
-            label:
-                CP
-            subproof:
-                assume:
-                    p
-                derive:
-                    q
-            deduction:
-                (p → q)
-
-        InferenceRule universal_generalisation:
-            label:
-                UG
-            subproof:
-                fresh:
-                    x
-                derive:
-                    p
-            deduction:
-                ∀x p
-"""
+from tests.spec_helpers import (
+    assumption_line,
+    brackets,
+    cp_rule,
+    mp_rule,
+    regex_prod,
+    reiteration_rule,
+    statement_line,
+    template_prod,
 )
+
+
+def scoped_zfc_spec() -> SystemSpec:
+    """The scoped ZFC system: scope line types, subproofs, discharge rules."""
+    return SystemSpec(
+        name="ScopedZFC",
+        brackets=brackets(),
+        productions=[
+            # `setvar` is a leaf sort whose member name must differ from the sort
+            # (else step 4 of build_system appends the union to itself).
+            regex_prod("setvar", "setvar_atom", "[a-z][a-z0-9]*"),
+            template_prod("formula", "membership", "x ∈ y", [("x", "setvar"), ("y", "setvar")]),
+            template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
+            template_prod("formula", "negation", "¬p", [("p", "formula")]),
+            template_prod("formula", "universal", "∀x p", [("x", "setvar"), ("p", "formula")]),
+        ],
+        lines=[
+            statement_line(),   # the claim line: `<formula> [<reference>]`
+            assumption_line(),  # `assume <formula>`, opens an assumption subproof
+            LineSpec(name="introduce", shape="let <setvar>", logical_sort="setvar", scope="variable"),
+        ],
+        rules=[
+            reiteration_rule(),  # R
+            mp_rule(),           # MP
+            cp_rule(),           # CP: →I, discharges an assumption subproof
+            Rule(                # UG: ∀I, discharges a fresh-variable subproof
+                label="UG",
+                name="universal generalisation",
+                antecedents=[],
+                deduction="∀x p",
+                bindings=[("x", "setvar"), ("p", "formula")],
+                subproof=Subproof(fresh="x", derive="p"),
+            ),
+        ],
+    )

@@ -34,10 +34,10 @@
 		definitions and proofs that are readable by both humans and computers.
 	</p>
 	<div class="flex flex-wrap items-center justify-center gap-3">
-		<Button href="/verify">
-			Verify a proof <ArrowRight class="size-4" />
+		<Button href="/systems">
+			Browse systems <ArrowRight class="size-4" />
 		</Button>
-		<Button href="/compile" variant="outline">Compile a system</Button>
+		<Button href="/systems/new" variant="outline">Create a system</Button>
 	</div>
 </section>
 
@@ -62,7 +62,7 @@
 	<Card.Root class="bg-muted">
 		<Card.Header>
 			<Card.Title>How it works</Card.Title>
-			<Card.Description>Two stateless endpoints, one workflow.</Card.Description>
+			<Card.Description>Define a system, then prove in it.</Card.Description>
 		</Card.Header>
 		<Card.Content class="grid gap-4 sm:grid-cols-2">
 			<div class="flex gap-3">
@@ -71,10 +71,10 @@
 					>1</span
 				>
 				<div>
-					<p class="font-medium">Compile a formal system</p>
+					<p class="font-medium">Define a formal system</p>
 					<p class="text-muted-foreground text-sm">
-						Describe line types and inference rules in Edifyce source. The compiler reports the
-						system’s structure or the exact line where it fails.
+						Give it notation, line types and inference rules. Edifyce checks that it compiles and
+						publishes it to the shared library when you’re ready.
 					</p>
 				</div>
 			</div>
@@ -86,7 +86,7 @@
 				<div>
 					<p class="font-medium">Verify a proof</p>
 					<p class="text-muted-foreground text-sm">
-						Write a proof against that system and have each line mechanically checked, with
+						Write a proof against any system and have each line mechanically checked, with
 						line-level diagnostics.
 					</p>
 				</div>

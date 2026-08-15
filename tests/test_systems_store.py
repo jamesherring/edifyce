@@ -1,8 +1,9 @@
 """The formal-system decomposition round-trips through a real database.
 
 Proves the ``source``/``compiled`` blob can go: a system is stored as flat rows,
-reloaded, rebuilt into a ``SystemSpec``, and still lowers to a system that
-checks the same proofs -- and the rows are queryable with plain SQL, no compile.
+reloaded, and rebuilt into a ``SystemSpec`` equal to the original that still
+builds a system checking the same proofs -- and the rows are queryable with
+plain SQL, no compile.
 """
 
 import pytest
@@ -13,23 +14,67 @@ pytest.importorskip("sqlalchemy")
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, aliased
 
-from app.db import Base, spec_to_system, system_to_spec
+from app.db import Base, SideConditionRow, spec_to_system, system_to_spec
+from app.db.promoted_theorems import (
+    PromotedTheoremBindingRow,
+    PromotedTheoremPremiseRow,
+    PromotedTheoremRow,
+)
+from app.db.terms import TermChildRow, TermRow
 from app.db.models import FormalSystem
 from app.db.systems import (
     AxiomBindingRow,
     AxiomRow,
     BracketRow,
     DefinitionBindingRow,
+    DefinitionFreshRow,
     DefinitionRow,
     LinePartRow,
     LineRow,
     ProductionBindingRow,
+    ProductionBindingScopeRow,
     RuleAntecedentRow,
     RuleBindingRow,
     RuleRow,
     SymbolRow,
 )
-from website.logical.declarative import build_spec, lower, parse
+from tests.spec_helpers import (
+    assumption_line,
+    atom_const_prod,
+    atom_family_prod,
+    axiom,
+    biconditional_prod,
+    brackets,
+    comment_line,
+    conjunction_prod,
+    cp_rule,
+    defn,
+    equality_prod,
+    hyp_rule,
+    implication_prod,
+    membership_prod,
+    mp_rule,
+    negation_prod,
+    regex_prod,
+    reiteration_rule,
+    rule,
+    statement_line,
+    subset_def,
+    template_prod,
+    universal_prod,
+    variable_prod,
+)
+from website.logical.declarative import (
+    Justification,
+    LinePart,
+    LineSpec,
+    Production,
+    Rule,
+    SystemSpec,
+    build_spec,
+    build_system,
+    library_digest,
+)
 
 # The system decomposition now lives among the full app schema. The pgvector
 # `theorems` table (and other Postgres-only bits) aren't SQLite-creatable, so
@@ -37,44 +82,37 @@ from website.logical.declarative import build_spec, lower, parse
 _SYSTEM_TABLES = [
     m.__table__
     for m in (
-        FormalSystem, BracketRow, SymbolRow, ProductionBindingRow,
-        LineRow, LinePartRow, DefinitionRow, DefinitionBindingRow,
+        FormalSystem, BracketRow, SymbolRow, ProductionBindingRow, ProductionBindingScopeRow,
+        LineRow, LinePartRow, DefinitionRow, DefinitionBindingRow, DefinitionFreshRow,
         AxiomRow, AxiomBindingRow, RuleRow, RuleAntecedentRow, RuleBindingRow,
+        SideConditionRow,
+        # `rules` and `rule_antecedents` reference `terms` for their cached
+        # schema terms (app/db/schema_terms.py).
+        TermRow, TermChildRow,
+        PromotedTheoremRow, PromotedTheoremPremiseRow, PromotedTheoremBindingRow,
     )
 ]
 
 
-ZFC_SOURCE = """system ZFC
-
-notation
-  brackets ( )
-
-grammar
-  term      | variable      | matches [a-z][a-z0-9]*
-  formula   | membership    | s ∈ t                   | s, t : term
-  formula   | equality      | s = t                   | s, t : term
-  formula   | negation      | ¬p                      | p : formula
-  formula   | conjunction   | (p ∧ q)                 | p, q : formula
-  formula   | implication   | (p → q)                 | p, q : formula
-  formula   | biconditional | (p ↔ q)                 | p, q : formula
-  formula   | universal     | ∀x p                    | x : variable, p : formula
-
-line statement
-  shape <formula> [<reference>]
-  reference | matches [A-Za-z0-9 ,]+
-  logical formula
-
-axioms
-  EXT | extensionality | ∀x ∀y (∀z (z ∈ x ↔ z ∈ y) → x = y)
-
-rules
-  HYP | hypothesis   | from             | infer p | p : formula
-  MP  | modus ponens | from p ; (p → q) | infer q | p, q : formula
-
-definitions
-  formula | subset   | x ⊆ y | means ∀z (z ∈ x → z ∈ y) | x, y, z : variable
-  formula | superset | x ⊇ y | means y ⊆ x              | x, y : variable
-"""
+def zfc_spec() -> SystemSpec:
+    # A compact but genuine fragment of ZFC, assembled directly as a SystemSpec.
+    return SystemSpec(
+        name="ZFC",
+        brackets=brackets(),
+        productions=[
+            variable_prod(), membership_prod(), equality_prod(), negation_prod(),
+            conjunction_prod(), implication_prod(), biconditional_prod(),
+            universal_prod(),
+        ],
+        lines=[statement_line()],
+        axioms=[axiom("EXT", "extensionality", "∀x ∀y (∀z (z ∈ x ↔ z ∈ y) → x = y)")],
+        rules=[hyp_rule(), mp_rule()],
+        definitions=[
+            subset_def(),
+            defn("formula", "superset", "x ⊇ y", "y ⊆ x",
+                 [("x", "variable"), ("y", "variable")]),
+        ],
+    )
 
 
 @pytest.fixture
@@ -87,8 +125,8 @@ def session():
 
 @pytest.fixture
 def stored_system(session):
-    # Parse -> rows -> commit -> reload from a fresh identity map.
-    spec = parse(ZFC_SOURCE)
+    # Spec -> rows -> commit -> reload from a fresh identity map.
+    spec = zfc_spec()
     session.add(spec_to_system(spec))
     session.commit()
     session.expire_all()
@@ -102,13 +140,456 @@ def stored_system(session):
 
 def test_spec_round_trips_through_the_database(stored_system):
     rebuilt = system_to_spec(stored_system)
-    assert rebuilt == parse(ZFC_SOURCE)
+    assert rebuilt == zfc_spec()
 
 
-def test_rebuilt_spec_lowers_identically(stored_system):
-    # The strongest fidelity check: rows -> spec -> .edi is byte-identical to
-    # parsing the original source and lowering it.
-    assert lower(system_to_spec(stored_system)) == lower(parse(ZFC_SOURCE))
+def included_spec() -> SystemSpec:
+    # A sort *inclusion* — a production with no shape, saying `atom` is a
+    # `formula` — declared **between** two shaped productions. Where it sits is
+    # the whole point: it is the one place the rows had nowhere to record.
+    return SystemSpec(
+        name="Included",
+        productions=[
+            regex_prod("atom", "atom_var", r"[A-Z]"),
+            Production(sort="formula", name="atom"),
+            template_prod("formula", "implication", "(x → y)",
+                          [("x", "formula"), ("y", "formula")]),
+        ],
+        lines=[statement_line()],
+    )
+
+
+def overlapping_spec(inclusion_first: bool) -> SystemSpec:
+    """`formula` reachable two ways at once: through `atom`, and directly.
+
+    Both members match the same token, so which one wins is decided by which is
+    tried first — and that is what makes an inclusion's position load-bearing.
+    """
+    inclusion = Production(sort="formula", name="atom")
+    direct = regex_prod("formula", "direct", r"[A-Z]")
+    members = [inclusion, direct] if inclusion_first else [direct, inclusion]
+    return SystemSpec(
+        name="Overlap",
+        productions=[regex_prod("atom", "atom_leaf", r"[A-Z]"), *members],
+        lines=[statement_line()],
+    )
+
+
+def test_where_a_sort_inclusion_sits_decides_the_parse():
+    # **From review on #181**, and it is the reason the obvious fix to the bug
+    # below is wrong. An inclusion looks order-free — it is an edge, and
+    # `spec_to_system` stores it as one — but `build_system` adds every member of
+    # a sort's union in `spec.productions` order and `UnionPattern.match` takes
+    # the first that succeeds. So where an inclusion sits selects a *different
+    # constructor* wherever it overlaps a direct production of the parent sort.
+    first = build_system(overlapping_spec(inclusion_first=True))
+    last = build_system(overlapping_spec(inclusion_first=False))
+
+    through_the_atom = first.parse("A [HYP]").numbered_lines[0].formula_term
+    directly = last.parse("A [HYP]").numbered_lines[0].formula_term
+
+    assert str(through_the_atom) == "Node(atom_leaf='A')"
+    assert str(directly) == "Node(direct='A')"
+
+
+@pytest.mark.parametrize("inclusion_first", [True, False])
+def test_the_database_gives_back_the_grammar_it_was_given(session, inclusion_first):
+    # The two halves joined: a system whose inclusion *does* overlap, stored and
+    # reloaded, must still parse the same text to the same term. This is the
+    # assertion the digest is standing in for everywhere else, made directly —
+    # and the one that would have caught the wrong fix as well as the bug, since
+    # it compares parses rather than hashes.
+    spec = overlapping_spec(inclusion_first=inclusion_first)
+    session.add(spec_to_system(spec))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Overlap"))
+
+    rebuilt = system_to_spec(stored)
+    assert [p.name for p in rebuilt.productions] == [p.name for p in spec.productions]
+    assert library_digest(rebuilt) == library_digest(spec)
+
+    as_declared = build_system(spec).parse("A [HYP]").numbered_lines[0].formula_term
+    from_rows = build_system(rebuilt).parse("A [HYP]").numbered_lines[0].formula_term
+    assert str(from_rows) == str(as_declared)
+
+
+def test_a_digest_never_gives_two_parses_one_value():
+    # The consequence, and the guard: `library_digest` must keep an inclusion
+    # *ordered* among the productions. Hashing inclusions as an unordered set
+    # would collapse the two grammars above into one digest — and unlike a stale
+    # digest, which costs a parse and never a difference, an equal one is
+    # believed, so a cached term composed under one precedence would be accepted
+    # under the other.
+    assert library_digest(overlapping_spec(inclusion_first=True)) != library_digest(
+        overlapping_spec(inclusion_first=False)
+    )
+
+
+def test_a_sort_inclusion_keeps_its_digest_across_the_database(session):
+    # The bug that started this, now fixed in storage. An inclusion carries no
+    # `position` of its own — that column is its place among the *sorts* — so
+    # `system_to_spec` used to emit every inclusion last. The order came back
+    # wrong, the digest moved, and an imported corpus's cached terms never once
+    # passed their guard: measured on `set.mm`, nothing a reader computed matched
+    # what the import wrote, on every layer and on a flat import alike.
+    #
+    # `inclusion_position` records where it sat. Not a hash the digest could have
+    # been taught to ignore — see the two tests above for what it would have been
+    # ignoring.
+    spec = included_spec()
+    session.add(spec_to_system(spec))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Included"))
+
+    rebuilt = system_to_spec(stored)
+    assert [p.name for p in rebuilt.productions] == [p.name for p in spec.productions]
+    assert library_digest(rebuilt) == library_digest(spec)
+
+
+def atomic_spec() -> SystemSpec:
+    # An atom constant (⊥) and an atom family (p_#) alongside a composite.
+    return SystemSpec(
+        name="Atomic",
+        brackets=brackets(),
+        productions=[
+            atom_family_prod("formula", "prop", "p"),
+            atom_const_prod("formula", "falsum", "⊥"),
+            negation_prod(),
+            implication_prod(),
+        ],
+        lines=[statement_line()],
+        rules=[hyp_rule(), rule("X", "contradiction", ["a", "¬a"], "⊥", [("a", "formula")])],
+    )
+
+
+def two_line_spec() -> SystemSpec:
+    # Two logical line types: the usual `statement` plus a ⊢-prefixed `turnstile`.
+    return SystemSpec(
+        name="TwoLines",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        lines=[
+            statement_line(),
+            LineSpec(
+                name="turnstile",
+                shape="⊢ <formula> [<ref>]",
+                parts=[LinePart(name="ref", regex="[A-Za-z0-9 ,.]+")],
+                logical_sort="formula",
+            ),
+        ],
+        rules=[hyp_rule()],
+    )
+
+
+def test_multiple_line_types_round_trip_through_the_database(session):
+    session.add(spec_to_system(two_line_spec()))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "TwoLines"))
+
+    # Both line rows persist, in position order.
+    assert [line.name for line in stored.lines] == ["statement", "turnstile"]
+    assert system_to_spec(stored) == two_line_spec()
+
+    system = build_spec(system_to_spec(stored))["system"]
+    assert system.parse("(a → b) [HYP]").valid is True
+    assert system.parse("⊢ (a → b) [HYP]").valid is True
+
+
+def test_atom_productions_round_trip_through_the_database(session):
+    # Constant / family atoms persist as kind="atom" rows carrying atom_value /
+    # atom_base, and rebuild into an equal SystemSpec.
+    session.add(spec_to_system(atomic_spec()))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Atomic"))
+
+    kinds = {s.name: s.kind for s in stored.symbols}
+    assert kinds["prop"] == "atom" and kinds["falsum"] == "atom"
+    assert system_to_spec(stored) == atomic_spec()
+
+    # And the rebuilt spec still builds a system that checks atom proofs.
+    system = build_spec(system_to_spec(stored))["system"]
+    assert system.parse("p_7 [HYP]").valid is True
+    assert system.parse("p_0 [HYP]\n¬p_0 [HYP]\n⊥ [X, 1, 2]").valid is True
+
+
+def test_object_language_role_round_trips_through_the_database(session):
+    # `denotes_constant` persists per production. Two atoms of identical shape and
+    # opposite roles, so a round trip that dropped or defaulted the column would
+    # collapse them and show up here.
+    spec = SystemSpec(
+        name="Roles",
+        brackets=brackets(),
+        productions=[
+            regex_prod("setvar", "setvar_atom", "[A-Z]"),
+            atom_const_prod("setvar", "cee", "c"),
+            atom_const_prod("formula", "falsum", "⊥", denotes_constant=True),
+            template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+        ],
+        lines=[statement_line()],
+    )
+    session.add(spec_to_system(spec))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Roles"))
+
+    roles = {s.name: s.denotes_constant for s in stored.symbols if s.kind != "union"}
+    assert roles == {
+        "setvar_atom": False, "cee": False, "falsum": True, "membership": False
+    }
+    assert system_to_spec(stored) == spec
+
+
+def test_binding_slots_round_trip_through_the_database(session):
+    # A binder's scope is stored as a link to the *sibling slot row*, not as a
+    # name — so this also pins that the link is resolved back to the right slot
+    # rather than to whichever happens to sit at the same position.
+    spec = SystemSpec(
+        name="Binders",
+        brackets=brackets(),
+        productions=[
+            regex_prod("setvar", "letter", "[a-z]"),
+            template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+            template_prod(
+                "formula", "forall", "∀x.phi",
+                [("x", "setvar"), ("phi", "formula")],
+                scopes_over={"x": ["phi"]},
+            ),
+        ],
+        lines=[statement_line()],
+    )
+    session.add(spec_to_system(spec))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Binders"))
+
+    forall = next(s for s in stored.symbols if s.name == "forall")
+    scopes = {b.var: [s.scoped.var for s in b.scopes] for b in forall.bindings}
+    assert scopes == {"x": ["phi"], "phi": []}
+    assert system_to_spec(stored) == spec
+
+
+def scoped_spec() -> SystemSpec:
+    # A scope-opening `assume` line alongside the plain `statement` line.
+    return SystemSpec(
+        name="Scoped",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        lines=[statement_line(), assumption_line()],
+        rules=[reiteration_rule()],
+    )
+
+
+def test_scoped_line_types_round_trip_through_the_database(session):
+    # The `scope` a line opens persists on the line row and rebuilds into an
+    # equal spec whose subproof scope-checking still holds.
+    session.add(spec_to_system(scoped_spec()))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Scoped"))
+
+    scopes = {line.name: line.scope for line in stored.lines}
+    assert scopes == {"statement": None, "assume": "assumption"}
+    assert system_to_spec(stored) == scoped_spec()
+
+    system = build_spec(system_to_spec(stored))["system"]
+    # In-scope reiteration checks; citing into a closed sibling subproof does not.
+    assert system.parse("assume a\n    a [R, 1]").proof_lines[1].valid is True
+    out_of_scope = system.parse(
+        "assume a\n    a [R, 1]\nassume b\n    a [R, 2]"
+    )
+    assert out_of_scope.proof_lines[3].valid is False
+
+
+def commented_spec() -> SystemSpec:
+    # A prose line alongside the logical one. Its shape names no grammar sort, so
+    # it also pins that a formula-less line survives the round trip.
+    return SystemSpec(
+        name="Commented",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        lines=[statement_line(), comment_line()],
+        rules=[reiteration_rule()],
+    )
+
+
+def test_comment_line_types_round_trip_through_the_database(session):
+    session.add(spec_to_system(commented_spec()))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Commented"))
+
+    behaviours = {line.name: line.behaviour for line in stored.lines}
+    assert behaviours == {"statement": "logical", "note": "comment"}
+    # A comment carries no formula, so it holds no logical-sort reference either.
+    assert {line.name: line.logical_symbol for line in stored.lines}["note"] is None
+    assert system_to_spec(stored) == commented_spec()
+
+    system = build_spec(system_to_spec(stored))["system"]
+    proof = system.parse("-- a header\na [R, 1]")
+    # Prose passes unchecked and takes no number, so the step below is line 1.
+    assert proof.proof_lines[0].valid is True
+    assert [line.number for line in proof.proof_lines] == [None, 1]
+
+
+def discharge_spec() -> SystemSpec:
+    # A scope-opening `assume` line plus a conditional-proof discharge rule.
+    return SystemSpec(
+        name="Discharge",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        lines=[statement_line(), assumption_line()],
+        rules=[reiteration_rule(), cp_rule()],
+    )
+
+
+def test_discharge_rules_round_trip_through_the_database(session):
+    # The subproof a discharge rule consumes persists on the rule row (three
+    # schema lines) and rebuilds into an equal spec whose →I discharge still
+    # checks.
+    session.add(spec_to_system(discharge_spec()))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Discharge"))
+
+    cp_row = next(r for r in stored.rules if r.label == "CP")
+    assert (cp_row.subproof_derive, cp_row.subproof_assume, cp_row.subproof_fresh) == ("q", "p", None)
+    # A non-discharge rule stores no subproof.
+    r_row = next(r for r in stored.rules if r.label == "R")
+    assert r_row.subproof_derive is None
+    assert system_to_spec(stored) == discharge_spec()
+
+    system = build_spec(system_to_spec(stored))["system"]
+    assert system.parse("assume a\n    a [R, 1]\n(a → a) [CP, 1]").valid is True
+
+
+def labelled_definition_spec() -> SystemSpec:
+    # An alias definition carrying a citation label (`sub`); the label must persist
+    # on the definition row and rebuild into a definition citable as `[sub, line]`.
+    return SystemSpec(
+        name="Labelled",
+        brackets=brackets(),
+        productions=[variable_prod(), membership_prod()],
+        lines=[statement_line()],
+        definitions=[
+            defn("formula", "sub", "x sub y", "x ∈ y",
+                 [("x", "term"), ("y", "term")], label="sub"),
+        ],
+        rules=[hyp_rule()],
+    )
+
+
+def test_labelled_definitions_round_trip_through_the_database(session):
+    # A definition's citation `label` persists on its row and rebuilds into an
+    # equal spec whose named citation still resolves.
+    session.add(spec_to_system(labelled_definition_spec()))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Labelled"))
+
+    assert {d.name: d.label for d in stored.definitions} == {"sub": "sub"}
+    assert system_to_spec(stored) == labelled_definition_spec()
+
+    system = build_spec(system_to_spec(stored))["system"]
+    proof = system.parse("a sub b [HYP]\na ∈ b [sub, 1]")
+    assert proof.proof_lines[1].valid is True
+
+
+def justified_definition_spec() -> SystemSpec:
+    # A definition holding only under an obligation the system has already settled
+    # — the `df-sb` shape. Both halves of the citation have to persist: a rebuilt
+    # spec that dropped them would build a definition holding unconditionally,
+    # which is a weaker theory than the one that was stored.
+    return SystemSpec(
+        name="Justified",
+        brackets=brackets(),
+        productions=[variable_prod(), membership_prod(), implication_prod()],
+        lines=[statement_line()],
+        definitions=[
+            defn("formula", "sub", "x sub y", "x ∈ y",
+                 [("x", "term"), ("y", "term")],
+                 justification=Justification("immaterial", "(x ∈ y → x ∈ y)")),
+        ],
+        rules=[
+            hyp_rule(),
+            rule("immaterial", "immaterial", [], "(x ∈ y → x ∈ y)",
+                 [("x", "term"), ("y", "term")]),
+        ],
+    )
+
+
+def test_a_definition_s_justification_round_trips_through_the_database(session):
+    session.add(spec_to_system(justified_definition_spec()))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Justified"))
+
+    row = stored.definitions[0]
+    assert (row.justification_label, row.justification_statement) == (
+        "immaterial", "(x ∈ y → x ∈ y)"
+    )
+    assert system_to_spec(stored) == justified_definition_spec()
+    assert build_spec(system_to_spec(stored))["system"].definition_layering == [True]
+
+
+def test_a_definition_with_no_justification_stores_neither_half(session):
+    session.add(spec_to_system(labelled_definition_spec()))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Labelled"))
+
+    row = stored.definitions[0]
+    assert (row.justification_label, row.justification_statement) == (None, None)
+    assert system_to_spec(stored).definitions[0].justification is None
+
+
+def extra_antecedents_spec() -> SystemSpec:
+    # MPX permits a citation to name more lines than it has premises; MP does not.
+    return SystemSpec(
+        name="ExtraAntecedents",
+        brackets=brackets(),
+        productions=[regex_prod("formula", "atom", "[a-z]"), implication_prod()],
+        lines=[statement_line()],
+        rules=[
+            hyp_rule(),
+            Rule(
+                label="MPX",
+                name="modus_ponens_extra",
+                antecedents=["p", "(p → q)"],
+                deduction="q",
+                bindings=[("p", "formula"), ("q", "formula")],
+                allow_extra_antecedents=True,
+            ),
+            mp_rule(),
+        ],
+    )
+
+
+def test_extra_antecedents_flag_round_trips_through_the_database(session):
+    # `allow_extra_antecedents` persists on the rule row and rebuilds into an equal
+    # spec whose surplus-citation behaviour still holds.
+    session.add(spec_to_system(extra_antecedents_spec()))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(
+        select(FormalSystem).where(FormalSystem.name == "ExtraAntecedents")
+    )
+
+    flags = {r.label: r.allow_extra_antecedents for r in stored.rules}
+    assert flags == {"HYP": False, "MPX": True, "MP": False}
+    assert system_to_spec(stored) == extra_antecedents_spec()
+
+    system = build_spec(system_to_spec(stored))["system"]
+    src = "a [HYP]\n(a → b) [HYP]\nc [HYP]\nb [{rule}, 1, 2, 3]"
+    # MPX fills its two slots and keeps the third line as an unconstrained extra.
+    extra_line = system.parse(src.format(rule="MPX")).proof_lines[-1]
+    assert extra_line.valid is True
+    assert (len(extra_line.antecedents), len(extra_line.extra_antecedents)) == (2, 1)
+    # MP, without the flag, rejects the surplus citation.
+    assert system.parse(src.format(rule="MP")).proof_lines[-1].valid is False
 
 
 def test_decomposition_has_no_source_or_json_blob():
@@ -180,3 +661,48 @@ def test_search_rules_by_antecedent_count(session, stored_system):
         .having(func.count(RuleAntecedentRow.id) == 2)
     ).all()
     assert two_premise == ["MP"]
+
+
+def token_separated_spec() -> SystemSpec:
+    """A system in Metamath's shape: separated tokens, a constant spelling a bracket."""
+    return SystemSpec(
+        name="Separated",
+        brackets=brackets(),
+        token_separated=True,
+        productions=[
+            atom_const_prod("formula", "ph", "ph", denotes_constant=True),
+            atom_const_prod("formula", "ico", "[,)", denotes_constant=True),
+            template_prod(
+                "formula", "implication", "( a -> b )",
+                [("a", "formula"), ("b", "formula")],
+            ),
+        ],
+        lines=[statement_line()],
+        rules=[hyp_rule()],
+    )
+
+
+def test_token_separated_round_trips_through_the_database(session):
+    # An authored declaration, so it is stored rather than re-derived - and the
+    # constant it licenses has to survive the trip with it.
+    session.add(spec_to_system(token_separated_spec()))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "Separated"))
+
+    assert stored.token_separated is True
+    assert system_to_spec(stored) == token_separated_spec()
+
+    system = build_spec(system_to_spec(stored))["system"]
+    assert system.context.variables["formula"].bracket_opaque == ("[,)",)
+    assert system.parse("( ph -> ph ) [HYP]").valid is True
+
+
+def test_a_system_that_declares_nothing_stores_false(session):
+    session.add(spec_to_system(two_line_spec()))
+    session.commit()
+    session.expire_all()
+    stored = session.scalar(select(FormalSystem).where(FormalSystem.name == "TwoLines"))
+
+    assert stored.token_separated is False
+    assert system_to_spec(stored).token_separated is False

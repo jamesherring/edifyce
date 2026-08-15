@@ -18,14 +18,13 @@ import pytest
 pytest.importorskip("regex")
 
 import website.logical.matching.patterns as patterns
-from website.logical.compiler import compile as compile_formal_system
-from website.logical.kernel import Node, Var, from_match, from_pattern, match, match_all
+from website.logical.declarative import SystemSpec, build_system
+from website.logical.kernel import Node, Var, constructor_for, from_match, from_pattern, match, match_all
+from tests.spec_helpers import brackets, regex_prod, rule as rule_spec, statement_line, template_prod
 
 
-def build(code):
-    result = compile_formal_system(code)
-    assert "errors" not in result, result.get("errors")
-    system = result["system"]
+def build(spec):
+    system = build_system(spec)
     context = copy(system.context)
     context.variables.update(system.build_context.variables)
     return system, context
@@ -37,86 +36,55 @@ def rule(system, label):
 
 
 # Implication + conjunction, with modus ponens and conjunction introduction.
-RICH = """FormalSystem Rich:
-
-    Regex atom:
-        ^[a-z][a-z0-9]*$
-
-    UnionPattern formula:
-        atom
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p -> q)
-
-    Pattern conjunction:
-        with p as formula, q as formula:
-            (p ∧ q)
-
-    formula:
-        implication
-        conjunction
-
-    with p as formula, q as formula:
-        InferenceRule modus_ponens:
-            label:
-                MP
-            antecedents:
-                p
-                (p -> q)
-            deduction:
-                q
-
-        InferenceRule conjunction_intro:
-            label:
-                CONJ
-            antecedents:
-                p
-                q
-            deduction:
-                (p ∧ q)
-"""
+# `atom` is a leaf member of `formula` (order preserved so positional pattern
+# lookups in the tests resolve as before).
+RICH = SystemSpec(
+    name="Rich",
+    brackets=brackets(),
+    productions=[
+        regex_prod("formula", "atom", "[a-z][a-z0-9]*"),
+        template_prod("formula", "implication", "(p -> q)", [("p", "formula"), ("q", "formula")]),
+        template_prod("formula", "conjunction", "(p ∧ q)", [("p", "formula"), ("q", "formula")]),
+    ],
+    lines=[statement_line()],
+    rules=[
+        rule_spec(
+            "MP", "modus_ponens", ["p", "(p -> q)"], "q", [("p", "formula"), ("q", "formula")]
+        ),
+        rule_spec(
+            "CONJ", "conjunction_intro", ["p", "q"], "(p ∧ q)", [("p", "formula"), ("q", "formula")]
+        ),
+    ],
+)
 
 # A production names its slots lhs/rhs; the rule names them p/q.
-ALPHA_RENAMED = """FormalSystem AlphaRenamed:
+ALPHA_RENAMED = SystemSpec(
+    name="AlphaRenamed",
+    brackets=brackets(),
+    productions=[
+        regex_prod("formula", "atom", "[a-z][a-z0-9]*"),
+        template_prod(
+            "formula", "implication", "(lhs -> rhs)", [("lhs", "formula"), ("rhs", "formula")]
+        ),
+    ],
+    lines=[statement_line()],
+    rules=[
+        rule_spec("MP", "modus_ponens", ["p", "(p -> q)"], "q", [("p", "formula"), ("q", "formula")])
+    ],
+)
 
-    Regex atom:
-        ^[a-z][a-z0-9]*$
-
-    UnionPattern formula:
-        atom
-
-    Pattern implication:
-        with lhs as formula, rhs as formula:
-            (lhs -> rhs)
-
-    formula:
-        implication
-
-    with p as formula, q as formula:
-        InferenceRule modus_ponens:
-            label:
-                MP
-            antecedents:
-                p
-                (p -> q)
-            deduction:
-                q
-"""
-
-# Near-English set membership.
-SET_THEORY = """FormalSystem SetTheory:
-
-    Regex setvar:
-        ^[a-z]$
-
-    Pattern membership:
-        with x as setvar, y as setvar:
-            x is an element of y
-
-    UnionPattern formula:
-        membership
-"""
+# Near-English set membership. `setvar` is a leaf sort; its regex member is named
+# distinctly from the sort so the sort union does not list itself.
+SET_THEORY = SystemSpec(
+    name="SetTheory",
+    productions=[
+        regex_prod("setvar", "letter", "[a-z]"),
+        template_prod(
+            "formula", "membership", "x is an element of y", [("x", "setvar"), ("y", "setvar")]
+        ),
+    ],
+    lines=[statement_line()],
+)
 
 
 @pytest.fixture(scope="module")
@@ -129,7 +97,7 @@ def term(formula, context, string):
     """Parse a formula string into a ground term."""
     matched = formula.match(string, context)
     assert matched is not None, string
-    return from_match(matched, context)
+    return from_match(matched)
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +107,7 @@ def term(formula, context, string):
 
 def test_match_binds_a_variable(rich):
     system, context, formula = rich
-    schema = from_pattern(rule(system, "MP").antecedents[1], context)  # (p -> q)
+    schema = from_pattern(rule(system, "MP").antecedents[1])  # (p -> q)
 
     binding = match(schema, term(formula, context, "(a -> b)"), context)
     assert binding is not None
@@ -168,7 +136,7 @@ def test_match_reduces_to_equality_without_variables(rich, left, right, equal):
 def test_match_enforces_consistent_repeated_variable(rich):
     system, context, formula = rich
     implication = system.build_context.variables["implication"]
-    schema = Node(implication, {"p": Var("p", formula), "q": Var("p", formula)})  # (p -> p)
+    schema = Node(constructor_for(implication), {"p": Var("p", constructor_for(formula)), "q": Var("p", constructor_for(formula))})  # (p -> p)
 
     assert match(schema, term(formula, context, "(a -> a)"), context) is not None
     assert match(schema, term(formula, context, "(a -> b)"), context) is None
@@ -178,7 +146,7 @@ def test_match_respects_sorts(rich):
     system, context, formula = rich
     atom = system.build_context.variables["atom"]
 
-    atom_var = Var("z", atom)
+    atom_var = Var("z", constructor_for(atom))
     # An atom-sorted variable must not capture a compound implication.
     assert match(atom_var, term(formula, context, "(a -> b)"), context) is None
     # But it happily binds to an atom.
@@ -187,17 +155,17 @@ def test_match_respects_sorts(rich):
 
 def test_concrete_schema_does_not_match_opaque_variable(rich):
     _system, context, formula = rich
-    implication = formula.patterns[0]
-    schema = Node(implication, {"p": Var("p", formula), "q": Var("q", formula)})
+    implication = formula.patterns[1]  # the implication production, keyed p/q
+    schema = Node(constructor_for(implication), {"p": Var("p", constructor_for(formula)), "q": Var("q", constructor_for(formula))})
 
     # Subject is a bare variable (opaque): a concrete production cannot match it.
-    subject = Var("phi", formula)
+    subject = Var("phi", constructor_for(formula))
     assert match(schema, subject, context) is None
 
 
 def test_variable_binds_to_variable(rich):
     _system, context, formula = rich
-    binding = match(Var("p", formula), Var("phi", formula), context)
+    binding = match(Var("p", constructor_for(formula)), Var("phi", constructor_for(formula)), context)
     assert binding is not None and binding["p"].to_string() == "phi"
 
 
@@ -209,9 +177,9 @@ def test_variable_binds_to_variable(rich):
 def test_modus_ponens_step_checks(rich):
     system, context, formula = rich
     mp = rule(system, "MP")
-    antecedent1 = from_pattern(mp.antecedents[0], context)  # p
-    antecedent2 = from_pattern(mp.antecedents[1], context)  # (p -> q)
-    deduction = from_pattern(mp.deduction, context)         # q
+    antecedent1 = from_pattern(mp.antecedents[0])  # p
+    antecedent2 = from_pattern(mp.antecedents[1])  # (p -> q)
+    deduction = from_pattern(mp.deduction)         # q
 
     binding = match_all(
         [
@@ -229,9 +197,9 @@ def test_modus_ponens_rejects_wrong_conclusion(rich):
     system, context, formula = rich
     mp = rule(system, "MP")
     pairs = [
-        (from_pattern(mp.antecedents[0], context), term(formula, context, "a")),
-        (from_pattern(mp.antecedents[1], context), term(formula, context, "(a -> b)")),
-        (from_pattern(mp.deduction, context), term(formula, context, "c")),  # not b
+        (from_pattern(mp.antecedents[0]), term(formula, context, "a")),
+        (from_pattern(mp.antecedents[1]), term(formula, context, "(a -> b)")),
+        (from_pattern(mp.deduction), term(formula, context, "c")),  # not b
     ]
     assert match_all(pairs, context) is None
 
@@ -241,8 +209,8 @@ def test_modus_ponens_rejects_inconsistent_premises(rich):
     mp = rule(system, "MP")
     # First premise says p = a; the implication says p = x. No consistent binding.
     pairs = [
-        (from_pattern(mp.antecedents[0], context), term(formula, context, "a")),
-        (from_pattern(mp.antecedents[1], context), term(formula, context, "(x -> b)")),
+        (from_pattern(mp.antecedents[0]), term(formula, context, "a")),
+        (from_pattern(mp.antecedents[1]), term(formula, context, "(x -> b)")),
     ]
     assert match_all(pairs, context) is None
 
@@ -251,9 +219,9 @@ def test_two_antecedent_rule_checks(rich):
     system, context, formula = rich
     conj = rule(system, "CONJ")  # p, q |- (p ∧ q)
     pairs = [
-        (from_pattern(conj.antecedents[0], context), term(formula, context, "a")),
-        (from_pattern(conj.antecedents[1], context), term(formula, context, "b")),
-        (from_pattern(conj.deduction, context), term(formula, context, "(a ∧ b)")),
+        (from_pattern(conj.antecedents[0]), term(formula, context, "a")),
+        (from_pattern(conj.antecedents[1]), term(formula, context, "b")),
+        (from_pattern(conj.deduction), term(formula, context, "(a ∧ b)")),
     ]
     binding = match_all(pairs, context)
     assert binding is not None
@@ -261,9 +229,9 @@ def test_two_antecedent_rule_checks(rich):
 
     # A conclusion that swaps the conjuncts is rejected.
     swapped = [
-        (from_pattern(conj.antecedents[0], context), term(formula, context, "a")),
-        (from_pattern(conj.antecedents[1], context), term(formula, context, "b")),
-        (from_pattern(conj.deduction, context), term(formula, context, "(b ∧ a)")),
+        (from_pattern(conj.antecedents[0]), term(formula, context, "a")),
+        (from_pattern(conj.antecedents[1]), term(formula, context, "b")),
+        (from_pattern(conj.deduction), term(formula, context, "(b ∧ a)")),
     ]
     assert match_all(swapped, context) is None
 
@@ -287,14 +255,14 @@ def test_match_then_substitute_round_trips(rich, schema_string, subject_string):
     system, context, formula = rich
     implication = system.build_context.variables["implication"]
     conjunction = system.build_context.variables["conjunction"]
-    p, q = Var("p", formula), Var("q", formula)
+    p, q = Var("p", constructor_for(formula)), Var("q", constructor_for(formula))
 
     if schema_string == "(p -> p)":
-        schema = Node(implication, {"p": p, "q": p})
+        schema = Node(constructor_for(implication), {"p": p, "q": p})
     elif schema_string == "(p ∧ q)":
-        schema = Node(conjunction, {"p": p, "q": q})
+        schema = Node(constructor_for(conjunction), {"p": p, "q": q})
     else:  # "(p -> q)"
-        schema = Node(implication, {"p": p, "q": q})
+        schema = Node(constructor_for(implication), {"p": p, "q": q})
 
     subject = term(formula, context, subject_string)
     binding = match(schema, subject, context)
@@ -307,7 +275,7 @@ def test_alpha_renamed_schema_matches_production_instance():
     formula = system.build_context.variables["formula"]
     mp = rule(system, "MP")
 
-    schema = from_pattern(mp.antecedents[1], context)  # (p -> q), keyed p/q
+    schema = from_pattern(mp.antecedents[1])  # (p -> q), keyed p/q
     subject = term(formula, context, "(a -> b)")       # keyed lhs/rhs
     binding = match(schema, subject, context)
 
@@ -322,31 +290,21 @@ def test_repeated_variable_schema_matches_production_instance():
     # distinct-slot production "(p -> q)" - the repeated variable binds in both
     # positions and enforces that they agree.
     system, context = build(
-        """FormalSystem SelfImplication:
-
-    Regex atom:
-        ^[a-z]$
-
-    UnionPattern formula:
-        atom
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p -> q)
-
-    formula:
-        implication
-
-    with p as formula:
-        InferenceRule self_implication:
-            label:
-                SELF
-            deduction:
-                (p -> p)
-"""
+        SystemSpec(
+            name="SelfImplication",
+            brackets=brackets(),
+            productions=[
+                regex_prod("formula", "atom", "[a-z]"),
+                template_prod(
+                    "formula", "implication", "(p -> q)", [("p", "formula"), ("q", "formula")]
+                ),
+            ],
+            lines=[statement_line()],
+            rules=[rule_spec("SELF", "self_implication", [], "(p -> p)", [("p", "formula")])],
+        )
     )
     formula = system.build_context.variables["formula"]
-    schema = from_pattern(rule(system, "SELF").deduction, context)  # (p -> p)
+    schema = from_pattern(rule(system, "SELF").deduction)  # (p -> p)
 
     binding = match(schema, term(formula, context, "(a -> a)"), context)
     assert binding is not None
@@ -361,7 +319,7 @@ def test_repeated_variable_schema_matches_production_instance():
 
 def test_deeply_nested_match(rich):
     system, context, formula = rich
-    schema = from_pattern(rule(system, "MP").antecedents[1], context)  # (p -> q)
+    schema = from_pattern(rule(system, "MP").antecedents[1])  # (p -> q)
 
     subject = term(formula, context, "(((a -> b) ∧ c) -> (d -> e))")
     binding = match(schema, subject, context)
@@ -375,7 +333,7 @@ def test_near_english_matching():
     formula = system.build_context.variables["formula"]
     membership = system.build_context.variables["membership"]
 
-    schema = from_pattern(membership, context)  # "x is an element of y"
+    schema = from_pattern(membership)  # "x is an element of y"
     subject = term(formula, context, "a is an element of b")
     binding = match(schema, subject, context)
 
@@ -385,7 +343,7 @@ def test_near_english_matching():
 
 def test_match_does_not_mutate_input_binding(rich):
     system, context, formula = rich
-    schema = from_pattern(rule(system, "MP").antecedents[1], context)
+    schema = from_pattern(rule(system, "MP").antecedents[1])
 
     original = {}
     result = match(schema, term(formula, context, "(a -> b)"), context, original)
@@ -396,7 +354,7 @@ def test_match_does_not_mutate_input_binding(rich):
 
 def test_match_never_reinvokes_the_matcher(rich, monkeypatch):
     system, context, formula = rich
-    schema = from_pattern(rule(system, "MP").antecedents[1], context)
+    schema = from_pattern(rule(system, "MP").antecedents[1])
     subject = term(formula, context, "(a -> (b -> c))")
 
     calls = {"n": 0}

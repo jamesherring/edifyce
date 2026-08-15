@@ -31,3 +31,13 @@ Thumbs.db
 *.log
 .vercel
 .env*
+
+# Node / Vite (stray root-level caches; real deps live in frontend/)
+node_modules/
+.vite/
+# SvelteKit sync output if a command is ever run from the repo root instead of
+# frontend/ (the real one is ignored by frontend/.gitignore).
+.svelte-kit/
+
+# edifyce-dev runtime (logs, pids, seed ids)
+.edifyce-dev/

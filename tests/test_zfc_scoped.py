@@ -1,22 +1,26 @@
 """The scoped-subproof engine: the same ZFC theorems, checked soundly.
 
-This is the target behaviour for the rework. Written before the engine
-changes (TDD): assumptions open first-class subproofs, references are
-scope-checked, and discharge rules (`CP`/`UG`) consume a whole subproof.
+Assumptions open first-class subproofs, references are scope-checked, and
+discharge rules (`CP`/`UG`) consume a whole subproof. The system is assembled
+declaratively (`zfc_systems.scoped_zfc_spec` + `build_spec`) rather than parsed
+from `.edi`: scope line types and subproof rules are now first-class in the
+`SystemSpec` model, so the checks below run against the same build path the
+database and API use.
 """
 
 import pytest
 
 pytest.importorskip("regex")
 
-from website.logical.compiler import compile as compile_formal_system
+import website.logical.formal_system.system as system_module
+from website.logical.declarative import build_spec
 
-from zfc_systems import SCOPED_ZFC
+from zfc_systems import scoped_zfc_spec
 
 
 @pytest.fixture(scope="module")
 def scoped():
-    result = compile_formal_system(SCOPED_ZFC)
+    result = build_spec(scoped_zfc_spec())
     assert "errors" not in result, result.get("errors")
     return result["system"]
 
@@ -42,7 +46,7 @@ def test_scope_attribute_compiles(scoped):
 def test_assumption_is_valid_without_justification(scoped):
     proof = scoped.parse("assume a ∈ b")
     assert proof.proof_lines[0].valid is True
-    assert proof.proof_lines[0].formula is not None
+    assert proof.proof_lines[0].formula_term is not None
 
 
 # ---------------------------------------------------------------------------
@@ -238,3 +242,39 @@ def test_universal_generalisation_over_genuinely_fresh_var_ok(scoped):
         "    ∀x y ∈ c [UG, 2]"
     )
     assert proof.proof_lines[3].valid is True, line_states(proof)
+
+
+# ---------------------------------------------------------------------------
+# Parse-time projection (a proof line carries a term, not a match)
+# ---------------------------------------------------------------------------
+
+
+def test_parsed_line_carries_a_term_and_its_surface_string(scoped):
+    # The formula is projected into a kernel term while the line is parsed, and
+    # the surface string is kept beside it for the string-rewriting rule path.
+    # No match survives the parse for a later check to re-project.
+    line = scoped.parse("assume a ∈ b").proof_lines[0]
+
+    assert line.formula_term is not None
+    assert line.formula_term.to_string() == line.formula_string == "a ∈ b"
+    assert not hasattr(line, "formula")
+    assert not hasattr(line, "match")
+
+
+def test_an_unprojectable_formula_fails_its_own_line(scoped, monkeypatch):
+    # A formula the term layer cannot read used to escape as a raise out of the
+    # whole parse, from whichever rule check projected it first. Now it fails the
+    # one line it is on, saying so, and the rest of the proof still reports.
+    def refuse(match):
+        raise ValueError("no term for this shape")
+
+    monkeypatch.setattr(system_module, "from_match", refuse)
+
+    proof = scoped.parse("assume a ∈ b")
+    line = proof.proof_lines[0]
+
+    assert line.formula_term is None
+    assert line.valid is False
+    # The specific reason survives, rather than being flattened to the generic
+    # "no formula" the checker would otherwise reach for.
+    assert "no term for this shape" in line.invalid_message

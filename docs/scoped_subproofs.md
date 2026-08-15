@@ -13,8 +13,12 @@ and is exercised by [`tests/test_zfc_scoped.py`](../tests/test_zfc_scoped.py).
 > `given` `MatchSet` plus a rule `condition:` proviso — has since been **removed
 > from `develop`**: the string-based rule-condition interpreter was replaced by
 > the kernel's closed side-condition algebra, and `condition:` blocks now raise
-> at compile time. The before/after below is kept as motivation; the "before"
-> is no longer expressible, which only reinforces the point.
+> at compile time. The `context:` line-type block that fed `given`
+> (`context.given: add: formula()`, applied by the old `ProofLine.edit_context`)
+> has **also been removed** — a `context:` block is now an unrecognised line-type
+> parameter — as another step in retiring the `get_by_path` string interpreter.
+> The before/after below is kept as motivation; the "before" is no longer
+> expressible, which only reinforces the point.
 
 ---
 

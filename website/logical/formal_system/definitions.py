@@ -1,148 +1,514 @@
-"""Bridge from the legacy :class:`matching.Definition` to the kernel's
-term-based definitional-step checker.
+"""Building a :class:`~website.logical.kernel.definitions.Definition` -- the
+build-time gate a declared definition has to pass.
 
-``ProofLine.follows_from_definition`` historically compared two ``Match`` trees
-"up to definition" by walking them and reconciling substrings
-(``Match.maps_to_up_to_definition`` / ``equivalent_under_definitions``): a step
-verified by re-deriving structure from text. The kernel already has the
-replacement - :func:`~website.logical.kernel.definitions.check_definitional_step`
-verifies one definitional unfold structurally over the shared-DAG term
-representation, with no re-parsing. This module wires the two together.
+A definition splits cleanly into two, and only one of them is a *definition*:
 
-Why a *bridge* and not a straight swap
---------------------------------------
-The two definition models are not the same shape:
+* its **defined form** is a production the grammar gains
+  (:class:`~website.logical.matching.definitions.DefinedNotation`), which is what
+  lets ``a sub b`` be recognised as a formula at all. It parses, and nothing more;
+* the definition itself is a **kernel** axiom - defining form stored with its
+  binders abstract, so an unfold is capture-avoiding, and its proviso drawn from
+  the kernel's closed structural vocabulary. It is what a step is checked against,
+  and it lives on the system (``FormalSystem.definitions``), cited by label.
 
-* A legacy ``Define higher as lower`` is an *alias*: ``higher`` is alternative
-  surface syntax for an instance ``lower`` of one pattern.
-* A kernel :class:`~website.logical.kernel.definitions.Definition` is a
-  definitional *axiom* whose defining form stores its binders abstractly (so an
-  unfold is capture-avoiding) and whose proviso is drawn from the kernel's
-  closed, structural side-condition vocabulary.
+:func:`build_kernel_definition` pairs the two: given a registered notation and the
+defining form as written, it produces the axiom or refuses. The system builder
+calls it once per definition (see ``declarative._finalise_definition``), so a
+definition that cannot be expressed soundly never reaches a proof -- and a proof
+step is checked by handing the axiom straight to
+:func:`~website.logical.kernel.definitions.check_definitional_step`, with nothing
+in between to become a second, string-based way to apply a definition.
 
-The ``Define`` DSL can now carry the extra information the kernel needs: a
-``fresh`` clause declaring the defining form's bound variables (threaded here as
-``legacy.fresh``) and a ``where`` clause of kernel-vocabulary provisos
-(``legacy.kernel_condition``). A legacy definition is therefore soundly
-expressible as a kernel one **unless it introduces an *undeclared* binder**.
-:func:`kernel_definition_for` builds the kernel counterpart when it can and
-returns ``None`` otherwise; :func:`follows_by_definition` uses the kernel checker
-when a counterpart exists and signals a fall-back to the string path when it does
-not. The binder guard below stays as a safety net: an undeclared binder would
-otherwise unfold capturingly, so it forces the fallback rather than risk
-unsoundness.
+Why this is a build-time step, not a check-time one
+---------------------------------------------------
+Not every ``Define higher as lower`` is soundly expressible as a kernel
+definition. The defining form may name something the defined form cannot supply -
+an undeclared binder (the ``z`` in ``∀z.(z ∈ x → z ∈ y)``), a parameter the
+defined form omits, or a variable simply left free. Each makes the unfold conjure
+a name, and a conjured name is capturable wherever the step happens to be taken.
+
+That is a property of the definition, not of any particular step, so it is
+settled once - when the system is built and its author can act on it - rather
+than surfacing as an opaque "does not apply" on some later proof line. It is also
+why no proviso can stand in for it: a proviso constrains the *binding* an unfold
+produces, while this constrains where the defined form may legally *occur*, which
+a cited step never sees.
+
+Which layer owns what
+---------------------
+The kernel owns the rule and states it over the term graph:
+:func:`~website.logical.kernel.definitions.unbound_parameters` and
+:func:`~website.logical.kernel.definitions.introduced_leaves` report exactly the
+leaves a defining form introduces from nowhere. It deliberately stops there,
+because deciding which of those are *benign* - a constant of the object language
+like ``⊥`` denotes one fixed thing and can be neither renamed nor captured - is a
+question about the grammar, not about the graph.
+
+So this module supplies only that grammar predicate, and the matching layer below
+it does neither: patterns parse, and nothing else.
+
+Why the predicate is a *declaration*, not a deduction
+-----------------------------------------------------
+This module used to infer the answer from the leaf's constructor - a constant
+atom or a slotless production was read as constant - cross-checked against every
+variable-like sort reachable from the definition's own. Each part of that was a
+guess, and the guesses had holes: an atom constant declared a *member of the
+variable sort* (``setvar ::= [A-Z] | c``) is a variable the author spelled with
+an atom, but the constructor says "constant", so ``T ≝ (c ∈ c)`` was admitted and
+``∀c.T ⟶ ∀c.(c ∈ c)`` captured ``c``.
+
+No property of a production's shape settles it, because the same shape means
+different things in different grammars: a one-token atom is a constant in
+``formula ::= ⊥`` and a variable in ``setvar ::= a | b | c``. Metamath faces the
+same question and answers it the same way - every token is declared ``$c`` or
+``$v`` - so the author declares it here too, via
+``Production.denotes_constant``, and this module reads the declaration.
+
+The default is variable-like, which is the safe direction: an undeclared leaf is
+refused, so a forgotten declaration costs a rejected definition. The unsafe
+direction - declaring a bindable token constant - takes a positive act, and stays
+confined to the system it is made in (a proof is only ever checked against its
+own system, and cross-proof citation is same-system-only).
+
+One declaration is refused outright rather than trusted: an indexed atom family
+(``p_#``) is a supply of interchangeable tokens, so no grammar makes it denote a
+fixed thing and no author could mean it. ``declarative.build_system`` rejects it.
+Every other case is a genuine judgement about the grammar, which only binding
+slots on productions could check (see AGENTS.md).
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ..kernel import Definition, check_definitional_step, from_match
-from ..kernel.terms import Node, Term
+from ..kernel import Definition, introduced_leaves, unbound_parameters
+from ..kernel.constructors import constructor_for, project_sorts
+from ..kernel.definitions import FreshBinder, bind_scoped
+from ..kernel.terms import Node, _bound, abstract, bind, from_match
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
+    from ..kernel.constructors import Constructor
+    from ..kernel.side_conditions import SideCondition
+    from ..kernel.terms import Bound, Term
     from ..matching.context import Context
-    from ..matching.definitions import Definition as MatchingDefinition
-    from ..matching.matches import Match
+    from ..matching.definitions import DefinedNotation
+    from ..matching.patterns import Pattern
 
 
-def _ground_leaf_literals(term: Term) -> set[str]:
-    """The surface literals of every ground leaf (childless :class:`Node`) in
-    ``term``.
+@dataclass(frozen=True)
+class ParsedForms:
+    """What building a definition derived from text, for a caller that stores it.
 
-    A definition's *parameters* project to :class:`~website.logical.kernel.terms.Var`
-    leaves (not ``Node`` literals) and so are excluded; what remains are the
-    fixed tokens the form mentions - genuine constants, and, crucially, any
-    *bound* variable the defining form introduces (e.g. the ``z`` in
-    ``∀z.(z ∈ x → z ∈ y)``), which a ``fresh``-less parse leaves as a ground leaf.
+    The three things :func:`parse_definition` reads the grammar for: the two
+    surface forms, and the leaf each *declared* binder's name denotes. All are
+    taken before any binder is placed — see :func:`parse_definition` for why that
+    is the only pair worth storing, and why the same applies to the defaults,
+    which are read off the grammar rather than off the form.
+
+    ``binder_defaults`` is keyed by the binder's declared name and is empty for a
+    definition whose binders the grammar places (``scopes_over``): an inferred
+    binder's default is a leaf already sitting in the parsed defining form, so it
+    costs no parse and there is nothing to store.
     """
-    literals: set[str] = set()
 
-    def walk(node: Term) -> None:
-        if isinstance(node, Node):
-            if not node.children:
-                if node.literal is not None:
-                    literals.add(node.literal)
-                return
-            for child in node.children.values():
-                walk(child)
+    higher: Term
+    lower: Term
+    binder_defaults: dict[str, Term]
+
+
+class DefinitionError(Exception):
+    """Raised when a definition is not soundly expressible as a kernel one.
+
+    Carries a message written for the *author* of the definition; the declarative
+    builder surfaces it as a build error against the system.
+    """
+
+
+def _introduced_name_error(
+    notation: DefinedNotation, lower: str, names: Sequence[str]
+) -> DefinitionError:
+    """The build error for a defining form that introduces ``names`` out of
+    nowhere - written for the author, and naming every remedy.
+
+    One message covers every spelling of the mistake (an undeclared binder, a
+    parameter the defined form omits, a variable left free, a constant the author
+    has not declared as one), because they are the same defect and the ways out
+    are the same three.
+    """
+    listed = ", ".join(repr(name) for name in names)
+    plural = len(names) > 1
+    them = "them" if plural else "it"
+    return DefinitionError(
+        f"Definition '{notation.template.pattern}' introduces {listed} in its defining "
+        f"form '{lower}', but the defined form does not mention "
+        f"{them}. An unfold would then conjure {them} wherever the definition is "
+        f"used, and under a binder of the same name that silently rebinds "
+        f"{them} — so the step would not mean the same thing everywhere it is "
+        f"taken. Either make {listed} parameters the defined form supplies; or, if "
+        f"the defining form binds {them}, declare {them} with a `fresh` clause "
+        f"giving the sort; or, if {'they are' if plural else 'it is'} in fact "
+        f"{'constants' if plural else 'a constant'} of the object language that no "
+        f"binder can ever bind, mark the "
+        f"{'productions that build' if plural else 'production that builds'} "
+        f"{them} as denoting a constant."
+    )
+
+
+def parse_definition(
+    sort: Pattern,
+    higher: str,
+    lower: str,
+    variables: dict[str, Pattern],
+    context: Context,
+    condition: SideCondition | None = None,
+    fresh: dict[str, Pattern] | None = None,
+    label: str | None = None,
+    higher_term: Term | None = None,
+    lower_term: Term | None = None,
+    binder_defaults: dict[str, Term] | None = None,
+    record: Callable[[ParsedForms], None] | None = None,
+) -> Definition:
+    """Build a kernel :class:`~website.logical.kernel.definitions.Definition` by
+    parsing its two surface forms.
+
+    ``sort`` is the production both forms parse against (e.g. the ``formula``
+    union); ``variables`` maps each parameter name to its sort; ``context`` is an
+    ordinary ground parsing context. Each form is parsed through the grammar and
+    its parameters abstracted (see
+    :func:`~website.logical.kernel.terms.abstract`), so a multi-level defining
+    form keeps its structure - which is why this uses parse + abstract rather
+    than ``from_pattern`` (see that helper's note).
+
+    ``fresh`` maps each bound variable of the defining form to its sort (for
+    ``df-subset``, ``{"z": setvar}``); in the parsed defining form each such
+    variable is replaced by an abstract, indexed
+    :class:`~website.logical.kernel.terms.Bound` node (in ``fresh`` order), and
+    the capture-avoidance proviso is generated from it. A declared binder is
+    placed **by name**, across the whole form — the only reading available on a
+    grammar that declares no binding slots, and so the one that keeps every
+    system written before they existed behaving exactly as it did.
+
+    It may be omitted. A grammar that declares its binding slots
+    (``Production.scopes_over``) already says which leaves are binders and how far
+    each one reaches, so
+    :func:`~website.logical.kernel.definitions.bind_scoped` places them **by
+    scope** — one binder per binding occurrence, and an occurrence outside every
+    scope left as the free leaf it is. That is what a Metamath ``$a`` carries no
+    trace of, and what an author would otherwise write by hand. The two may be
+    mixed: a declared name is bound first, so the scoped walk steps over it.
+
+    ``higher_term`` / ``lower_term`` supply the abstracted term a form was last
+    parsed to, letting a caller holding a stored one skip that parse (see
+    ``app/db/definition_terms.py``). Each is independent, and passing neither —
+    or one that is ``None`` — parses as before; nothing downstream can tell which
+    route a term arrived by. Only the *derivation* is skipped: the binder
+    placement and admissibility checks below run on a supplied term exactly as on
+    a parsed one, so a stored term buys no leniency.
+
+    ``binder_defaults`` does the same for the leaf each *declared* binder's name
+    denotes, keyed by that name — the third grammar read this function makes, and
+    the last one. A name it does not answer for is parsed as before.
+
+    ``record`` is handed a :class:`ParsedForms` of everything actually used,
+    whether parsed here or supplied — the write half of that cache. It is called
+    *before* any binder is placed, which is the only pair worth storing:
+    :func:`bind_scoped` binds ground leaves sitting in binder slots, so a form
+    that has already been through it has none left to offer and would rebuild with
+    no binders at all.
+
+    This lives here, not on ``Definition``, because it is the one thing a
+    definition needed the *grammar* for. The kernel checks a step against terms;
+    turning surface syntax into those terms is this layer's job, and keeping the
+    two apart is what lets the trusted core read no strings at all.
+    """
+    parameter_sorts = project_sorts(variables)
+
+    def parse(against: Pattern, text: str, what: str) -> Term:
+        matched = against.match(text, context)
+        if matched is None:
+            raise ValueError(f"{what} {text!r} does not parse as '{against.name}'.")
+        return from_match(matched)
+
+    def schema(text: str) -> Term:
+        return abstract(parse(sort, text, "Definition form"), parameter_sorts)
+
+    higher_term = schema(higher) if higher_term is None else higher_term
+    lower_term = schema(lower) if lower_term is None else lower_term
+
+    # Each declared binder carries the leaf its name denotes. Deciding that is
+    # what lets an unfold fall back to it without re-reading a string: a name that
+    # is not of its own sort is the author's error, and is refused at build rather
+    # than silently failing every unfold later. A stored default skips the parse
+    # and not the refusal — a name that no longer parses at its sort has no stored
+    # term either, because the digest that guards it covers the grammar.
+    supplied = binder_defaults or {}
+
+    def default_for(name: str, binder_sort: Pattern) -> Term:
+        stored = supplied.get(name)
+        if stored is not None:
+            return stored
+        # Against the *binder's* sort, not the definition's: `z` is a `setvar`,
+        # and it is the sort it ranges over that says what may name it.
+        return parse(binder_sort, name, "Declared bound variable")
+
+    declared = [
+        FreshBinder(
+            name=name,
+            sort=constructor_for(binder_sort),
+            default=default_for(name, binder_sort),
+            declared=True,
+        )
+        for name, binder_sort in (fresh or {}).items()
+    ]
+
+    if record is not None:
+        record(
+            ParsedForms(
+                higher=higher_term,
+                lower=lower_term,
+                binder_defaults={binder.name: binder.default for binder in declared},
+            )
+        )
+
+    # Taken before anything is bound: once a declared name becomes a `Bound` the
+    # grammar's view of it is gone, and this is the only thing that still wants it.
+    _reject_declared_sort_the_grammar_contradicts(declared, _binder_slot_sorts(lower_term))
+
+    # A *declared* binder is placed by name, across the whole defining form. That
+    # is what it has always meant, and it is the only reading available on a
+    # grammar that declares no binding slots — so it stays, unchanged, and every
+    # system written before those slots existed keeps its behaviour exactly.
+    bound_nodes: dict[str, Bound] = {
+        binder.name: _bound(index, binder.sort) for index, binder in enumerate(declared)
+    }
+    if bound_nodes:
+        lower_term = bind(lower_term, bound_nodes)
+
+    # Everything still spelled out goes to the grammar. `bind_scoped` binds a leaf
+    # only inside the slots its binder was declared to reach, giving one binder per
+    # *binding occurrence* rather than one per name — so a name used outside a
+    # binder's scope stays the free leaf it is, and two binders that merely share a
+    # spelling stay two binders. A declared name is already a `Bound` by now, so
+    # the walk steps over it.
+    lower_term, inferred = bind_scoped(lower_term, first_index=len(declared))
+
+    return Definition(
+        higher=higher_term,
+        lower=lower_term,
+        condition=condition,
+        fresh=(*declared, *inferred),
+        label=label,
+    )
+
+
+def _binder_slot_sorts(term: Term) -> dict[str, set[Constructor]]:
+    """For each name the grammar puts in a binder slot of ``term``, the sorts of
+    the slots it appears in.
+
+    A read-only view, taken *before* anything is bound, and used for one thing:
+    telling an author their declared `fresh` sort is not the one the grammar
+    gives (see :func:`_reject_declared_sort_the_grammar_contradicts`). The
+    binding itself is :func:`~website.logical.kernel.definitions.bind_scoped`'s
+    job now, and it needs no name-keyed view at all.
+
+    A slot holding a :class:`~website.logical.kernel.terms.Var` is skipped: that
+    is a *parameter* the defined form supplies, so the unfold substitutes it
+    rather than conjuring it. Silent for a production with no `scopes_over`, which
+    is every production until one is written.
+    """
+    found: dict[str, set[Constructor]] = {}
+
+    def walk(current: Term) -> None:
+        if not isinstance(current, Node) or not current.children:
+            return
+        for label, child in current.children.items():
+            if label in current.constructor.scopes_over:
+                name = _leaf_name(child)
+                if name is not None:
+                    found.setdefault(name, set()).add(current.constructor.slot_sorts[label])
+            walk(child)
 
     walk(term)
-    return literals
+    return found
 
 
-def kernel_definition_for(
-    legacy: MatchingDefinition, context: Context
-) -> Definition | None:
-    """Build (and cache on ``legacy``) the kernel definition equivalent to
-    ``legacy``, or ``None`` if it is not soundly expressible as one.
+def _leaf_name(term: Term) -> str | None:
+    """The surface name of a ground leaf, or ``None`` for anything else — a
+    compound, a parameter (:class:`Var`), or an already-abstract binder."""
+    if isinstance(term, Node) and not term.children:
+        return term.literal
+    return None
 
-    Returns ``None`` - and records that on ``legacy`` so it is not retried - when
-    the definition has no known lower form, carries a legacy condition, fails to
-    parse as two grammatical forms, or introduces a bound variable (a ground
-    leaf in the defining form that is absent from the defined form). Any of these
-    means the string-based path must be kept for this definition.
+
+def _reject_declared_sort_the_grammar_contradicts(
+    declared: Sequence[FreshBinder], slot_sorts: dict[str, set[Constructor]]
+) -> None:
+    """Refuse a declared `fresh` sort the grammar disagrees with.
+
+    A declared binder is placed *by name*, across the whole defining form, so it
+    carries one sort into every slot its name occupies. If the grammar says one of
+    those slots ranges over a different sort, the two cannot both be right, and
+    the binder would sit in a slot of the wrong sort — a term the grammar cannot
+    parse once the binder is renamed.
+
+    Only the declared side needs this. A binder the grammar places gets its slot's
+    own sort by construction, so two binder slots of different sorts holding the
+    same name are simply two binders — which is what
+    :func:`~website.logical.kernel.definitions.bind_scoped` produces, and what the
+    name-keyed representation could not express.
     """
-    if legacy.kernel_definition_ready:
-        return legacy.kernel_definition
+    for binder in declared:
+        conflicting = sorted(
+            sort.name for sort in slot_sorts.get(binder.name, set()) if sort is not binder.sort
+        )
+        if not conflicting:
+            continue
+        raise DefinitionError(
+            f"Bound variable {binder.name!r} is declared fresh at sort "
+            f"{binder.sort.name!r}, but the defining form puts it in a binder slot "
+            f"of sort {conflicting[0]!r}. A declared binder is placed by name "
+            f"throughout the form, so it would carry the wrong sort into that "
+            f"slot. Drop the `fresh` clause and let the grammar place it, or "
+            f"declare the sort the grammar gives it."
+        )
 
-    legacy.kernel_definition_ready = True
-    legacy.kernel_definition = _build(legacy, context)
-    return legacy.kernel_definition
 
+def build_kernel_definition(
+    notation: DefinedNotation,
+    lower: str | None,
+    context: Context,
+    condition: SideCondition | None = None,
+    # Sort *patterns*, not constructors: this is the build boundary, where a
+    # declaration still names productions. `parse_definition` projects them, and
+    # the definition it returns holds no pattern.
+    fresh: dict[str, Pattern] | None = None,
+    label: str | None = None,
+    higher_term: Term | None = None,
+    lower_term: Term | None = None,
+    binder_defaults: dict[str, Term] | None = None,
+    record: Callable[[ParsedForms], None] | None = None,
+) -> Definition:
+    """The kernel definition that unfolds ``notation`` to ``lower``.
 
-def _build(legacy: MatchingDefinition, context: Context) -> Definition | None:
-    if legacy.lower is None:
-        # An open definition (unknown lower form) has nothing to unfold to.
-        return None
+    ``notation`` supplies the grammatical half — the sort, the defined form, and
+    the parameters that form takes; ``lower`` is the defining form as written,
+    with ``condition`` and ``fresh`` its declared provisos and ``label`` the name
+    a proof cites it by. ``lower`` may be ``None``: notation can be registered
+    without a defining form, and this is where that is refused.
+
+    ``context`` must already hold ``notation``: a defined form is grammatical
+    only because its notation is registered, so that is what lets ``higher``
+    parse at all — and, for a stored ``higher_term``, what lets its constructor
+    resolve.
+
+    ``higher_term`` / ``lower_term`` / ``binder_defaults`` / ``record`` are passed
+    through to :func:`parse_definition`; see there for what supplying one does and
+    does not skip, and what ``record`` is handed.
+
+    Raises :class:`DefinitionError` when the pair cannot be expressed as a kernel
+    definition — because a form does not parse, or because the defining form
+    introduces a name out of nowhere.
+    """
+    if lower is None:
+        raise DefinitionError(
+            f"Definition '{notation.template.pattern}' has no defining form to unfold to."
+        )
+
+    # The definition's parameters are the slots its *defined* form declares -
+    # exactly what a use of the notation supplies. A name the defining form uses
+    # and the defined form does not is therefore left unabstracted, which is the
+    # point: it stays a ground leaf and `introduced_leaves` below reports it as a
+    # name the unfold would conjure. Only that check, and `unbound_parameters`
+    # beside it, decide what a defining form may introduce.
+    variables = dict(notation.variables)
 
     try:
-        kernel_def = Definition.parse(
-            sort=legacy.pattern,
-            higher=legacy.higher.pattern,
-            lower=legacy.lower.pattern,
-            variables=dict(legacy.variables),
+        kernel_def = parse_definition(
+            sort=notation.sort,
+            higher=notation.template.pattern,
+            lower=lower,
+            variables=variables,
             context=context,
-            condition=legacy.kernel_condition,
-            fresh=dict(legacy.fresh) or None,
+            condition=condition,
+            fresh=dict(fresh) if fresh else None,
+            label=label,
+            higher_term=higher_term,
+            lower_term=lower_term,
+            binder_defaults=binder_defaults,
+            record=record,
         )
-    except Exception:
-        # Any build failure - a surface form that does not parse as its sort (an
-        # alias notation the grammar cannot recognise on its own), or a deeper
-        # matcher error - must fall back to the string path, never abort the
-        # proof check. This is the same fail-closed stance as
-        # InferenceRule._side_conditions_hold: declining the kernel path can only
-        # keep the legacy behaviour, never accept an invalid step.
-        return None
+    except Exception as exc:
+        # A surface form the grammar cannot recognise on its own, or a deeper
+        # matcher error. Reshaped rather than propagated so the author gets a
+        # message naming the definition, not a matcher-internal traceback.
+        raise DefinitionError(
+            f"Definition '{notation.template.pattern}' could not be read as a "
+            f"definition of {notation.sort.name}: {exc}"
+        ) from exc
 
-    # Binder guard: with no `fresh` declared, any bound variable of the defining
-    # form survives as a ground leaf present in `lower` but not in `higher`. Such
-    # a definition cannot be checked soundly by a capture-blind unfold, so refuse
-    # it here (the fix is to let `Define` declare bound variables). A shared
-    # constant appears in both forms and is fine.
-    higher_leaves = _ground_leaf_literals(kernel_def.higher)
-    lower_leaves = _ground_leaf_literals(kernel_def.lower)
-    if lower_leaves - higher_leaves:
-        return None
+    # The kernel settles which leaves the defining form introduces from nowhere -
+    # the structural question, over the two term schemas. All that is left here is
+    # the grammar question it deliberately leaves open: which of them are
+    # constants of the object language, declared as such by the production that
+    # builds them. Everything else is a name the unfold would conjure - an
+    # undeclared binder, or a variable free in the defining form - and either
+    # makes the unfold depend on where it is taken.
+    unbound = unbound_parameters(kernel_def)
+    if unbound:
+        raise _introduced_name_error(notation, lower, unbound)
+
+    # Deduplicated by *name* only here: two constructors spelling the same token
+    # are two problems to the kernel but one thing for the author to fix.
+    conjured = sorted(
+        {
+            leaf.literal
+            for leaf in introduced_leaves(kernel_def)
+            if not leaf.constructor.denotes_constant
+        }
+    )
+    if conjured:
+        raise _introduced_name_error(notation, lower, conjured)
 
     return kernel_def
 
 
-def follows_by_definition(
-    before: Match, after: Match, legacy: MatchingDefinition, context: Context
-) -> bool | None:
-    """Whether ``before`` and ``after`` are one definitional unfold apart under
-    ``legacy``, checked over kernel terms.
+def denotes_a_constant(notation: DefinedNotation, parses_to_its_own_leaf: bool) -> bool:
+    """Whether a definition's *defined* form is itself a constant of the object
+    language: true when the notation is nullary **and** its form is new to the
+    grammar, so that form parses to this notation's own ground leaf.
 
-    Returns ``True``/``False`` when ``legacy`` has a kernel counterpart (the
-    term-based check is authoritative, and covers both unfold directions), or
-    ``None`` when it has none - the signal for the caller to fall back to the
-    string-based :meth:`Definition.check_application`.
+    A nullary definition (``S ≝ (⊥ → ⊥)``) puts a new leaf into the grammar that
+    no production declared a role for. It needs no declaration: ``S`` abbreviates
+    one fixed term and so denotes one fixed thing. Nor can it be captured - its
+    constructor is the definition's own, distinct from any variable sort that
+    happens to spell the same token, which is the same reason
+    :func:`~website.logical.kernel.definitions.introduced_leaves` keys on
+    constructor rather than spelling. So a later definition may introduce it
+    exactly as it may introduce ``⊥``, and ``T ≝ S`` layers on ``S ≝ ⊥``.
+
+    Derived rather than declared: there is nothing here for an author to know
+    that the engine does not.
+
+    ``parses_to_its_own_leaf`` is why nullary alone will not do. A sort tries its
+    own productions before its notations, so a defined form the grammar *already*
+    spells (``Define x ∈ y as ...`` with no parameters) never reaches this
+    notation: it parses through the declared production, and to a compound rather
+    than to a leaf of this notation at all. Marking that template a constant would
+    be the unsafe direction — the flag is what excuses a *later* definition from
+    accounting for a token — so a shadowed form takes the variable-like default.
+    Nothing is ever built through such a template either way, which is why this is
+    a correctness statement rather than a bug fix.
+
+    Note it is a question about *this* notation, not about the grammar before it:
+    two definitions may share one defined form, and the second finds the first's
+    notation. That is one production and still its own leaf, so both agree.
+
+    Asked of the *notation* rather than the built definition, so the answer is
+    available before the definition is built - which is what lets a constructor
+    snapshot the declaration instead of reading it back through the production
+    for the rest of the system's life.
     """
-    kernel_def = kernel_definition_for(legacy, context)
-    if kernel_def is None:
-        return None
-
-    return check_definitional_step(
-        from_match(before, context), from_match(after, context), kernel_def, context
-    )
+    return not notation.variables and parses_to_its_own_leaf

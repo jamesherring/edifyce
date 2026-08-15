@@ -1,0 +1,1447 @@
+"""A proof, promoted into its system's library, and cited from another system.
+
+R3 of docs/system-relationships-roadmap.md. R2 made an ancestor's library
+resolvable from a descendant; until now only a corpus import could put anything
+in one, so (a)/(b) reached imported work and nothing a person proved. This is
+`POST /proofs/{id}/promote`.
+
+Held to §8.0's four parts. The worked example is the PC/FOL/ZFC tower and a real
+Łukasiewicz derivation of `(P → P)` — five lines, two of them modus ponens, so a
+promotion that took the wrong line has four other answers available. The valid
+case that matters is the citation two layers up; the rejections are one per
+guard; and the negative controls are the two ways this could look like it works
+without working — a statement that came from re-parsing text rather than from the
+term the checker ran on, and a retirement that removes the entry while leaving
+the verdicts that rested on it standing.
+"""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import AsyncIterator, Iterator
+from datetime import datetime, timezone
+
+import pytest
+
+pytest.importorskip("fastapi")
+pytest.importorskip("fastapi_users")
+pytest.importorskip("aiosqlite")
+pytest.importorskip("regex")
+
+from fastapi.testclient import TestClient
+from sqlalchemy import NullPool, create_engine, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import Session
+
+import app.auth.backend as backend
+from app.db import FormalSystem, Proof, spec_to_system
+from app.db.promoted_theorems import PromotedTheoremRow
+from app.db.proof_lines import ProofLineRow
+from app.db.session import get_session
+from app.main import app
+from tests.database import async_url, create_tables, database_url, enable_foreign_keys
+from tests.layered_systems import (
+    first_order_logic_spec,
+    propositional_calculus_spec,
+    propositional_variable_prod,
+    zfc_spec,
+)
+from tests.spec_helpers import atom_const_prod, rule
+from tests.test_proofs_api import _TABLES
+from tests.test_system_inheritance import seed, seed_tower
+from tests.test_systems_api import _register_login
+
+
+@pytest.fixture
+def db(tmp_path):
+    db_path = database_url(tmp_path, "promotion")
+    create_tables(db_path, _TABLES)
+
+    async_engine = create_async_engine(async_url(db_path), poolclass=NullPool)
+    enable_foreign_keys(async_engine.sync_engine)
+    sessionmaker = async_sessionmaker(async_engine, expire_on_commit=False)
+
+    async def override_get_session() -> AsyncIterator[AsyncSession]:
+        async with sessionmaker() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = override_get_session
+    yield db_path
+    app.dependency_overrides.pop(get_session, None)
+
+
+@pytest.fixture
+def client(db, monkeypatch) -> Iterator[TestClient]:
+    monkeypatch.setattr(backend.cookie_transport, "cookie_secure", False)
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+# ---------------------------------------------------------------------------
+# The worked example
+# ---------------------------------------------------------------------------
+
+def identity_proof(formula: str) -> str:
+    """`⊢ (A → A)` in the three Łukasiewicz axioms, for any formula ``A``.
+
+    The shortest derivation that is not itself an axiom instance: two modus
+    ponens steps, and a conclusion that is neither the first line nor the
+    last-but-one, so "the proof's conclusion" has four wrong answers to be told
+    apart from. Parameterised in the *test*, not in the system — the axioms take
+    any formula, and what gets promoted is whichever instance was written.
+    """
+    a = formula
+    return (
+        f"(({a} → (({a} → {a}) → {a})) → (({a} → ({a} → {a})) → ({a} → {a}))) [ax-2]\n"
+        f"({a} → (({a} → {a}) → {a})) [ax-1]\n"
+        f"(({a} → ({a} → {a})) → ({a} → {a})) [MP, 2, 1]\n"
+        f"({a} → ({a} → {a})) [ax-1]\n"
+        f"({a} → {a}) [MP, 4, 3]"
+    )
+
+
+IDENTITY_PROOF = identity_proof("P")
+
+# The same derivation with its last step removed: still valid, but concluding
+# something else. What a source edit turns the proof above into.
+PARTIAL_PROOF = "\n".join(IDENTITY_PROOF.splitlines()[:3])
+
+
+def make_proof(client, system_id: str, source: str, name: str | None = None) -> str:
+    created = client.post(
+        "/api/proofs",
+        json={
+            "name": name or f"proof-{uuid.uuid4().hex[:8]}",
+            "formal_system_id": system_id,
+            "source": source,
+        },
+    )
+    assert created.status_code == 201, created.text
+    return created.json()["id"]
+
+
+def publish(client, proof_id: str) -> dict:
+    response = client.patch(f"/api/proofs/{proof_id}", json={"published": True})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def proved_and_published(client, system_id: str, source: str = IDENTITY_PROOF) -> str:
+    """A proof that stands and is public — the state promotion requires."""
+    proof_id = make_proof(client, system_id, source)
+    publish(client, proof_id)
+    return proof_id
+
+
+def promote(
+    client,
+    proof_id: str,
+    label: str | None = None,
+    metavariables: dict[str, str] | None = None,
+) -> tuple[int, dict]:
+    body: dict = {} if label is None else {"label": label}
+    if metavariables is not None:
+        body["metavariables"] = metavariables
+    response = client.post(f"/api/proofs/{proof_id}/promote", json=body)
+    return response.status_code, (response.json() if response.content else {})
+
+
+def verify(client, proof_id: str) -> dict:
+    response = client.post(f"/api/proofs/{proof_id}/verify")
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def check_in(client, system_id: str, source: str) -> dict:
+    """Write a fresh proof in ``system_id`` and check it."""
+    return verify(client, make_proof(client, system_id, source))
+
+
+def tower(db, client, email: str) -> tuple[str, str, str]:
+    owner = _register_login(client, email)
+    pc, fol, zfc = seed_tower(db, owner, published_top=True)
+    return pc, fol, zfc
+
+
+# ---------------------------------------------------------------------------
+# The valid case: proved in PC, cited in ZFC
+# ---------------------------------------------------------------------------
+
+
+def test_a_promoted_propositional_theorem_is_citable_two_layers_up(db, client):
+    # (a) end to end, for work a person proved rather than imported: the lemma is
+    # written and checked in propositional calculus, promoted, and cited from a
+    # proof written in ZFC — a system two layers above the one that proved it.
+    pc, _fol, zfc = tower(db, client, "promote-cite@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+
+    status, entry = promote(client, proof, "id")
+    assert status == 201, entry
+    assert entry["label"] == "id"
+    assert entry["statement"] == "(P → P)"
+
+    checked = check_in(client, zfc, "(P → P) [id]")
+    assert checked["success"] is True, checked
+
+
+def test_a_promoted_theorem_is_citable_in_its_own_system(db, client):
+    # The degenerate layer of the same mechanism: a citation resolves against the
+    # system's own library first, so promotion is useful without any inheritance.
+    pc, _fol, _zfc = tower(db, client, "promote-here@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id")[0] == 201
+
+    assert check_in(client, pc, "(P → P) [id]")["success"] is True
+
+
+def test_promotion_composes_nothing_because_it_was_handed_the_checked_term(monkeypatch):
+    # The negative control on §3.1, and the one that actually discriminates: the
+    # stored-row assertion below cannot, because the term graph interns by
+    # digest, so a statement re-parsed from text lands on the *same row* and
+    # looks identical from the database.
+    #
+    # What tells them apart is that promotion must not compose at all. Make
+    # composing fatal after the system is built and the proof checked, then
+    # promote: the schema term has to be the very object the checker unified
+    # against, not one derived again from `(P → P)`.
+    from website.logical import build_context
+    from website.logical.declarative import build_spec
+    from website.logical.promotion import proved_theorem
+
+    from tests.layered_systems import propositional_calculus_spec
+
+    built = build_spec(propositional_calculus_spec())
+    assert "errors" not in built, built["errors"]
+    system = built["system"]
+    proof = system.parse(IDENTITY_PROOF)
+    assert proof.valid is True
+
+    def fatal(*_args, **_kwargs):
+        raise AssertionError("promotion re-composed a term it had already been given")
+
+    monkeypatch.setattr(build_context, "compose_schema_term", fatal)
+    _spec, theorem = proved_theorem(system, proof, "id")
+
+    assert theorem.deduction.schema_term is proof.root_scope.conclusion.formula_term
+
+
+def test_the_entry_interns_to_the_conclusion_lines_term_row(db, client):
+    # The storage half of the same claim: the entry and the line that established
+    # it point at one row in the shared term graph, so a citation two layers up
+    # reads the term the check ran on rather than a copy of it.
+    #
+    # By term id rather than by statement string — two terms that render
+    # identically can differ in constructor, and so in sort, and a string
+    # comparison passes for both. (What this cannot see is a re-parse, which
+    # interns to the same row; that is the test above.)
+    pc, _fol, _zfc = tower(db, client, "same-term@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id")[0] == 201
+
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            entry = session.scalar(
+                select(PromotedTheoremRow).where(PromotedTheoremRow.label == "id")
+            )
+            conclusion = session.scalar(
+                select(ProofLineRow)
+                .where(
+                    ProofLineRow.proof_id == uuid.UUID(proof),
+                    ProofLineRow.number == 5,
+                )
+            )
+            assert conclusion.term_id is not None
+            assert entry.statement_term_id == conclusion.term_id
+    finally:
+        engine.dispose()
+
+
+def test_the_conclusion_promoted_is_the_last_line_not_the_first(db, client):
+    # The negative control on *which* line was taken. Line 1 is an `ax-2`
+    # instance and line 3 is a modus ponens step, both perfectly promotable — so
+    # a promotion that reached for the wrong line would still have produced an
+    # entry and still have been citable. Only the statement tells them apart.
+    pc, _fol, _zfc = tower(db, client, "which-line@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    _status, entry = promote(client, proof, "id")
+
+    assert entry["statement"] == "(P → P)"
+    assert check_in(client, pc, "((P → (P → P)) → (P → P)) [id]")["success"] is False
+
+
+def test_a_ground_theorem_justifies_its_own_statement_and_no_other_instance(db, client):
+    # R3 promotes what the proof concluded, verbatim: `(P → P)` and not
+    # `∀ φ. (φ → φ)`. The proof would go through for any propositional letter,
+    # but nothing in it *says* so — nominating metavariables is R3a — and an
+    # entry that silently generalised would be asserting more than was checked.
+    pc, _fol, _zfc = tower(db, client, "ground@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id")[0] == 201
+
+    assert check_in(client, pc, "(P → P) [id]")["success"] is True
+    assert check_in(client, pc, "(Q → Q) [id]")["success"] is False
+
+
+def test_a_promoted_theorem_carries_into_a_compound_step(db, client):
+    # The citation is a real premise, not just a line that restates the entry: the
+    # promoted `(P → P)` feeds modus ponens against an `ax-1` instance in ZFC,
+    # two layers above where it was proved.
+    pc, _fol, zfc = tower(db, client, "compound@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id")[0] == 201
+
+    checked = check_in(
+        client,
+        zfc,
+        "(P → P) [id]\n"
+        "((P → P) → (x = y → (P → P))) [ax-1]\n"
+        "(x = y → (P → P)) [MP, 1, 2]",
+    )
+    assert checked["success"] is True, checked
+
+
+# ---------------------------------------------------------------------------
+# The guards, one rejection each
+# ---------------------------------------------------------------------------
+
+
+def test_an_invalid_proof_cannot_be_promoted(db, client):
+    pc, _fol, _zfc = tower(db, client, "invalid@example.com")
+    # `[MP, 1]` cites one antecedent where modus ponens takes two.
+    proof = make_proof(client, pc, "(P → (P → P)) [ax-1]\n(P → P) [MP, 1]")
+
+    status, body = promote(client, proof, "bogus")
+    # Refused before validity is even reached: an unpublished proof is not a
+    # candidate, and this one could not be published either.
+    assert status == 400, body
+    assert "publish" in str(body).lower()
+
+
+def test_a_valid_but_unpublished_proof_cannot_be_promoted(db, client):
+    # The guard that is not about soundness but about exposure: R2 makes this
+    # library readable from every descendant system, and a descendant may be
+    # someone else's, so promoting a draft would hand out its statement.
+    pc, _fol, _zfc = tower(db, client, "draft@example.com")
+    proof = make_proof(client, pc, IDENTITY_PROOF)
+    assert verify(client, proof)["success"] is True
+
+    status, body = promote(client, proof, "id")
+    assert status == 400, body
+    assert "published" in str(body).lower()
+
+
+def test_a_proof_carrying_a_warning_establishes_no_theorem():
+    # A warning is unresolved doubt about whether the proof stands, so it must
+    # not become something other proofs rest on — the same rule
+    # `_is_usable_lemma` applies to a cited lemma.
+    #
+    # Tested against the engine rather than the route because **no check
+    # currently raises a warning**: `warning_message` is carried by the line, the
+    # row and the loader, and nothing sets it. The guard is live for the day
+    # something does, and this is what says it works then.
+    from website.logical.declarative import build_spec
+    from website.logical.promotion import proved_theorem
+
+    from tests.layered_systems import propositional_calculus_spec
+
+    system = build_spec(propositional_calculus_spec())["system"]
+    proof = system.parse(IDENTITY_PROOF)
+    assert proof.valid is True
+    proof.has_warnings = True
+
+    with pytest.raises(ValueError, match="warning"):
+        proved_theorem(system, proof, "id")
+
+
+def test_an_unusable_proof_is_refused_by_the_route(db, client, monkeypatch):
+    # The wiring for the guard above: whatever makes a proof unusable, the route
+    # answers 422 rather than promoting it. Forced, since the only reachable way
+    # to be unusable today — not verifying — is already refused a publish, and
+    # publication is the earlier gate.
+    import app.routers.proofs as proofs_router
+
+    pc, _fol, _zfc = tower(db, client, "unusable@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+
+    monkeypatch.setattr(proofs_router, "_is_usable_lemma", lambda _proof: False)
+    status, body = promote(client, proof, "id")
+
+    assert status == 422, body
+
+
+def test_a_proof_with_no_conclusion_cannot_be_promoted(db, client):
+    # A proof of nothing: commentary only. Vacuously valid, publishable, and
+    # establishes no theorem — which the engine says rather than the router
+    # guessing (`promotion.proved_theorem`).
+    pc, _fol, _zfc = tower(db, client, "empty@example.com")
+    proof = proved_and_published(client, pc, "")
+
+    status, body = promote(client, proof, "nothing")
+    assert status == 422, body
+    assert "conclusion" in str(body).lower()
+
+
+def test_a_label_an_inference_rule_already_carries_is_refused(db, client):
+    # A citation resolves rules before theorems, so this entry could never be
+    # reached — better a 409 than a row nothing can cite.
+    pc, _fol, _zfc = tower(db, client, "shadowed@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+
+    status, body = promote(client, proof, "MP")
+    assert status == 409, body
+    assert "inference rule" in str(body).lower()
+
+
+def test_a_label_another_proof_already_promoted_is_refused(db, client):
+    # One label, one theorem: a citation names an entry by label, so two would
+    # make `[id]` ambiguous within a single system.
+    pc, _fol, _zfc = tower(db, client, "taken@example.com")
+    first = proved_and_published(client, pc, IDENTITY_PROOF)
+    second = proved_and_published(client, pc, PARTIAL_PROOF)
+    assert promote(client, first, "id")[0] == 201
+
+    status, body = promote(client, second, "id")
+    assert status == 409, body
+
+
+def test_a_label_an_import_already_carries_is_refused(db, client):
+    # The NULL case of the check above. An imported entry has no `proved_by_id`,
+    # so "not this proof's entry" written as `!=` is NULL rather than true and
+    # the clash reaches the unique index — a 500 where the author should be told
+    # to pick another label.
+    pc, _fol, _zfc = tower(db, client, "import-clash@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id")[0] == 201
+
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            entry = session.scalar(
+                select(PromotedTheoremRow).where(PromotedTheoremRow.label == "id")
+            )
+            entry.proved_by_id = None
+            session.commit()
+    finally:
+        engine.dispose()
+
+    other = proved_and_published(client, pc, PARTIAL_PROOF)
+    status, body = promote(client, other, "id")
+    assert status == 409, body
+
+
+def test_the_default_label_is_the_slug_when_the_slug_can_be_one(db, client):
+    pc, _fol, _zfc = tower(db, client, "default-label@example.com")
+    proof = make_proof(client, pc, IDENTITY_PROOF, name="Identity Law")
+    publish(client, proof)
+
+    status, entry = promote(client, proof)
+    assert status == 201, entry
+    assert entry["label"] == "identity-law"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        # `slugify` keeps a leading digit; a label must start with a letter, or
+        # the citation grammar never reads it as one.
+        "2 plus 2",
+        # And a slug may run to the 256 characters a name may, while
+        # `promoted_theorems.label` is `String(128)` — on Postgres that is a
+        # truncation error, which is a 500 rather than an answer.
+        "l" + "o" * 200 + "ng",
+    ],
+)
+def test_a_slug_that_cannot_be_a_label_asks_for_one(db, client, name):
+    pc, _fol, _zfc = tower(db, client, f"badslug-{abs(hash(name))}@example.com")
+    proof = make_proof(client, pc, IDENTITY_PROOF, name=name)
+    publish(client, proof)
+
+    status, body = promote(client, proof)
+    assert status == 400, body
+    assert "label" in str(body).lower()
+    # An explicit label is still fine — the slug is a default, not a constraint.
+    assert promote(client, proof, "id")[0] == 201
+
+
+def test_a_proof_in_someone_elses_system_is_not_promotable(db, client):
+    # 404 rather than 403, as everywhere else in this router: another owner's
+    # proof id must not be confirmable.
+    pc, _fol, _zfc = tower(db, client, "owner@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+
+    _register_login(client, "stranger@example.com")
+    assert promote(client, proof, "id")[0] == 404
+
+
+# ---------------------------------------------------------------------------
+# Retirement: the entry cannot outlive the proof standing
+# ---------------------------------------------------------------------------
+
+
+def test_editing_the_proof_retires_the_entry(db, client):
+    # The roadmap's case: cite a promoted entry after the proof was edited. The
+    # entry must be *retired*, not left asserting a conclusion the proof no
+    # longer reaches.
+    pc, _fol, zfc = tower(db, client, "edited@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id")[0] == 201
+    assert check_in(client, zfc, "(P → P) [id]")["success"] is True
+
+    # Truncating the proof leaves it valid and published, concluding something
+    # else — which is exactly the case a stale entry would survive.
+    edited = client.patch(f"/api/proofs/{proof}", json={"source": PARTIAL_PROOF})
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["theorem"] is None
+
+    assert check_in(client, zfc, "(P → P) [id]")["success"] is False
+
+
+def test_unpublishing_the_proof_retires_the_entry(db, client):
+    pc, _fol, zfc = tower(db, client, "unpublished@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id")[0] == 201
+
+    response = client.patch(f"/api/proofs/{proof}", json={"published": False})
+    assert response.status_code == 200, response.text
+    assert response.json()["theorem"] is None
+
+    assert check_in(client, zfc, "(P → P) [id]")["success"] is False
+
+
+def test_deleting_the_proof_retires_the_entry(db, client):
+    pc, _fol, zfc = tower(db, client, "deleted@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id")[0] == 201
+
+    assert client.delete(f"/api/proofs/{proof}").status_code == 204
+    assert check_in(client, zfc, "(P → P) [id]")["success"] is False
+
+
+def test_deleting_the_proof_invalidates_what_cited_its_entry(db, client):
+    # The entry goes with the proof by `ON DELETE CASCADE` whatever this route
+    # does, so the test above passes even with the delete path's retirement
+    # removed. What the cascade does *not* do is reach the proofs that already
+    # verified against the entry — they keep a standing verdict resting on a
+    # theorem the database no longer has.
+    pc, _fol, zfc = tower(db, client, "deleted-citer@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id")[0] == 201
+
+    citing = make_proof(client, zfc, "(P → P) [id]")
+    assert verify(client, citing)["success"] is True
+
+    assert client.delete(f"/api/proofs/{proof}").status_code == 204
+
+    assert client.get(f"/api/proofs/{citing}").json()["valid"] is None
+
+
+def test_retiring_invalidates_the_verdicts_that_rested_on_the_entry(db, client):
+    # The negative control on retirement. Removing the row is the easy half:
+    # without this, a ZFC proof that already verified keeps `valid: true` and its
+    # stored lines, so *another* proof citing it as a lemma reads that verdict
+    # from the rows and rests on a theorem that is gone.
+    pc, _fol, zfc = tower(db, client, "cascade@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id")[0] == 201
+
+    citing = make_proof(client, zfc, "(P → P) [id]")
+    assert verify(client, citing)["success"] is True
+
+    assert client.delete(f"/api/proofs/{proof}/promote").status_code == 204
+
+    detail = client.get(f"/api/proofs/{citing}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["valid"] is None
+
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            lines = session.scalars(
+                select(ProofLineRow.id).where(
+                    ProofLineRow.proof_id == uuid.UUID(citing)
+                )
+            ).all()
+            assert lines == []
+    finally:
+        engine.dispose()
+
+
+def test_retiring_reaches_a_proof_that_cited_the_citer(db, client):
+    # One hop further out, and the reason §9.15 gives for doing this at all: a
+    # verify trusts a lemma's stored rows rather than re-checking it, so a proof
+    # resting on a citer rests on the entry at one remove. Clearing only the
+    # direct citer leaves exactly the stale verdict the mechanism exists to
+    # prevent.
+    pc, _fol, zfc = tower(db, client, "transitive@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id")[0] == 201
+
+    lemma = make_proof(client, zfc, "(P → P) [id]")
+    # The lemma's line 1 feeds modus ponens here, so `downstream` rests on it —
+    # and through it on the promoted entry.
+    downstream = make_proof(
+        client,
+        zfc,
+        "((P → P) → (x = y → (P → P))) [ax-1]\n"
+        "(x = y → (P → P)) [MP, lem.1, 1]",
+    )
+    assert client.put(
+        f"/api/proofs/{downstream}/references",
+        json={"references": [{"referenced_proof_id": lemma, "alias": "lem"}]},
+    ).status_code == 200
+    assert verify(client, lemma)["success"] is True
+    assert verify(client, downstream)["success"] is True
+
+    assert client.delete(f"/api/proofs/{proof}/promote").status_code == 204
+
+    assert client.get(f"/api/proofs/{lemma}").json()["valid"] is None
+    assert client.get(f"/api/proofs/{downstream}").json()["valid"] is None
+
+
+def test_a_descendants_rule_of_the_same_label_shadows_and_survives(db, client):
+    # The other half of shadowing, and the one easy to miss: `get_reference`
+    # tries `rule_by_label` *before* the library, so a descendant declaring an
+    # inference rule named `id` shadows an ancestor's theorem of that name just
+    # as a nearer theorem would. A walk that only looked for theorems would wipe
+    # that subtree's verdicts for an entry it never reached.
+    owner = _register_login(client, "rule-shadow@example.com")
+    pc = seed(db, propositional_calculus_spec(), owner, None, published=True)
+    fol = seed(db, first_order_logic_spec(), owner, pc, published=True)
+    top = zfc_spec()
+    # ZFC's *own* `id`, as a rule rather than a theorem — declared here, so it is
+    # this layer's row that the walk has to notice.
+    top.rules.append(rule("id", "identity", [], "(P → P)", [("P", "formula")]))
+    zfc = seed(db, top, owner, fol, published=True)
+
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id")[0] == 201
+
+    # Justified by ZFC's rule, never by PC's entry — `rule` on the stored line
+    # says `id` either way, which is why the walk and not the query has to tell
+    # them apart.
+    citing = make_proof(client, zfc, "(P → P) [id]")
+    assert verify(client, citing)["success"] is True
+
+    assert client.delete(f"/api/proofs/{proof}/promote").status_code == 204
+
+    assert client.get(f"/api/proofs/{citing}").json()["valid"] is True
+
+
+def test_retiring_leaves_a_proof_that_never_cited_the_entry_alone(db, client):
+    # The other half: a sweep that invalidated every proof in the tower would
+    # pass the test above for the wrong reason. A ZFC proof citing nothing keeps
+    # its verdict.
+    pc, _fol, zfc = tower(db, client, "untouched@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id")[0] == 201
+
+    bystander = make_proof(client, zfc, "(P → (P → P)) [ax-1]")
+    assert verify(client, bystander)["success"] is True
+
+    assert client.delete(f"/api/proofs/{proof}/promote").status_code == 204
+
+    assert client.get(f"/api/proofs/{bystander}").json()["valid"] is True
+
+
+def test_a_descendants_own_entry_of_the_same_label_shadows_and_survives(db, client):
+    # A label declared in two layers resolves to the nearer one, so the ZFC proof
+    # was never citing PC's entry — retiring PC's must not disturb it. The
+    # shadowing rule the resolver follows, followed here too.
+    pc, _fol, zfc = tower(db, client, "shadow@example.com")
+    lower = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, lower, "id")[0] == 201
+
+    # ZFC's own `id`, proved there and concluding the same thing.
+    nearer = proved_and_published(client, zfc, IDENTITY_PROOF)
+    assert promote(client, nearer, "id")[0] == 201
+
+    citing = make_proof(client, zfc, "(P → P) [id]")
+    assert verify(client, citing)["success"] is True
+
+    assert client.delete(f"/api/proofs/{lower}/promote").status_code == 204
+
+    assert client.get(f"/api/proofs/{citing}").json()["valid"] is True
+    assert check_in(client, zfc, "(P → P) [id]")["success"] is True
+
+
+def test_changing_the_proofs_references_retires_the_entry(db, client):
+    # What a proof establishes depends on the lemmas it may cite, so dropping a
+    # reference can leave the entry standing behind a proof that no longer
+    # verifies — the same hazard as a source edit, by a different route.
+    pc, _fol, _zfc = tower(db, client, "refs@example.com")
+    lemma = proved_and_published(client, pc, "(P → (P → P)) [ax-1]")
+    citer = make_proof(
+        client,
+        pc,
+        "((P → (P → P)) → (Q → (P → (P → P)))) [ax-1]\n"
+        "(Q → (P → (P → P))) [MP, lem.1, 1]",
+    )
+    assert client.put(
+        f"/api/proofs/{citer}/references",
+        json={"references": [{"referenced_proof_id": lemma, "alias": "lem"}]},
+    ).status_code == 200
+    publish(client, citer)
+    assert promote(client, citer, "cited")[0] == 201
+
+    emptied = client.put(f"/api/proofs/{citer}/references", json={"references": []})
+    assert emptied.status_code == 200, emptied.text
+    assert emptied.json()["theorem"] is None
+
+    # And the proof really has stopped standing, so the entry would have been
+    # asserting something nothing here proves.
+    assert verify(client, citer)["success"] is False
+
+
+def test_promoting_a_label_an_ancestor_carries_invalidates_what_cited_it(db, client):
+    # Shadowing is legal — R2 resolves nearest-first, and refusing this would
+    # contradict that — but it silently changes what every proof at or below the
+    # promoting layer was citing. A verdict recorded against the ancestor's entry
+    # has to go for the same reason a retirement's does.
+    pc, _fol, zfc = tower(db, client, "shadow-promote@example.com")
+    lower = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, lower, "id")[0] == 201
+
+    citing = make_proof(client, zfc, "(P → P) [id]")
+    assert verify(client, citing)["success"] is True
+
+    # ZFC promotes its own `id`, concluding something else entirely.
+    nearer = proved_and_published(client, zfc, PARTIAL_PROOF)
+    assert promote(client, nearer, "id")[0] == 201
+
+    assert client.get(f"/api/proofs/{citing}").json()["valid"] is None
+    # And on re-verification the citation now means the nearer entry, which does
+    # not justify this line.
+    assert verify(client, citing)["success"] is False
+
+
+def test_retiring_a_proof_that_promoted_nothing_is_a_no_op(db, client):
+    pc, _fol, _zfc = tower(db, client, "noop@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+
+    assert client.delete(f"/api/proofs/{proof}/promote").status_code == 204
+
+
+# ---------------------------------------------------------------------------
+# Re-promotion, and the links between the two rows
+# ---------------------------------------------------------------------------
+
+
+def test_re_promoting_replaces_the_entry_rather_than_adding_one(db, client):
+    pc, _fol, _zfc = tower(db, client, "repromote@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    first = promote(client, proof, "id")[1]
+    second = promote(client, proof, "id")[1]
+
+    assert second["id"] != first["id"]
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            rows = session.scalars(
+                select(PromotedTheoremRow.id).where(
+                    PromotedTheoremRow.system_id == uuid.UUID(pc)
+                )
+            ).all()
+            assert [str(row) for row in rows] == [second["id"]]
+    finally:
+        engine.dispose()
+
+
+def test_re_promoting_after_an_edit_states_the_new_conclusion(db, client):
+    # Retirement on edit is not the end of the story: the author fixes the proof
+    # and promotes again, and the entry then says what the proof now concludes.
+    pc, _fol, zfc = tower(db, client, "restate@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id")[0] == 201
+
+    assert client.patch(
+        f"/api/proofs/{proof}", json={"source": PARTIAL_PROOF}
+    ).status_code == 200
+    status, entry = promote(client, proof, "id")
+
+    assert status == 201, entry
+    assert entry["statement"] == "((P → (P → P)) → (P → P))"
+    assert check_in(client, zfc, "((P → (P → P)) → (P → P)) [id]")["success"] is True
+    assert check_in(client, zfc, "(P → P) [id]")["success"] is False
+
+
+def test_the_proof_points_at_the_entry_and_the_entry_at_the_proof(db, client):
+    # Both directions, because they say different things: `proofs.theorem_id` is
+    # which entry's hypotheses this proof may cite, `promoted_theorems.proved_by_id`
+    # is which proof warrants the entry. Only the second discriminates a
+    # promotion from an import, which is what retirement turns on.
+    pc, _fol, _zfc = tower(db, client, "links@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    _status, entry = promote(client, proof, "id")
+
+    assert entry["proved_by_id"] == proof
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            stored = session.get(Proof, uuid.UUID(proof))
+            assert str(stored.theorem_id) == entry["id"]
+    finally:
+        engine.dispose()
+
+
+def test_the_proof_detail_reports_the_entry_it_established(db, client):
+    pc, _fol, _zfc = tower(db, client, "detail@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+
+    assert client.get(f"/api/proofs/{proof}").json()["theorem"] is None
+    promote(client, proof, "id")
+    theorem = client.get(f"/api/proofs/{proof}").json()["theorem"]
+
+    assert theorem["label"] == "id"
+    assert theorem["statement"] == "(P → P)"
+    assert theorem["proved_by_id"] == proof
+
+
+def test_an_imported_entry_is_not_retired_by_editing_its_proof(db, client):
+    # The reason `proved_by_id` exists. An imported library entry's warrant is the
+    # corpus, not the stored proof, so an edit to that proof withdraws nothing —
+    # and a blanket "the proof changed, drop its entry" rule would delete a
+    # 49,000-theorem import one theorem at a time.
+    pc, _fol, _zfc = tower(db, client, "imported@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id")[0] == 201
+
+    # Make the entry look imported: keep the proof's link to it, drop the entry's
+    # link back — exactly the shape `_link_proofs_to_theorems` leaves behind.
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            entry = session.scalar(
+                select(PromotedTheoremRow).where(PromotedTheoremRow.label == "id")
+            )
+            entry.proved_by_id = None
+            session.commit()
+    finally:
+        engine.dispose()
+
+    assert client.patch(
+        f"/api/proofs/{proof}", json={"source": PARTIAL_PROOF}
+    ).status_code == 200
+
+    assert check_in(client, pc, "(P → P) [id]")["success"] is True
+
+
+# ---------------------------------------------------------------------------
+# Bound variables across the boundary
+# ---------------------------------------------------------------------------
+
+
+def test_a_quantified_theorem_proved_in_fol_is_citable_in_zfc(db, client):
+    # §8.0's binder case. `∀x (P → P)` is proved in first-order logic by
+    # generalising the propositional identity — so the statement carries a binder
+    # introduced by the layer that proved it, and the citation two layers up has
+    # to rebuild that binder's term against ZFC's wider grammar.
+    _pc, fol, zfc = tower(db, client, "binder@example.com")
+    proof = proved_and_published(
+        client, fol, IDENTITY_PROOF + "\n∀x (P → P) [GEN, 5]"
+    )
+
+    status, entry = promote(client, proof, "gen-id")
+    assert status == 201, entry
+    assert entry["statement"] == "∀x (P → P)"
+
+    assert check_in(client, zfc, "∀x (P → P) [gen-id]")["success"] is True
+    # And it is still the ground theorem it was promoted as: a different bound
+    # variable is a different statement, not an instance of this one.
+    assert check_in(client, zfc, "∀y (P → P) [gen-id]")["success"] is False
+
+
+def test_a_theorem_stated_in_an_ancestors_defined_notation_is_citable_above_it(db, client):
+    # The same derivation over `(P ∧ Q)`, so the promoted statement is a compound
+    # built from PC's `∧` — notation the propositional layer declares and `df-an`
+    # gives meaning to. Citing it from ZFC rebuilds that constructor from ZFC's
+    # own chain: the term-graph read §3.1 describes, over a grammar where `∧` is
+    # inherited rather than declared.
+    pc, _fol, zfc = tower(db, client, "defined@example.com")
+    proof = proved_and_published(client, pc, identity_proof("(P ∧ Q)"))
+    status, entry = promote(client, proof, "and-id")
+
+    assert status == 201, entry
+    assert entry["statement"] == "((P ∧ Q) → (P ∧ Q))"
+    assert check_in(client, zfc, "((P ∧ Q) → (P ∧ Q)) [and-id]")["success"] is True
+
+
+# ---------------------------------------------------------------------------
+# Locking
+# ---------------------------------------------------------------------------
+
+
+def seed_with_id(db_path, spec, owner_id: str, parent_id: str | None, key: str) -> str:
+    """`seed`, with the system's id chosen rather than generated.
+
+    Only the lock-ordering test needs this, and it needs it to be a test rather
+    than a coin flip: both orders it has to tell apart are orders *over ids*, so
+    with generated ids the assertion would agree with the wrong code whenever the
+    ids happened to fall the right way.
+    """
+    engine = create_engine(db_path)
+    try:
+        with Session(engine) as session:
+            system = spec_to_system(spec)
+            system.id = uuid.UUID(key)
+            system.owner_id = uuid.UUID(owner_id)
+            system.inherits_from_id = None if parent_id is None else uuid.UUID(parent_id)
+            system.published_at = datetime.now(timezone.utc)
+            session.add(system)
+            session.commit()
+            return str(system.id)
+    finally:
+        engine.dispose()
+
+
+def test_the_locks_are_taken_ancestor_first_and_the_root_is_first_of_all(db, client, monkeypatch):
+    # Sorting the subtree by id — the first answer here — is not a global lock
+    # order, because every caller arrives already holding the *root's* lock (a
+    # verify takes it before reading anything). A sorted order can put a
+    # descendant ahead of that held key, and two operations at different levels
+    # of one tower then acquire in opposite orders and Postgres aborts one.
+    #
+    # So: (depth, id). Asserted on a tower with a **branch**, since a straight
+    # chain cannot tell depth order from id order, and with ids chosen so that
+    # the two orders disagree in both places they can:
+    #
+    #   * `deep` has the smallest id and the greatest depth, so sorting by id
+    #     alone would lock it first rather than last;
+    #   * `right` is inserted after `left` but sorts before it, so a generation
+    #     left in query order would come out the other way round.
+    import app.routers._invalidation as invalidation
+    import app.routers.proofs as proofs_router
+
+    owner = _register_login(client, "lock-order@example.com")
+    deep_id = "00000000-0000-4000-8000-000000000000"
+    pc_id = "11111111-1111-4111-8111-111111111111"
+    right_id = "22222222-2222-4222-8222-222222222222"
+    left_id = "33333333-3333-4333-8333-333333333333"
+
+    pc = seed_with_id(db, propositional_calculus_spec(), owner, None, pc_id)
+    left = seed_with_id(db, first_order_logic_spec("Left"), owner, pc, left_id)
+    right = seed_with_id(db, first_order_logic_spec("Right"), owner, pc, right_id)
+    deep = seed_with_id(db, zfc_spec(), owner, left, deep_id)
+
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+
+    locked: list[uuid.UUID] = []
+    original = proofs_router.lock_system
+
+    async def record(session, system_id):
+        locked.append(system_id)
+        await original(session, system_id)
+
+    # Two patch points, because the locking is split between two modules: the
+    # multi-key acquisition lives with the invalidation that needs it, and the
+    # router still takes its own system's key directly. Recording only one would
+    # see half an order.
+    monkeypatch.setattr(proofs_router, "lock_system", record)
+    monkeypatch.setattr(invalidation, "lock_system", record)
+    assert promote(client, proof, "id")[0] == 201
+
+    first_seen: list[uuid.UUID] = []
+    for key in locked:
+        if key not in first_seen:
+            first_seen.append(key)
+    assert first_seen == [
+        uuid.UUID(pc), uuid.UUID(right), uuid.UUID(left), uuid.UUID(deep)
+    ]
+
+
+def test_promotion_and_retirement_take_the_system_lock(db, client, monkeypatch):
+    # Both write rows a concurrent verify reads. Asserted by observing the lock
+    # is taken, as everywhere else in this router — the exclusion itself is only
+    # observable against a real Postgres.
+    import app.routers._invalidation as invalidation
+    import app.routers.proofs as proofs_router
+
+    locked: list[uuid.UUID] = []
+    original = proofs_router.lock_system
+
+    async def record(session, system_id):
+        locked.append(system_id)
+        await original(session, system_id)
+
+    pc, _fol, _zfc = tower(db, client, "locking@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+
+    monkeypatch.setattr(proofs_router, "lock_system", record)
+    monkeypatch.setattr(invalidation, "lock_system", record)
+    assert promote(client, proof, "id")[0] == 201
+    assert uuid.UUID(pc) in locked
+
+    locked.clear()
+    assert client.delete(f"/api/proofs/{proof}/promote").status_code == 204
+    assert uuid.UUID(pc) in locked
+
+
+def test_the_seeded_tower_is_the_one_these_tests_assume(db, client):
+    # A guard on the fixture rather than on the code: every rejection above would
+    # also pass against a tower that did not build at all.
+    pc, fol, zfc = tower(db, client, "fixture@example.com")
+    for system_id in (pc, fol, zfc):
+        response = client.post(f"/api/formal-systems/{system_id}/validate")
+        assert response.status_code == 200, response.text
+        assert response.json()["success"] is True, response.json().get("errors")
+
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            published = session.scalars(
+                select(FormalSystem.published_at).where(
+                    FormalSystem.id.in_([uuid.UUID(i) for i in (pc, fol, zfc)])
+                )
+            ).all()
+            assert all(stamp is not None for stamp in published)
+    finally:
+        engine.dispose()
+
+
+def test_a_published_system_is_what_promotion_needs(db, client):
+    # Publication of the *proof* is the gate, and it requires a published system —
+    # so a draft system cannot host a promotion at all. Pinned because it is the
+    # premise §9.11's frozen-ancestor argument rests on.
+    owner = _register_login(client, "draft-system@example.com")
+    pc, _fol, _zfc = seed_tower(db, owner, published_top=False)
+    del owner
+
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            system = session.get(FormalSystem, uuid.UUID(pc))
+            system.published_at = None
+            session.commit()
+    finally:
+        engine.dispose()
+
+    proof = make_proof(client, pc, IDENTITY_PROOF)
+    response = client.patch(f"/api/proofs/{proof}", json={"published": True})
+    assert response.status_code == 400, response.text
+    assert promote(client, proof, "id")[0] == 400
+
+
+def test_promotion_stamps_the_digest_that_guards_its_terms(db, client):
+    # A negative control on the cache. The entry's `schema_digest` has to be the
+    # one this system's own verify computes, or the cached term misses on every
+    # citation and the statement is silently re-parsed against a wider grammar —
+    # the failure §9.11 exists to prevent, which no citation test can see because
+    # the re-parse usually produces the same answer.
+    pc, _fol, zfc = tower(db, client, "digest@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id")[0] == 201
+
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            entry = session.scalar(
+                select(PromotedTheoremRow).where(PromotedTheoremRow.label == "id")
+            )
+            assert entry.schema_digest is not None
+            assert entry.statement_term_id is not None
+            # Break the term while leaving the digest: if the citation still
+            # resolves, it resolved by re-parsing and the cache was never read.
+            entry.statement_term_id = None
+            session.commit()
+    finally:
+        engine.dispose()
+
+    assert check_in(client, zfc, "(P → P) [id]")["success"] is False
+
+
+def test_a_stale_timestamp_is_not_what_gates_promotion(db, client):
+    # `published_at` is set by the route, never by the caller; a client that
+    # sends one is ignored rather than trusted.
+    pc, _fol, _zfc = tower(db, client, "stamp@example.com")
+    proof = make_proof(client, pc, IDENTITY_PROOF)
+    client.patch(
+        f"/api/proofs/{proof}",
+        json={"published_at": datetime.now(timezone.utc).isoformat()},
+    )
+
+    assert promote(client, proof, "id")[0] == 400
+
+
+# ---------------------------------------------------------------------------
+# R3a — schematic promotion: proved once, cited at every instance
+# ---------------------------------------------------------------------------
+
+
+def test_a_schematic_theorem_is_cited_at_three_distinct_instances(db, client):
+    # The headline. The proof writes `(P → P)`; nominating `P : formula` makes
+    # the entry `⊢ (φ → φ)`, so it justifies every instance rather than the one
+    # instance the author happened to type — including, two layers up, one whose
+    # formula the system that proved it cannot spell.
+    pc, _fol, zfc = tower(db, client, "schematic@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+
+    status, entry = promote(client, proof, "id", {"P": "formula"})
+    assert status == 201, entry
+    assert entry["statement"] == "(P → P)"
+
+    assert check_in(client, zfc, "(Q → Q) [id]")["success"] is True
+    assert check_in(client, zfc, "((A → B) → (A → B)) [id]")["success"] is True
+    # The binder case §8.0 asks for: the instance quantifies, which is notation
+    # the propositional layer has no production for.
+    assert check_in(client, zfc, "(∀x x ∈ y → ∀x x ∈ y) [id]")["success"] is True
+
+
+def test_a_schematic_theorem_still_justifies_the_instance_it_was_proved_at(db, client):
+    pc, _fol, _zfc = tower(db, client, "schematic-self@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id", {"P": "formula"})[0] == 201
+
+    assert check_in(client, pc, "(P → P) [id]")["success"] is True
+
+
+def test_a_schematic_theorem_does_not_justify_a_different_shape(db, client):
+    # Generality is over the nominated leaf, not over everything: `(φ → φ)` says
+    # both sides agree, and an entry that justified `(A → B)` would be saying
+    # something the proof does not.
+    pc, _fol, _zfc = tower(db, client, "schematic-shape@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id", {"P": "formula"})[0] == 201
+
+    assert check_in(client, pc, "(A → B) [id]")["success"] is False
+
+
+def test_nominating_a_leaf_at_an_undeclared_sort_is_refused(db, client):
+    pc, _fol, _zfc = tower(db, client, "bad-sort@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+
+    status, body = promote(client, proof, "id", {"P": "nonesuch"})
+    assert status == 422, body
+    assert "not a declared pattern" in str(body)
+
+
+def test_nominating_a_leaf_at_the_wrong_sort_is_refused_by_the_recheck(db, client):
+    # `P` is a formula leaf; nominating it at `term` makes the abstracted proof
+    # stop matching `ax-2`. Refused by the checker rather than by a rule
+    # maintained here — which is the point of re-checking rather than asserting.
+    _pc, fol, _zfc = tower(db, client, "wrong-sort@example.com")
+    proof = proved_and_published(client, fol, IDENTITY_PROOF)
+
+    status, body = promote(client, proof, "id", {"P": "term"})
+    assert status == 422, body
+    assert "does not go through" in str(body)
+
+
+def test_nominating_a_leaf_a_rule_fixed_as_a_constant_is_refused(db, client):
+    # A leaf a rule names *literally* is not schematic in the system, so a proof
+    # that used it did not prove the general statement. `⊥` in `(⊥ → P)` is that
+    # leaf: the tower has no constant to make the case with, so the layer here
+    # declares one and a rule over it.
+    owner = _register_login(client, "constant@example.com")
+    spec = propositional_calculus_spec()
+    spec.productions.append(atom_const_prod("formula", "falsum", "⊥", True))
+    spec.rules.append(
+        rule("efq", "ex falso", [], "(⊥ → P)", [("P", "formula")])
+    )
+    system = seed(db, spec, owner, None, published=True)
+    proof = proved_and_published(client, system, "(⊥ → A) [efq]")
+
+    # `A` is the rule's own metavariable and generalises.
+    assert promote(client, proof, "efq-a", {"A": "formula"})[0] == 201
+    # `⊥` is not: the rule spells it, so the abstracted step stops matching.
+    status, body = promote(client, proof, "efq-bot", {"⊥": "formula"})
+    assert status == 422, body
+    assert "does not go through" in str(body)
+
+
+def test_an_eigenvariable_proviso_is_carried_into_the_entry(db, client):
+    # §8.0's sharpest case, and the hole R3a exists to close. `ax-5` holds only
+    # under `not occurs(x, P)`; the proof satisfied it for the concrete leaves it
+    # wrote, and that says nothing about an arbitrary instance. The entry has to
+    # carry the proviso, and a citation violating it has to be rejected.
+    _pc, fol, zfc = tower(db, client, "eigen@example.com")
+    proof = proved_and_published(client, fol, "(P → ∀x P) [ax-5]")
+
+    status, entry = promote(client, proof, "vac", {"P": "formula", "x": "term"})
+    assert status == 201, entry
+
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            stored = session.scalar(
+                select(PromotedTheoremRow).where(PromotedTheoremRow.label == "vac")
+            )
+            assert stored.side_conditions != []
+    finally:
+        engine.dispose()
+
+    # Accepted: the instance's formula does not mention the quantified variable.
+    assert check_in(client, zfc, "(y = y → ∀w y = y) [vac]")["success"] is True
+    # Rejected: it does. Both halves, because either alone passes for a proviso
+    # that is not enforced at all.
+    assert check_in(client, zfc, "(w = y → ∀w w = y) [vac]")["success"] is False
+
+
+def test_a_proviso_over_a_nominated_leaf_constrains_the_instance(db, client):
+    # Carrying is not only about the formula side. Nominating just `x` leaves
+    # `ax-5`'s `not occurs(x, y = y)` restated over a *ground* formula — still a
+    # real obligation, because it says the instance of `x` may not be `y`. Kept,
+    # and enforced.
+    _pc, fol, zfc = tower(db, client, "proviso-x@example.com")
+    proof = proved_and_published(client, fol, "(y = y → ∀x y = y) [ax-5]")
+
+    status, entry = promote(client, proof, "vac-x", {"x": "term"})
+    assert status == 201, entry
+    assert entry["statement"] == "(y = y → ∀x y = y)"
+
+    assert check_in(client, zfc, "(y = y → ∀w y = y) [vac-x]")["success"] is True
+    assert check_in(client, zfc, "(y = y → ∀y y = y) [vac-x]")["success"] is False
+
+
+def test_a_proviso_mentioning_no_nominated_leaf_is_dropped_as_settled(db, client):
+    # The other side: a restated condition that mentions none of the theorem's
+    # metavariables is a closed fact about ground terms, established by the check
+    # that just ran. Here `ax-5` is applied entirely on ground leaves and only the
+    # `Q` introduced later is nominated, so the proviso constrains nothing a
+    # citation can vary — and storing it would be an obligation with nothing to
+    # discharge it against.
+    _pc, fol, zfc = tower(db, client, "settled@example.com")
+    proof = proved_and_published(
+        client,
+        fol,
+        "(y = y → ∀x y = y) [ax-5]\n"
+        "((y = y → ∀x y = y) → (Q → (y = y → ∀x y = y))) [ax-1]\n"
+        "(Q → (y = y → ∀x y = y)) [MP, 1, 2]",
+    )
+
+    status, entry = promote(client, proof, "settled", {"Q": "formula"})
+    assert status == 201, entry
+
+    engine = create_engine(db)
+    try:
+        with Session(engine) as session:
+            stored = session.scalar(
+                select(PromotedTheoremRow).where(
+                    PromotedTheoremRow.label == "settled"
+                )
+            )
+            assert stored.side_conditions == []
+    finally:
+        engine.dispose()
+
+    assert check_in(client, zfc, "(A → (y = y → ∀x y = y)) [settled]")["success"] is True
+
+
+def test_promoting_with_no_nomination_is_still_the_ground_theorem(db, client):
+    # R3's behaviour is unchanged by R3a's arrival: an empty `metavariables` is
+    # the verbatim promotion, not a schematic one over nothing.
+    pc, _fol, _zfc = tower(db, client, "still-ground@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+    assert promote(client, proof, "id", {})[0] == 201
+
+    assert check_in(client, pc, "(P → P) [id]")["success"] is True
+    assert check_in(client, pc, "(Q → Q) [id]")["success"] is False
+
+
+def test_a_schematic_promotion_composes_the_conclusion_from_the_abstracted_term():
+    # The §3.1 control, for the schematic path. The conclusion promoted is the
+    # *abstracted* proof's conclusion term, so the entry's schema term has to be
+    # that object rather than something re-derived from `(P → P)`.
+    from website.logical.declarative import build_spec
+    from website.logical.promotion import schematic_theorem
+
+    from tests.layered_systems import propositional_calculus_spec
+
+    system = build_spec(propositional_calculus_spec())["system"]
+    proof, context = system.read_proof(IDENTITY_PROOF)
+    system.check_proof(proof, context)
+    assert proof.valid is True
+
+    spec, theorem = schematic_theorem(
+        system, proof, "id", {"P": "formula"}, context
+    )
+    assert set(spec.metavariables) == {"P"}
+    # The statement is schematic: its term has `P` free, where the ground
+    # promotion's had nothing free at all.
+    assert set(theorem.deduction.schema_term.free_vars()) == {"P"}
+
+
+# ---------------------------------------------------------------------------
+# The shapes a nomination cannot be settled for — refused, not generalised
+# ---------------------------------------------------------------------------
+
+
+def engine_promote(spec, source, metavariables, label="T"):
+    """Build, check, and promote schematically — outside the API, for a system
+    the tower does not have."""
+    from website.logical.declarative import build_spec
+    from website.logical.promotion import schematic_theorem
+
+    built = build_spec(spec)
+    assert "errors" not in built, built["errors"]
+    system = built["system"]
+    proof, context = system.read_proof(source)
+    system.check_proof(proof, context)
+    assert proof.valid is True, [
+        (line.number, line.invalid_message)
+        for line in proof.proof_lines
+        if not line.valid
+    ]
+    return system, schematic_theorem(system, proof, label, metavariables, context)
+
+
+def test_a_string_rewriting_step_cannot_be_generalised(db, client):
+    # Found in review. A string step matches surface *text*, and a variable
+    # renders as its own name — so the abstracted proof is character-for-character
+    # the proof that was already checked, and re-checking it discharges nothing.
+    # Left to the check, MIU's `MII` would promote to a theorem whose whole
+    # statement is one metavariable, justifying `MU`, `MIU`, anything.
+    from tests.miu_system import miu_spec
+
+    with pytest.raises(ValueError, match="string-rewriting"):
+        engine_promote(miu_spec(), "MI\nMII [R2, 1]", {"MII": "miustr"})
+
+
+def test_a_string_rewriting_proof_still_promotes_verbatim(db, client):
+    # The refusal is of the *nomination*, not of the system: a ground promotion
+    # in MIU is sound (with nothing to bind, unification of two ground terms is
+    # equality) and must still work.
+    from tests.miu_system import miu_spec
+
+    system, (spec, _theorem) = engine_promote(miu_spec(), "MI\nMII [R2, 1]", {})
+    assert spec.statement == "MII"
+    del system
+
+
+def test_an_axiom_line_cannot_have_its_own_leaves_generalised():
+    # Found in review. An axiom-behaviour line is granted by matching its shape,
+    # not by a step that gets re-checked — `execute` short-circuits on it — so an
+    # abstracted term is never held to the axiom's schema, and a leaf the axiom
+    # spells could be generalised away with nothing noticing.
+    #
+    # ZFC's `ax-ext` is that line: it holds by fiat, and its `z` is the concrete
+    # bound variable the axiom itself writes.
+    from website.logical.declarative import layered_spec
+
+    tower_spec = layered_spec(
+        [propositional_calculus_spec(), first_order_logic_spec(), zfc_spec()]
+    )
+    source = "(∀z ((z ∈ x → z ∈ y) ∧ (z ∈ y → z ∈ x)) → x = y)"
+    with pytest.raises(ValueError, match="axiom"):
+        engine_promote(tower_spec, source, {"z": "term"})
+
+
+def test_an_eigenvariable_subproof_is_refused_rather_than_generalised():
+    # Found in review, and the sharper half of the hole R3a set out to close.
+    # `ax-5`'s proviso is a `SideCondition` and travels; a *discharge* rule's
+    # eigenvariable freshness is `Subproof.eigenvariable_is_fresh`, and a
+    # discharge builds no `Inference`, so there is no binding to restate and
+    # nothing to carry. Refused until there is.
+    from tests.zfc_systems import scoped_zfc_spec
+
+    with pytest.raises(ValueError, match="eigenvariable"):
+        engine_promote(
+            scoped_zfc_spec(),
+            "let x\n"
+            "    assume x ∈ c\n"
+            "        x ∈ c [R, 2]\n"
+            "    (x ∈ c → x ∈ c) [CP, 2]\n"
+            "∀x (x ∈ c → x ∈ c) [UG, 1]",
+            {"c": "setvar"},
+        )
+
+
+def test_a_proviso_the_statement_cannot_bind_is_refused():
+    # Found in review. A citation binds only the metavariables its statement
+    # mentions, so a carried proviso naming anything else could never be
+    # discharged — it would raise inside every citation and read as "this theorem
+    # does not apply", for every instance. Refused at promotion rather than
+    # stored uncitable.
+    #
+    # Reached by nominating a leaf that `ax-5`'s proviso constrains but the
+    # conclusion has dropped: `x` survives only inside the discarded left-hand
+    # side of the final implication.
+    from website.logical.declarative import layered_spec
+
+    tower_spec = layered_spec([propositional_calculus_spec(), first_order_logic_spec()])
+    source = (
+        "(y = y → ∀x y = y) [ax-5]\n"
+        "((y = y → ∀x y = y) → (Q → Q)) [drop]\n"
+        "(Q → Q) [MP, 1, 2]"
+    )
+    # `drop` is not a rule of the tower, so build one that discards its premise.
+    tower_spec.rules.append(
+        rule(
+            "drop",
+            "weakening",
+            [],
+            "((y = y → ∀x y = y) → (Q → Q))",
+            [("Q", "formula"), ("x", "term"), ("y", "term")],
+        )
+    )
+    with pytest.raises(ValueError, match="no citation could discharge it"):
+        engine_promote(tower_spec, source, {"x": "term", "Q": "formula"})
+
+
+def test_a_negated_disjunction_has_no_rendering_rather_than_a_wrong_one():
+    # Found in review. `not` binds one predicate: the parser splits on top-level
+    # `or` and then reads a leading `not`, so `not (a or b)` would come back as
+    # `(not a) or b` — a different proviso — and `not not a` would not parse at
+    # all. Refused rather than rendered into something that reparses wrong.
+    from website.logical.formal_system.side_condition_syntax import (
+        render_side_condition,
+    )
+    from website.logical.kernel import Not, Occurs, Or
+
+    assert render_side_condition(Not(Occurs("x", "P")), {}) == "not occurs(x, P)"
+    with pytest.raises(ValueError, match="single-line"):
+        render_side_condition(Not(Or((Occurs("x", "P"), Occurs("y", "Q")))), {})
+    with pytest.raises(ValueError, match="single-line"):
+        render_side_condition(Not(Not(Occurs("x", "P"))), {})
+
+
+def test_a_definitional_step_cannot_have_its_leaves_generalised():
+    # Found in review (Codex). A definitional step cites a *definition*, not a
+    # rule, so it builds no `Inference` and there is no binding to restate — and
+    # a definition's constraints are exactly the ones that must not be lost: its
+    # own proviso, and the binder freshness `fresh` generates.
+    #
+    # The concrete escape: unfold `a ⊆ b` to `∀z (z ∈ a → z ∈ b)`, then hold `a`
+    # schematic. The unfold checked freshness for the concrete `a`; a citation
+    # could then instantiate it to the very variable the defining form binds —
+    # the capture the unfold itself refuses.
+    from tests.test_definition_fresh import _subset_spec
+
+    spec = _subset_spec(fresh=True, provisos=["disjoint(x, y, term)"])
+    # Matched on text only this refusal emits: the checker's own failure message
+    # also says "definition", so a looser match would agree with no guard at all.
+    with pytest.raises(ValueError, match="cannot yet be carried"):
+        engine_promote(
+            spec, "a ⊆ b [HYP]\n∀z (z ∈ a → z ∈ b) [Def, 1]", {"a": "term"}
+        )
+
+
+def test_a_definitional_step_the_nomination_does_not_touch_is_fine():
+    # The refusal is of a nomination that *changes* the unfolded line, not of
+    # every proof that ever unfolds a definition — otherwise a system whose
+    # notation is defined could never promote schematically at all.
+    from tests.test_definition_fresh import _subset_spec
+
+    spec_in = _subset_spec(fresh=True, provisos=["disjoint(x, y, term)"])
+    _system, (spec, _theorem) = engine_promote(
+        spec_in, "a ⊆ b [HYP]\n∀z (z ∈ a → z ∈ b) [Def, 1]", {}
+    )
+    assert spec.metavariables == {}
+
+
+@pytest.mark.parametrize(
+    "metavariables",
+    [
+        # Reaches `promoted_theorem_bindings.var`, a `String(128)`: unbounded, it
+        # is a Postgres truncation error at flush — a 500 where this is a 422.
+        {"P" * 200: "formula"},
+        {"P": "f" * 200},
+        {"": "formula"},
+        {"P": "   "},
+    ],
+)
+def test_a_metavariable_name_that_will_not_store_is_a_422(db, client, metavariables):
+    pc, _fol, _zfc = tower(db, client, f"names-{abs(hash(str(metavariables)))}@example.com")
+    proof = proved_and_published(client, pc, IDENTITY_PROOF)
+
+    status, _body = promote(client, proof, "id", metavariables)
+    assert status == 422

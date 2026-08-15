@@ -1,0 +1,3606 @@
+"""CRUD for proofs, owner-scoped.
+
+Mirrors the formal-system CRUD (`app/routers/systems.py`): a proof is an
+owner-scoped object stored as a single row (`app.db.models.Proof`) whose `source`
+is proof text — lines written in a formal system's own grammar. This router is the thin
+HTTP layer over that row — reads serialize it, `verify` rebuilds the parent
+system from its stored rows and hands the proof to the engine (no proof-checking
+logic lives here).
+
+Like systems, writes persist freely (a draft proof need not verify) and
+`POST /{id}/verify` reports validity on demand, caching the result. A check also
+records the proof *as structure* — one row per line, each formula interned into
+the system's term graph, each justification an edge (`app/db/proof_lines.py`),
+readable at `GET /{id}/structure`. That snapshot is derived from the check, so
+every path that invalidates a verdict drops it too. Publishing
+makes a proof world-readable, so it is gated: the proof must verify **and** its
+formal system must itself be published (a published proof exposes its
+`formal_system_id`, and `GET` of a draft system 404s for anonymous viewers).
+
+A proof may only be created against a system the caller **owns** (mirroring the
+owned-only `inherits_from_id` reference), which keeps a proof and its system in
+one ownership domain — so an owner-scoped system delete never cascades into
+another user's proof.
+
+Editing a proof's folder placement and its proof-to-proof references is a later
+phase — the read models expose `folder_id` so that layer can address it, exactly
+as the system read models expose each part's `id`.
+
+A published proof's parent system can never change under it: publishing a system
+is a one-way door — once published a system rejects every part edit, field edit,
+and unpublish (see `systems.require_editable_system`) — so a proof verified
+against a published system stays valid. A proof's *own* source is still editable
+by its owner; a published proof re-verifies on a source edit (below), and an edit
+that would break it is rejected.
+"""
+
+from __future__ import annotations
+
+import re
+import uuid
+from collections import defaultdict
+from copy import copy
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from graphlib import CycleError
+from typing import TYPE_CHECKING
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import func, select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session, selectinload
+
+from app.auth import current_active_user, current_active_user_optional
+from app.db import (
+    AssumptionRow,
+    FormalSystem,
+    RestsOn,
+    assumption_labels,
+    cited_labels,
+    dependent_entries,
+    inherit_closure,
+    stated,
+    record_closure,
+    reference_closure,
+    rests_on,
+    unresolved_proofs,
+    Proof,
+    ProofLineRow,
+    ProofReference,
+    clear_proof_lines,
+    get_session,
+    PendingCitations,
+    PendingLibrary,
+    load_definition_terms,
+    load_proof_for_check,
+    load_citable_theorems,
+    load_proof_lines,
+    load_schema_terms,
+    read_library,
+    store_definition_terms,
+    store_proof_lines,
+    store_schema_terms,
+    store_theorem,
+    term_context,
+    theorem_digest,
+)
+from app.db.citations_mapping import Citation, cited_theorems, citing_proofs
+from app.db.descriptions import LabelDescriptionRow
+from app.db.descriptions_mapping import load_description
+from app.db.lineage import ancestor_ids, spine_ids
+from app.db.models import User
+from app.db.notations_mapping import load_notation, render_stored
+from app.db.proofs_mapping import failure_from_row
+from app.db.retrieval import conclusion_candidates
+from app.db.terms_mapping import (
+    alpha_digest,
+    digest_term,
+    metavariables_only,
+    prefetch_terms,
+)
+from app.db.promoted_theorems import PromotedTheoremRow
+from app.routers._proposals import resolve_proposal
+from app.routers._invalidation import (
+    clear_verdicts,
+    dependent_closure,
+    invalidate_citations,
+    invalidate_warranted_edges,
+)
+from app.routers._documentation import documentation_out
+from app.routers._common import (
+    PageParams,
+    lock_system,
+    page_params,
+    paginate_summaries,
+    unique_slug,
+)
+from app.routers.systems import (
+    EffectiveSystem,
+    load_effective,
+    load_system,
+    nearest_first,
+)
+from website.logical.formal_system.diagnostics import numbers
+from website.logical.formal_system.justification import justification
+from website.logical.formal_system.proof import Proof as EngineProof
+from website.logical.formal_system.proof import (
+    CITATION_SEPARATOR,
+    HOLE_KEY,
+    citation_text,
+)
+from website.logical.formal_system.retrieval import (
+    Application,
+    accessible_lines,
+    applications,
+    dischargeable_openers,
+    discharges,
+)
+from website.logical.matching.patterns import StringPattern
+from website.logical.rendering import render
+from app.schemas import (
+    AssumedOut,
+    CitationOutcome,
+    CitationProposal,
+    CitationSearch,
+    CitationSuggestion,
+    LineJustification,
+    LineOutcome,
+    LineProposal,
+    ScopePlacement,
+    LineRemoval,
+    LineRemovalOutcome,
+    FailureOut,
+    JustifyingAssignment,
+    JustifyingPremise,
+    JustifyingProviso,
+    Page,
+    ProofCreate,
+    ProofDetail,
+    ProofLineAntecedentOut,
+    ProofLineOut,
+    ProofReferenceOut,
+    ProofReferencesUpdate,
+    ProofPromotionRequest,
+    ProofCitations,
+    ProofProvenance,
+    ProofReferrerOut,
+    ProofStructure,
+    ProofSummary,
+    ProofUpdate,
+    PromotedTheoremOut,
+    SystemOwner,
+    THEOREM_LABEL_MAX,
+    THEOREM_LABEL_PATTERN,
+    TermSummary,
+    TheoremCitation,
+    VerifyProofResponse,
+)
+from website.logical.declarative import build_spec
+from website.logical.fingerprint import fingerprint
+from website.logical.kernel.terms import Node
+from website.logical.graphs import topological_order
+from website.logical.promotion import proved_theorem, schematic_theorem
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
+    from sqlalchemy import ColumnElement
+
+    from app.db import DefinitionTermCache, SchemaTermCache
+
+    from app.routers.systems import EffectiveSystem
+    from website.logical.formal_system import FormalSystem as EngineSystem
+    from website.logical.formal_system.proof import ProofLine as EngineProofLine
+    from website.logical.formal_system import PromotedTheorem
+    from website.logical.kernel.terms import Term
+    from website.logical.matching.context import Context
+    from website.logical.matching.patterns import Pattern
+    from website.logical.promotion import TheoremSpec
+
+router = APIRouter(prefix="/proofs", tags=["proofs"])
+
+
+async def _unique_slug(
+    session: AsyncSession,
+    owner_id: uuid.UUID,
+    system_id: uuid.UUID,
+    name: str,
+    exclude_id: uuid.UUID | None = None,
+) -> str:
+    # Slugs disambiguate a user's proofs within one system; numeric suffix on
+    # collision. (Not DB-unique — proofs carry no slug constraint — but kept
+    # addressable so a client can route to a proof by slug.)
+    async def _taken(slug: str) -> bool:
+        stmt = select(Proof.id).where(
+            Proof.owner_id == owner_id,
+            Proof.formal_system_id == system_id,
+            Proof.slug == slug,
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(Proof.id != exclude_id)
+        return await session.scalar(stmt) is not None
+
+    return await unique_slug(name, _taken, fallback="proof")
+
+
+# How many dependents a citation read carries. The same shape of cap as
+# `_documentation.MENTION_LIMIT` and for the same reason, but a size larger: the
+# citation graph's head dwarfs the prose's — `set.mm` mentions `ax-13` in 656
+# comments and cites `ax-mp` from most of the corpus — so a page showing "and N
+# more" wants enough of a sample to be worth reading.
+CITATION_LIMIT = 50
+
+# Loads for a detail view: the owner, plus the outgoing reference edges (with
+# each referenced proof, for its identity in ProofReferenceOut) and the incoming
+# ones (with each referring proof, for the "used by" list).
+_DETAIL_LOADS = (
+    selectinload(Proof.owner),
+    selectinload(Proof.reference_links).selectinload(ProofReference.referenced),
+    selectinload(Proof.referenced_by_links).selectinload(ProofReference.proof),
+    # The library entry this proof establishes, so a detail read can say whether
+    # it has been promoted without the client asking a second question.
+    selectinload(Proof.theorem),
+)
+
+
+async def _load_owned(
+    session: AsyncSession, proof_id: uuid.UUID, owner_id: uuid.UUID
+) -> Proof | None:
+    stmt = (
+        select(Proof)
+        .where(Proof.id == proof_id, Proof.owner_id == owner_id)
+        .options(*_DETAIL_LOADS)
+    )
+    return await session.scalar(stmt)
+
+
+async def _get_owned_or_404(
+    session: AsyncSession, proof_id: uuid.UUID, owner_id: uuid.UUID
+) -> Proof:
+    proof = await _load_owned(session, proof_id, owner_id)
+    if proof is None:
+        # 404 (not 403) for another owner's id, so ids don't leak.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Proof not found.")
+    return proof
+
+
+def _is_readable(proof: Proof, user: User | None) -> bool:
+    # Published proofs are public; drafts are visible only to their owner.
+    if proof.published_at is not None:
+        return True
+    return user is not None and proof.owner_id == user.id
+
+
+async def _get_readable_or_404(
+    session: AsyncSession, proof_id: uuid.UUID, user: User | None
+) -> Proof:
+    stmt = select(Proof).where(Proof.id == proof_id).options(*_DETAIL_LOADS)
+    proof = await session.scalar(stmt)
+    if proof is None or not _is_readable(proof, user):
+        # 404 (not 403) for a draft you don't own, so unpublished ids don't leak.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Proof not found.")
+    return proof
+
+
+async def _require_owned_system(
+    session: AsyncSession, system_id: uuid.UUID, user: User
+) -> None:
+    """The system a proof is written against must be owned by the caller.
+
+    Owned-only (not merely readable), mirroring how `inherits_from_id` requires
+    an owned reference on the system side. This keeps a proof's system in the
+    same ownership domain as the proof: a system delete is owner-scoped and
+    cascades to proofs via `proofs.formal_system_id`, so allowing a proof against
+    someone else's system would let that owner's delete destroy another user's
+    proof. 400 (not 404) because it's a bad reference in the request body.
+    """
+    owned = await session.scalar(
+        select(FormalSystem.id).where(
+            FormalSystem.id == system_id, FormalSystem.owner_id == user.id
+        )
+    )
+    if owned is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"formal_system_id {system_id} is not one of your systems.",
+        )
+
+
+# One reference edge as loaded for the closure: (alias, target proof id, position).
+_Edge = tuple[str, uuid.UUID, int]
+
+
+async def _reference_closure(
+    session: AsyncSession, root_id: uuid.UUID
+) -> tuple[dict[uuid.UUID, Proof], dict[uuid.UUID, list[_Edge]]]:
+    """Load ``root_id`` and every proof it transitively references.
+
+    Returns the proofs keyed by id and each proof's outgoing edges. References are
+    same-system-only and the stored graph is acyclic (enforced on write), so this
+    BFS terminates within the root's system.
+    """
+    proofs: dict[uuid.UUID, Proof] = {}
+    edges: dict[uuid.UUID, list[_Edge]] = {}
+    frontier = [root_id]
+    while frontier:
+        to_load = [pid for pid in frontier if pid not in proofs]
+        frontier = []
+        if not to_load:
+            break
+        rows = (
+            await session.scalars(
+                select(Proof)
+                .where(Proof.id.in_(to_load))
+                .options(selectinload(Proof.reference_links))
+            )
+        ).all()
+        for proof in rows:
+            proofs[proof.id] = proof
+            edges[proof.id] = [
+                (link.alias, link.references_id, link.position) for link in proof.reference_links
+            ]
+            frontier.extend(
+                link.references_id
+                for link in proof.reference_links
+                if link.references_id not in proofs
+            )
+    return proofs, edges
+
+
+def _dependency_order(
+    node_ids: list[uuid.UUID], edges: dict[uuid.UUID, list[_Edge]]
+) -> list[uuid.UUID]:
+    # Proofs ordered so a lemma is compiled before the proofs that cite it.
+    # Raises graphlib.CycleError if the graph is cyclic.
+    return topological_order(
+        {pid: [target for _alias, target, _pos in edges.get(pid, ())] for pid in node_ids}
+    )
+
+
+def _is_usable_lemma(engine_proof: EngineProof) -> bool:
+    # A proof that does not stand cannot justify another, and a warning is
+    # unresolved doubt about whether it stands. Such a lemma is left unseeded, so
+    # a citation of it fails to resolve rather than resolving to something shaky.
+    return bool(engine_proof.valid) and not engine_proof.has_warnings
+
+
+@dataclass
+class _Verification:
+    """The outcome of checking a stored proof, plus the inputs a snapshot needs.
+
+    ``valid`` is ``None`` when the proof could not be checked *at all* — its
+    system no longer builds, or its source does not parse — which is a different
+    thing from a checked proof that came out false. The remaining fields are
+    populated only on the checked path, and are exactly what
+    :func:`~app.db.proofs_mapping.store_proof_lines` projects into rows.
+    """
+
+    response: VerifyProofResponse
+    valid: bool | None
+    engine_proof: EngineProof | None = None
+    system: FormalSystem | None = None
+    # The system as resolved and as built, kept because a caller that needs them
+    # after the check would otherwise read the chain's rows and compose every
+    # rule schema a second time — measured at five times the read and about half
+    # a build. Only `promote` wants them so far.
+    effective: EffectiveSystem | None = None
+    compiled_system: EngineSystem | None = None
+    # Every lemma this proof may cite, paired with its stored id. Holding the
+    # compiled proofs (not just their ids) is what lets the snapshot match a
+    # cited line to its proof by identity — see store_proof_lines.
+    cited_proofs: list[tuple[EngineProof, uuid.UUID]] = field(default_factory=list)
+    # Which library entry each cited label resolved to, as *this* check resolved
+    # it. Recorded onto the line rows so a later reader — the provenance report —
+    # need not rebuild the library order to ask a question already answered here.
+    entry_ids: dict[str, uuid.UUID] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class BuiltSystem:
+    """A system read from its rows, resolved against its ancestors, and compiled.
+
+    One object because it is one *cost*: thirteen queries to hydrate the parts,
+    the chain resolved into a spec, the cached schema and definition terms read,
+    and the spec built. On a corpus system that runs about 55 ms, and a route
+    doing it twice pays it twice — which is what every call of `/cite` and
+    `/lines` did, once to rewrite the line and once inside the verify.
+
+    ``system is None`` means the row is gone; ``errors`` means the rows describe
+    no system that builds. The two are kept apart because the callers answer them
+    differently — a missing system is a 404 and an unbuildable one is a 400 — and
+    a single "it did not work" would make that the caller's guess.
+    """
+
+    system: FormalSystem | None = None
+    effective: EffectiveSystem | None = None
+    compiled: EngineSystem | None = None
+    # What was read from the cache, so the write-back can tell what this build had
+    # to compose for itself (see app/db/schema_terms.py).
+    schema_terms: SchemaTermCache | None = None
+    definition_terms: DefinitionTermCache | None = None
+    errors: list[str] = field(default_factory=list)
+
+
+async def build_system(
+    session: AsyncSession,
+    system_id: uuid.UUID,
+    system: FormalSystem | None = None,
+) -> BuiltSystem:
+    """Load, resolve and compile a system — the shared half of a verify.
+
+    Extracted so a route that needs the built system *before* it verifies can hand
+    the same one back in rather than paying for a second. Takes no lock of its
+    own: a caller that will act on what this returns must already hold the
+    system's, or the grammar it built against can change under it.
+    """
+    if system is None:
+        system = await load_system(session, system_id)
+    if system is None:
+        return BuiltSystem(errors=["The proof's system no longer exists."])
+
+    # Against the system's whole inheritance chain: a child is only a system at
+    # all once its ancestors' parts are in front of its own, so the spec that is
+    # built — and the digests computed from it — cover the chain rather than this
+    # row (app.db.effective_spec).
+    effective = await load_effective(session, system)
+    if effective.errors:
+        return BuiltSystem(system=system, effective=effective, errors=effective.errors)
+
+    # The rules' schema templates are parsed against the grammar to get the terms
+    # the checker unifies with, which is about half of a build and the same
+    # answer every time. Read the terms a previous build composed; the caller
+    # writes back anything this one had to compose itself — a system settles after
+    # one verify, and a grammar edit makes the stored terms inert rather than
+    # wrong (see app/db/schema_terms.py).
+    spec = effective.spec
+    schema_terms = await session.run_sync(
+        lambda sync: load_schema_terms(sync, system, spec, effective.rule_offset)
+    )
+    # The same trade for each definition's two surface forms, which the build
+    # parses into the terms an unfold is checked against (app/db/definition_terms.py).
+    definition_terms = await session.run_sync(
+        lambda sync: load_definition_terms(
+            sync, system, spec, effective.definition_offset
+        )
+    )
+    build = build_spec(
+        spec, schema_terms=schema_terms, definition_terms=definition_terms
+    )
+    if "errors" in build:
+        return BuiltSystem(system=system, effective=effective, errors=build["errors"])
+    return BuiltSystem(
+        system=system,
+        effective=effective,
+        compiled=build["system"],
+        schema_terms=schema_terms,
+        definition_terms=definition_terms,
+    )
+
+
+def require_a_built_system(built: BuiltSystem) -> None:
+    """Raise the answer a *route* owes for a system it cannot build.
+
+    A verify reshapes both of these into a verdict instead; a route that needs the
+    grammar before it can compose anything has nothing to report a verdict about,
+    so it answers with a status. The two are kept distinct — a system that is gone
+    is a 404, one whose rows describe nothing buildable is a 400 — because a
+    client can act on the second and not on the first.
+    """
+    if built.system is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Formal system not found.")
+    if built.compiled is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=built.errors)
+
+
+async def _verify_with_references(
+    session: AsyncSession,
+    proof: Proof,
+    persist: bool = True,
+    source: str | None = None,
+    built: BuiltSystem | None = None,
+    lock: bool = True,
+) -> _Verification:
+    """Verify a stored proof, resolving the lemmas it cites from other proofs.
+
+    Compiles the system once and parses the whole transitive reference closure in
+    dependency order (a lemma before its dependents), pre-seeding each proof's
+    ``reference_context`` with the already-compiled proofs it references — keyed by
+    the stored citation alias — so a `[alias.line]` citation resolves to that
+    lemma's line. Only *usable* lemmas (fully valid, warning-free) are seeded, so
+    a proof leaning on an unproven lemma fails rather than borrowing an unsound
+    line. Pass ``built`` to reuse a system this caller has already compiled —
+    `/cite` and `/lines` need the grammar before they can rewrite a line, and
+    building it a second time here was the largest single thing either route did
+    (roadmap §9e). Otherwise it is built here, under the lock.
+
+    ``persist=False`` for a caller whose transaction will be rolled back — a
+    reader verifying someone else's published proof. The verdict is the same
+    either way; what it skips is warming the schema-term cache, whose inserts
+    would be discarded with everything else.
+
+    ``lock=False`` drops the system lock, which is only sound for a caller that
+    writes nothing *and* can live with a torn read. The lock protects the
+    read-then-write below (see the note on it), so a check that never writes has
+    nothing for it to protect; what it costs to keep is serialisation, and on a
+    read fired by hovering a citation (`/lines/{n}/justification`) that would
+    make every reader queue behind every verify on the system. What it buys is a
+    consistent view across the queries this makes, so it stays on by default and
+    is dropped only where a stale record is a cosmetic answer rather than a
+    wrong one.
+    """
+    # Before anything is read. A verify now trusts the lemmas' stored rows
+    # instead of re-checking them, so the read and the write must sit inside one
+    # critical section: otherwise an invalidation can commit between them and
+    # this transaction writes a valid snapshot back over it. See lock_system.
+    if lock:
+        await lock_system(session, proof.formal_system_id)
+
+    # A build handed in was made *before* this lock — the caller needed the
+    # grammar to compose a line — so it is only safe to reuse if the caller took
+    # the lock itself first, which `/cite` and `/lines` do for exactly this
+    # reason. Rebuilt here otherwise.
+    if built is None:
+        built = await build_system(session, proof.formal_system_id)
+    if built.compiled is None:
+        return _Verification(
+            VerifyProofResponse(
+                success=False,
+                errors=built.errors or ["The proof's system no longer exists."],
+            ),
+            None,
+        )
+    system = built.system
+    effective = built.effective
+    compiled_system = built.compiled
+
+    # Write back whatever this build had to compose for itself, so the next one
+    # reads it instead. Under the system lock, like everything else written here.
+    if persist:
+        await session.run_sync(
+            lambda sync: store_schema_terms(
+                sync, system, compiled_system, built.schema_terms, effective.rule_offset
+            )
+        )
+        await session.run_sync(
+            lambda sync: store_definition_terms(
+                sync, system, compiled_system, built.definition_terms,
+                effective.definition_offset
+            )
+        )
+
+    closure, edges = await _reference_closure(session, proof.id)
+    try:
+        order = _dependency_order(list(closure), edges)
+    except CycleError:
+        # The stored graph is kept acyclic (enforced on write); a defensive guard.
+        return _Verification(
+            VerifyProofResponse(success=False, errors=["Circular proof reference."]), None
+        )
+
+    # The root can be absent if the proof was deleted concurrently between the
+    # caller's load and the closure query — a structured failure, not a 500.
+    if proof.id not in closure:
+        return _Verification(
+            VerifyProofResponse(success=False, errors=["Proof not found."]), None
+        )
+
+    # Every lemma is *loaded* from its stored lines rather than re-parsed and
+    # re-checked. A cited line's formula is already a term in the system's graph,
+    # and whether the lemma stands is already recorded — so a verify reads what
+    # the lemma's own verify wrote instead of redoing it. See
+    # docs/verification-from-rows.md; the root is still parsed (that is P2).
+    #
+    # Dependency order still matters, but only for *seeding*: a citation may
+    # reach through a lemma into its own lemma, so a lemma's references must be
+    # resolved before anything cites it.
+    context = term_context(compiled_system)
+    lemma_ids = [pid for pid in order if pid != proof.id]
+    # The whole closure in one go: reading a proof back is latency, not work, so
+    # batching is what makes it cheaper than re-parsing (see load_proof_lines).
+    # A stored row that no longer matches its system raises out of `TermGraph.term`,
+    # and the line-numbering guard raises deliberately. Both are defects in
+    # stored data rather than in the proof being checked, but this function
+    # reshapes every other failure into a verdict rather than a 500, and a
+    # corrupt lemma should not be the one exception.
+    try:
+        loaded = await session.run_sync(
+            lambda sync: load_proof_lines(sync, lemma_ids, compiled_system, context)
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _Verification(
+            VerifyProofResponse(
+                success=False, errors=[f"A cited proof could not be read: {exc}"]
+            ),
+            None,
+        )
+
+    compiled: dict[uuid.UUID, EngineProof] = {}
+    unusable: dict[uuid.UUID, str] = {}
+    for pid in lemma_ids:
+        lemma = loaded.get(pid)
+        if lemma is None or not _is_usable_lemma(lemma):
+            unusable[pid] = closure[pid].name
+            continue
+        # A citation may reach through a lemma into its own lemma, so a lemma's
+        # references are resolved before anything cites it — which is all the
+        # dependency order is still for, now that nothing is re-checked.
+        #
+        # Aliases go *under* the labels `load_proof_lines` installed, matching
+        # the parse path: there the context is seeded with aliases and each
+        # labelled line then overwrites its own name as it executes. Updating the
+        # other way round would silently give an alias precedence over a line
+        # label of the same name.
+        lemma.reference_context = {
+            **{
+                alias: compiled[target]
+                for alias, target, _pos in edges.get(pid, ())
+                if target in compiled
+            },
+            **lemma.reference_context,
+        }
+        compiled[pid] = lemma
+
+    root = EngineProof(formal_system=compiled_system)
+    root.reference_context = {
+        alias: compiled[target]
+        for alias, target, _pos in edges.get(proof.id, ())
+        if target in compiled
+    }
+    # The proof's own lines come from its rows too, when it has any: everything
+    # `read_line` would take off the grammar is stored, so a proof checked once
+    # never needs its text parsed again (P2). Its verdict is *not* taken from the
+    # rows — numbering, scope and justification are all re-derived — so this is a
+    # re-check that happens to skip the parse, not a cache read.
+    #
+    # Rows are absent exactly when there is nothing to trust: the proof has never
+    # been checked, or an edit invalidated it. Then, and only then, parse.
+    #
+    # The checker raises on malformed proofs against otherwise-valid systems;
+    # reshape into a structured error rather than a 500.
+    # A system's library is unbounded — an imported corpus has tens of thousands
+    # of theorems — so it is not built with the system and cannot be. What a proof
+    # cites is knowable before it is checked, from its own lines either way, so
+    # resolve exactly those labels and promote them (P4). A label with no row is
+    # simply not a theorem: it may name a rule, a definition, or a cited proof's
+    # line, and the resolver settles that as it always did.
+    #
+    # And *its ancestors'* libraries: a theorem proved in a system this one
+    # inherits from is citable here, resolved nearest-first with each layer's own
+    # digest guarding its own cached terms (see `LibraryChain`).
+    library = effective.library
+
+    # `hypotheses_of` covers the other half of both paths below: a proof that
+    # *establishes* a library entry proves under that entry's own hypotheses, and
+    # states them as lines citing their labels.
+    # Filled by whichever of the two paths below runs, and carried out to the
+    # snapshot: it is the check's own answer to "which entry is this label",
+    # which nothing downstream can reconstruct without the whole chain.
+    resolved: dict[str, uuid.UUID] = {}
+
+    def promote(promoted: Mapping[str, PromotedTheorem]) -> None:
+        for theorem in promoted.values():
+            compiled_system.promote(theorem)
+
+    def cited_terms(sync: Session, references: Sequence[str | None]) -> PendingCitations:
+        # The row path resolves its library *into the proof's own term sweep*.
+        # What a proof cites is a plain column, so the theorems it names are
+        # settled before any term is built — and their cached terms then load
+        # alongside the lines' rather than in a second closure over
+        # `term_children`. They overlap heavily: a lemma's statement is a line of
+        # the proof citing it, interned to the very same row.
+        pending: PendingLibrary = read_library(
+            sync, library, cited_labels(references),
+            hypotheses_of=proof.theorem_id,
+        )
+        resolved.update(pending.entry_ids)
+        return PendingCitations(
+            pending.term_ids,
+            lambda graph: promote(pending.promote(compiled_system, context, graph)),
+        )
+
+    try:
+        # `source` overrides what is stored, for a caller asking *what if* — a
+        # structured citation proposal, which must be checked in the proof's full
+        # context and must not disturb it. The stored rows describe the stored
+        # source, so an override skips them: they are not stale, they are about a
+        # different text.
+        checked = (
+            None
+            if source is not None
+            else await session.run_sync(
+                lambda sync: load_proof_for_check(
+                    sync, proof.id, compiled_system, context, proof=root,
+                    resolve_citations=lambda refs: cited_terms(sync, refs),
+                )
+            )
+        )
+        if checked is None:
+            # No rows: read the lines off the text, resolve what they cite, then
+            # check. The same two steps in the same order — `parse` is exactly
+            # this pair, and is not used here only because the library has to be
+            # resolved between them.
+            #
+            # `load_theorems`' two halves rather than the call, and only because
+            # this path has to keep the middle one: the resolution is on the
+            # `PendingLibrary`, and the snapshot records it. There is still no
+            # sweep to share — these lines were just parsed and already carry
+            # their terms, so the library's is the only one this path does.
+            _read, read_context = compiled_system.read_proof(
+                proof.source if source is None else source, proof=root
+            )
+
+            def resolve_library(sync: Session) -> None:
+                pending = read_library(
+                    sync, library,
+                    cited_labels(line.reference_string for line in root.proof_lines),
+                    hypotheses_of=proof.theorem_id,
+                )
+                resolved.update(pending.entry_ids)
+                promote(
+                    pending.promote(
+                        compiled_system, context, prefetch_terms(sync, pending.term_ids)
+                    )
+                )
+
+            await session.run_sync(resolve_library)
+            compiled_system.check_proof(root, read_context)
+    except Exception as exc:  # noqa: BLE001
+        return _Verification(
+            VerifyProofResponse(success=False, errors=[str(exc)]), None
+        )
+
+    return _Verification(
+        response=VerifyProofResponse(
+            success=root.valid,
+            proof=root.data(),
+            errors=_unusable_errors(root, edges.get(proof.id, ()), unusable),
+            holes=numbers(root.holes),
+            only_holes=root.only_holes,
+        ),
+        valid=root.valid,
+        engine_proof=root,
+        system=system,
+        effective=effective,
+        compiled_system=compiled_system,
+        # The root's lines may cite lines of any lemma in the closure, and this
+        # is how the snapshot names the proof they belong to.
+        cited_proofs=[(engine, pid) for pid, engine in compiled.items()],
+        entry_ids=resolved,
+    )
+
+
+def _unusable_errors(
+    root: EngineProof, references: Sequence[_Edge], unusable: dict[uuid.UUID, str]
+) -> list[str]:
+    """Why a citation did not resolve, when the reason is a lemma rather than the
+    proof. A lemma is citable only once it has been verified and stands, so an
+    unverified one leaves `[alias.n]` unresolved — which reads as a mistake in
+    the citing proof unless we say what actually happened.
+
+    Narrowed three ways, because this is an explanation and not a warning.
+    `unusable` spans the whole transitive closure, so only the proof's **own**
+    references can explain its failure — a lemma two hops away is nothing this
+    proof cites. Only a proof that **failed** needs explaining at all. And of its
+    own references, only those a *failing line actually names*: an unusable lemma
+    the proof merely declares and never cites explains nothing, and saying it did
+    would bury the real error under a claim the reader can see is false.
+    """
+    if root.valid:
+        return []
+    cited = _cited_aliases(root)
+    named = sorted({unusable[target] for alias, target, _pos in references
+                    if target in unusable and alias in cited})
+    if not named:
+        return []
+    return [
+        "Not cited: "
+        + ", ".join(named)
+        + " — a lemma must be verified, and stand, before a proof may rest on it."
+    ]
+
+
+def _cited_aliases(root: EngineProof) -> set[str]:
+    """The lemma aliases the proof's *failing* lines name.
+
+    A citation into a lemma is written `[rule, alias.n, …]`, so an alias is the
+    part before the first dot of a reference component that has one; a component
+    without a dot is a rule label or a local line number and names no lemma.
+    Read off the invalid lines only — a lemma some other line cited successfully
+    is not what went wrong here.
+    """
+    aliases: set[str] = set()
+    for line in root.proof_lines:
+        if line.valid or not line.reference_string:
+            continue
+        for part in line.reference_string.split(", "):
+            head, dot, _rest = part.partition(".")
+            if dot:
+                aliases.add(head)
+    return aliases
+
+
+async def _record_verdict(
+    session: AsyncSession, proof: Proof, verification: _Verification
+) -> None:
+    """Cache a fresh verdict on the proof row, and store the structure behind it.
+
+    The two belong together: ``valid``/``result`` are what the editor renders,
+    the ``proof_lines`` rows are the same check as structure (each formula a term
+    in the system's graph, each citation an edge). Writing one without the other
+    would leave the snapshot describing a different check than the verdict does.
+
+    ``store_proof_lines`` is synchronous, like the rest of ``terms_mapping``, so
+    it runs through ``run_sync`` on this session's connection — inside the
+    caller's transaction, committed with it.
+    """
+    proof.valid = verification.valid
+    proof.result = verification.response.proof
+
+    engine_proof = verification.engine_proof
+    if engine_proof is None or verification.system is None:
+        # The proof could not be checked at all, so there is no structure to
+        # record — and the stale snapshot from a previous check must not survive
+        # a check that failed outright.
+        await session.run_sync(lambda sync: clear_proof_lines(sync, [proof.id]))
+        return
+
+    system = verification.system
+    cited = verification.cited_proofs
+    # No acquire here: `_verify_with_references` took the system lock before it
+    # read anything, and holds it for this transaction. That is what makes the
+    # term interning below safe (a read-then-insert two proofs can both lose)
+    # *and* what stops an invalidation landing between the read and this write.
+    await session.run_sync(
+        lambda sync: store_proof_lines(
+            sync, proof, system, engine_proof, cited,
+            entry_ids=verification.entry_ids,
+        )
+    )
+
+
+async def _discard_check(session: AsyncSession, proof: Proof) -> None:
+    """Drop everything derived from the last check of ``proof``.
+
+    The cached verdict and the stored structure are one artefact of one check, so
+    they are discarded together — a snapshot describing a source that has since
+    changed is worse than no snapshot at all. Both are rebuilt on the next verify.
+
+    Takes the system lock itself rather than trusting each call site to: a verify
+    reading these rows must not have them invalidated out from under it between
+    its read and its write, and forgetting the lock at one new call site is
+    exactly how that guarantee would be lost (see `_common.lock_system`).
+    """
+    await lock_system(session, proof.formal_system_id)
+    proof.valid = None
+    proof.result = None
+    await session.run_sync(lambda sync: clear_proof_lines(sync, [proof.id]))
+
+
+async def _invalidate_dependents(
+    session: AsyncSession, proof_id: uuid.UUID, system_id: uuid.UUID
+) -> None:
+    """Invalidate every proof that transitively references ``proof_id``, so a
+    stale verdict can't survive a change to a lemma it leans on (a source edit,
+    or the proof's deletion). Those proofs re-verify on demand.
+
+    ``system_id`` is the system they all live in — references are same-system, so
+    one key locks the lot. Taken here for the same reason as `_discard_check`: a
+    verify in flight is reading exactly these rows.
+    """
+    await lock_system(session, system_id)
+    dependents = await dependent_closure(session, [proof_id])
+    if dependents:
+        await clear_verdicts(session, dependents)
+
+
+async def _has_published_dependents(session: AsyncSession, proof_id: uuid.UUID) -> bool:
+    """Whether any *published* proof references ``proof_id``.
+
+    Only direct dependents are checked: the publish invariant already forces
+    every ancestor of a published proof to be published, so a published proof
+    that transitively depends on this one has a published proof directly citing
+    it somewhere in the chain. Used to block unpublishing or deleting a lemma
+    that a public theorem rests on (which would silently break that theorem).
+    """
+    dependent = await session.scalar(
+        select(ProofReference.proof_id)
+        .join(Proof, Proof.id == ProofReference.proof_id)
+        .where(ProofReference.references_id == proof_id, Proof.published_at.is_not(None))
+        .limit(1)
+    )
+    return dependent is not None
+
+
+async def _require_publishable(
+    session: AsyncSession, proof: Proof, built: BuiltSystem | None = None
+) -> None:
+    """Reject a publish that would expose an unverified or dangling public proof.
+
+    Two things a published proof must not do, since it becomes world-readable: it
+    must verify against its system, and that system must itself be public — a
+    published proof exposes `formal_system_id`, and `GET /formal-systems/{id}`
+    404s for anonymous viewers when the system is a private draft.
+
+    A third: every lemma it references must itself be published — a published
+    proof's references are part of the theorem it exposes, and a public reader
+    must be able to follow them.
+
+    On success the fresh verdict is cached on the row, so a published proof always
+    renders as checked. Also used to keep a *published* proof valid across source
+    edits: re-running it after a source edit rejects a change that would leave a
+    world-readable proof unverifying.
+    """
+    # ``built`` is the caller's own build of this system, when it has one: an
+    # applied `/cite` on a published proof re-gates it here, and the grammar has
+    # not moved between the two — the *proof* changed, not the system. That caller
+    # holds the system lock already; the path that does not (`PATCH` with only
+    # `published`) takes it here, because everything below reads the system and
+    # then writes a verdict derived from it.
+    if built is None:
+        await lock_system(session, proof.formal_system_id)
+    system = (
+        built.system
+        if built is not None
+        else await load_system(session, proof.formal_system_id)
+    )
+    if system is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "The proof's system no longer exists.")
+
+    # The two cheap gates first, and deliberately: both are answerable from the
+    # system row and the reference links, and a publish they refuse should not pay
+    # for a compile it is going to throw away.
+    if system.published_at is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Cannot publish a proof whose system is an unpublished draft; "
+            "publish the system first.",
+        )
+
+    unpublished = [link for link in proof.reference_links if link.referenced.published_at is None]
+    if unpublished:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Every referenced proof must be published before this proof can be.",
+        )
+
+    if built is None:
+        built = await build_system(session, proof.formal_system_id, system)
+
+    # Verify with references resolved, so a proof that leans on a lemma is gated
+    # on the lemma actually proving it. Reuse the build made above.
+    verification = await _verify_with_references(session, proof, built=built)
+    if not verification.response.success:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=verification.response.errors
+            or ["Proof does not verify against its system."],
+        )
+
+    # All gates passed. The proof was just verified as part of gating, so record
+    # that verdict — otherwise a published proof that was never hit by /verify
+    # would render as "unchecked" despite publishing having proved it valid.
+    await _record_verdict(session, proof, verification)
+
+
+# ---------------------------------------------------------------------------
+# Promotion — a proved proof entering its system's library
+# ---------------------------------------------------------------------------
+
+
+def _label_from_slug(proof: Proof) -> str:
+    """The default promotion label: the proof's slug, if it can be a label.
+
+    A slug is not a label. `slugify` produces anything URL-safe — a leading
+    digit, up to the 256 characters a name may run to — while a label has to be
+    citable (`[label]`, which is why `ProofPromotionRequest` constrains an
+    explicit one to `_ALIAS_PATTERN`) and has to fit a `String(128)` column.
+    Validated rather than trusted: unchecked, the two ways a slug can fail are a
+    citation that never parses and, on Postgres, a string-truncation 500.
+    """
+    slug = proof.slug
+    if len(slug) <= THEOREM_LABEL_MAX and re.match(THEOREM_LABEL_PATTERN, slug):
+        return slug
+    raise HTTPException(
+        status.HTTP_400_BAD_REQUEST,
+        f"This proof's slug {slug!r} cannot be a theorem label — a label is "
+        "cited as `[label]`, so it must start with a letter, use only letters, "
+        f"digits, `-` and `_`, and be at most {THEOREM_LABEL_MAX} characters. "
+        "Pass one.",
+    )
+
+
+async def _retire_promotion(session: AsyncSession, proof: Proof) -> None:
+    """Withdraw the library entry ``proof`` established, if it established one.
+
+    Called wherever the proof stops being the standing thing it was promoted as —
+    a source edit, an unpublish, a delete. The entry's warrant *is* this proof
+    (`promoted_theorems.proved_by_id`), so once the proof no longer stands the
+    entry asserts something nothing here proves, and leaving it would make a
+    citation of it resolve to exactly that.
+
+    An **imported** entry is untouched: its `proved_by_id` is NULL because its
+    warrant is the corpus rather than the stored proof, so a grammar edit that
+    invalidates every proof in a corpus withdraws none of its library.
+    """
+    entry = (
+        await session.execute(
+            select(PromotedTheoremRow.id, PromotedTheoremRow.system_id,
+                   PromotedTheoremRow.label)
+            .where(PromotedTheoremRow.proved_by_id == proof.id)
+        )
+    ).first()
+    if entry is None:
+        return
+    # `system_id` is the proof's own system: a proof promotes into the system it
+    # is written in, so this is the same key the caller already locked — which is
+    # what `invalidate_citations` relies on to be the first lock in its order.
+    entry_id, system_id, label = entry
+
+    # Before the delete: the query below reads `proof_lines`, and a line citing
+    # this entry is found by the label, not by the row.
+    await invalidate_citations(session, system_id, label)
+    # And what this entry was *standing in for*. An edge's obligation may be
+    # discharged by a theorem (`system_relations` §5.4), and losing it takes the
+    # edge down with it — `ON DELETE SET NULL` leaves an obligation naming
+    # neither a primitive nor a theorem, which `related_layers` reads as
+    # outstanding. The proofs that resolved *across* that edge cited the source's
+    # labels, not this one, so the walk above never reaches them (found in
+    # review). Every way an edge stops resolving has to clear what resolved
+    # through it, and this is one of them.
+    await invalidate_warranted_edges(session, entry_id)
+    # Drop the proof's own pointer first, and through the relationship rather
+    # than the column: `proofs.theorem_id` is `ON DELETE SET NULL`, so the
+    # database would clear it either way, but the loaded object would keep the
+    # old entry — and this session's next read of it comes out of the identity
+    # map, which is what a route returning `_detail` then renders.
+    if proof.theorem_id == entry_id:
+        proof.theorem = None
+        await session.flush()
+    await session.execute(
+        sa_delete(PromotedTheoremRow).where(PromotedTheoremRow.id == entry_id)
+    )
+
+
+def _owner_out(proof: Proof) -> SystemOwner | None:
+    if proof.owner is None:
+        return None
+    return SystemOwner(id=proof.owner.id, display_name=proof.owner.display_name)
+
+
+def _summary(proof: Proof) -> ProofSummary:
+    return ProofSummary(
+        id=proof.id,
+        name=proof.name,
+        slug=proof.slug,
+        title=proof.title,
+        description=proof.description,
+        formal_system_id=proof.formal_system_id,
+        folder_id=proof.folder_id,
+        valid=proof.valid,
+        published_at=proof.published_at,
+        created_at=proof.created_at,
+        updated_at=proof.updated_at,
+        owner=_owner_out(proof),
+    )
+
+
+def _references_out(proof: Proof, viewer: User | None) -> list[ProofReferenceOut]:
+    # Only surface references the viewer may themselves read. Otherwise a
+    # published proof that cites the owner's own draft would leak that draft's
+    # existence, name, and slug to any anonymous reader.
+    return [
+        ProofReferenceOut(
+            referenced_proof_id=link.references_id,
+            alias=link.alias,
+            name=link.referenced.name,
+            slug=link.referenced.slug,
+            published=link.referenced.published_at is not None,
+        )
+        for link in proof.reference_links
+        if _is_readable(link.referenced, viewer)
+    ]
+
+
+def _referenced_by_out(proof: Proof, viewer: User | None) -> list[ProofReferrerOut]:
+    # The "used by" direction: proofs that cite this one as a lemma. Filtered to
+    # those the viewer may read, so a stranger's draft that references a published
+    # proof doesn't leak its existence to the public. The incoming edges have no
+    # inherent order (position orders a proof's *own* references), so sort by name
+    # then id for a stable, meaningful "used by" list across requests.
+    referrers = [
+        ProofReferrerOut(
+            proof_id=link.proof_id,
+            alias=link.alias,
+            name=link.proof.name,
+            published=link.proof.published_at is not None,
+        )
+        for link in proof.referenced_by_links
+        if _is_readable(link.proof, viewer)
+    ]
+    referrers.sort(key=lambda r: (r.name, str(r.proof_id)))
+    return referrers
+
+
+def _theorem_out(
+    proof: Proof, assumes: Sequence[str] = ()
+) -> PromotedTheoremOut | None:
+    """The library entry this proof establishes, if it establishes one.
+
+    Reported for an *imported* entry too, whose `proved_by_id` is then null —
+    the proof does establish it, and saying so is what lets a client tell an
+    entry it may retire from one it may not.
+
+    ``assumes`` is passed in rather than read here, and it is not optional in
+    spirit: the field defaults to empty on the schema, so a caller that forgot it
+    would serialize a conditional theorem as an unconditional one — which is the
+    single failure this whole surface exists to prevent (found in review). The
+    read is a query, so it belongs with the route's other awaits.
+    """
+    theorem = proof.theorem
+    if theorem is None:
+        return None
+    return PromotedTheoremOut(
+        id=theorem.id,
+        label=theorem.label,
+        statement=theorem.statement,
+        formal_system_id=theorem.system_id,
+        proved_by_id=theorem.proved_by_id,
+        assumes=list(assumes),
+    )
+
+
+async def _detail(
+    session: AsyncSession, proof: Proof, viewer: User | None
+) -> ProofDetail:
+    """The full read of one proof, documentation included.
+
+    Async, and loading rather than taking it, so that *every* route returning a
+    `ProofDetail` says the same thing about the same proof — a create, a patch and
+    a reference edit all serve this model, and a client (the editor among them)
+    assigns whichever it got straight into its state. A default of `None` would
+    make the field mean "not asked for" on three routes and "none exists" on the
+    fourth, which is a distinction no caller can see.
+    """
+    return ProofDetail(
+        **_summary(proof).model_dump(),
+        source=proof.source,
+        result=proof.result,
+        references=_references_out(proof, viewer),
+        referenced_by=_referenced_by_out(proof, viewer),
+        theorem=_theorem_out(
+            proof,
+            (
+                await session.run_sync(
+                    lambda sync: assumption_labels(sync, [proof.theorem_id])
+                )
+            ).get(proof.theorem_id, ())
+            if proof.theorem_id is not None
+            else (),
+        ),
+        documentation=await documentation_out(
+            session,
+            proof.formal_system_id,
+            proof.name,
+            await load_description(session, proof.formal_system_id, proof.name),
+            viewer,
+        ),
+    )
+
+
+@router.get("", response_model=Page[ProofSummary])
+async def list_proofs(
+    formal_system_id: uuid.UUID | None = None,
+    folder_id: uuid.UUID | None = None,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_session),
+    params: PageParams = Depends(page_params),
+) -> Page[ProofSummary]:
+    return await paginate_summaries(
+        session,
+        Proof,
+        User,
+        base_conditions=[
+            Proof.owner_id == user.id,
+            *_scoped(formal_system_id, folder_id),
+        ],
+        default_order=[Proof.created_at],
+        params=params,
+        summarize=_summary,
+    )
+
+
+def _scoped(
+    formal_system_id: uuid.UUID | None, folder_id: uuid.UUID | None
+) -> list[ColumnElement[bool]]:
+    """Narrow a proof listing to one system, or to one folder within it.
+
+    Shared by the owner-scoped and public listings so "which proofs are in this
+    section" reads the same either side of publication. A folder belongs to
+    exactly one system, so naming one is already a system scope and the other
+    filter is redundant rather than conflicting.
+    """
+    conditions: list[ColumnElement[bool]] = []
+    if formal_system_id is not None:
+        conditions.append(Proof.formal_system_id == formal_system_id)
+    if folder_id is not None:
+        conditions.append(Proof.folder_id == folder_id)
+    return conditions
+
+
+# Declared before `/{proof_id}` so "public" isn't parsed as a proof id.
+@router.get("/public", response_model=Page[ProofSummary])
+async def list_public_proofs(
+    formal_system_id: uuid.UUID | None = None,
+    folder_id: uuid.UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    params: PageParams = Depends(page_params),
+) -> Page[ProofSummary]:
+    """The shared master list: every published proof, any owner, no auth.
+
+    Drafts (``published_at IS NULL``) are excluded; unpublishing removes a proof
+    from this list. Newest publications first, unless the client asks to sort.
+
+    ``formal_system_id`` and ``folder_id`` narrow it, which is what makes an
+    imported corpus browsable: `GET /formal-systems/{id}/folders` draws the
+    outline the `.mm` file's section headers describe, and this returns the
+    proofs filed under one of its nodes. Without it the only public view of
+    47,000 theorems is a flat list in publication order, and a corpus publishes
+    every one of them at the same instant.
+
+    Which is also why a scoped page orders by **position** — the proof's place in
+    its system, which for an import is the walk order — rather than by recency.
+    Recency cannot order rows that share a timestamp, and the fallback to
+    `created_at DESC` would hand back a section backwards. Nothing authors a
+    position interactively yet, so for a hand-authored system it is a constant and
+    this reads as `created_at` ascending.
+
+    **`id` last, on both orderings**, because this is the one listing whose rows
+    an import writes in bulk and every key above it can tie: a corpus publishes at
+    a single instant by construction, and `created_at` defaults to `now()`, which
+    under Postgres is the *transaction's* timestamp — so a batch of proofs shares
+    that too. Ordering a tied block is then the planner's choice, and it need not
+    make the same one twice: offset paging over it repeats some proofs and drops
+    others. The interactive lists need no such key, since they write one row per
+    transaction.
+    """
+    scope = _scoped(formal_system_id, folder_id)
+    return await paginate_summaries(
+        session,
+        Proof,
+        User,
+        base_conditions=[Proof.published_at.is_not(None), *scope],
+        default_order=(
+            [Proof.position, Proof.created_at, Proof.id]
+            if scope
+            else [Proof.published_at.desc(), Proof.created_at.desc(), Proof.id]
+        ),
+        params=params,
+        summarize=_summary,
+    )
+
+
+@router.post("", response_model=ProofDetail, status_code=status.HTTP_201_CREATED)
+async def create_proof(
+    payload: ProofCreate,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_session),
+) -> ProofDetail:
+    await _require_owned_system(session, payload.formal_system_id, user)
+
+    proof = Proof(
+        owner_id=user.id,
+        formal_system_id=payload.formal_system_id,
+        name=payload.name,
+        slug=await _unique_slug(session, user.id, payload.formal_system_id, payload.name),
+        title=payload.title,
+        description=payload.description,
+        source=payload.source,
+    )
+    session.add(proof)
+    await session.commit()
+
+    # Reload so server-default timestamps and the owner are eagerly present.
+    return await _detail(
+        session, await _get_owned_or_404(session, proof.id, user.id), user
+    )
+
+
+@router.get("/{proof_id}", response_model=ProofDetail)
+async def get_proof(
+    proof_id: uuid.UUID,
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> ProofDetail:
+    # Published proofs are readable by anyone; drafts only by their owner.
+    return await _detail(
+        session, await _get_readable_or_404(session, proof_id, user), user
+    )
+
+
+@router.patch("/{proof_id}", response_model=ProofDetail)
+async def update_proof(
+    proof_id: uuid.UUID,
+    payload: ProofUpdate,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_session),
+) -> ProofDetail:
+    proof = await _get_owned_or_404(session, proof_id, user.id)
+    changes = payload.model_dump(exclude_unset=True)
+
+    if changes.get("name") is not None:
+        proof.name = changes["name"]
+        proof.slug = await _unique_slug(
+            session, user.id, proof.formal_system_id, changes["name"], exclude_id=proof.id
+        )
+    if "title" in changes:
+        proof.title = changes["title"]
+    if "description" in changes:
+        proof.description = changes["description"]
+    source_changed = "source" in changes and changes["source"] is not None
+    if source_changed:
+        proof.source = changes["source"]
+        # The stored source changed, so everything derived from checking this
+        # proof — and the cached verdict of anything that cites it as a lemma —
+        # is stale.
+        await _discard_check(session, proof)
+        await _invalidate_dependents(session, proof.id, proof.formal_system_id)
+        # Including the library entry it established, whose statement was this
+        # proof's *previous* conclusion. Retired rather than re-derived: the new
+        # conclusion may say something else entirely, and silently swapping the
+        # statement under everything citing it would be worse than withdrawing
+        # it. Re-promote to put it back.
+        await _retire_promotion(session, proof)
+
+    # Publishing is the write that makes a proof world-readable, so gate it —
+    # after the field changes above so the checks see this request's final state.
+    # A source edit on an already-published proof is re-gated too, so a
+    # world-readable proof can't be edited into a non-verifying state. Both paths
+    # re-cache the verdict.
+    if "published" in changes:
+        if changes["published"]:
+            await _require_publishable(session, proof)
+        elif await _has_published_dependents(session, proof.id):
+            # Unpublishing a lemma a published proof rests on would leave that
+            # public theorem depending on a private draft; block it (the
+            # dependents must be unpublished first).
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Cannot unpublish a proof that a published proof references.",
+            )
+        else:
+            # Publication is what a promotion rests on — it is the gate, and it
+            # is what makes the proof's statement public in the first place — so
+            # withdrawing it withdraws the entry too.
+            await _retire_promotion(session, proof)
+        proof.published_at = datetime.now(timezone.utc) if changes["published"] else None
+    elif source_changed and proof.published_at is not None:
+        await _require_publishable(session, proof)
+
+    await session.commit()
+    return await _detail(
+        session, await _get_owned_or_404(session, proof_id, user.id), user
+    )
+
+
+async def _reference_would_cycle(
+    session: AsyncSession,
+    proof_id: uuid.UUID,
+    target_ids: list[uuid.UUID],
+    system_id: uuid.UUID,
+) -> bool:
+    """Whether pointing ``proof_id`` at every id in ``target_ids`` closes a cycle.
+
+    The stored reference graph is kept acyclic, so a new cycle must run through
+    ``proof_id`` (proof → target → … → proof). Load every edge in this system
+    except this proof's own (they are being replaced) and ask whether any target
+    already reaches ``proof_id``. References are same-system-only, so scoping the
+    load to the system captures the whole reachable closure without scanning the
+    global table. The reference graph is tracked relationally, not in the engine:
+    a ``Proof`` knows the lemmas seeded into its ``reference_context``, not the
+    edges that produced them, so this check has no engine-side counterpart.
+    """
+    rows = (
+        await session.execute(
+            select(ProofReference.proof_id, ProofReference.references_id)
+            .join(Proof, Proof.id == ProofReference.proof_id)
+            .where(Proof.formal_system_id == system_id, ProofReference.proof_id != proof_id)
+        )
+    ).all()
+    adjacency: dict[uuid.UUID, list[uuid.UUID]] = defaultdict(list)
+    for src, dst in rows:
+        adjacency[src].append(dst)
+
+    seen: set[uuid.UUID] = set()
+    stack = list(target_ids)
+    while stack:
+        node = stack.pop()
+        if node == proof_id:
+            return True
+        if node in seen:
+            continue
+        seen.add(node)
+        stack.extend(adjacency.get(node, ()))
+    return False
+
+
+@router.put("/{proof_id}/references", response_model=ProofDetail)
+async def set_proof_references(
+    proof_id: uuid.UUID,
+    payload: ProofReferencesUpdate,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_session),
+) -> ProofDetail:
+    """Replace a proof's outgoing references (the lemmas it cites) wholesale.
+
+    A proof may reference another proof **in the same system** that is either the
+    caller's own or published (a public lemma). Self-references, duplicate targets
+    or aliases, and any edge that would make the reference graph cyclic are
+    rejected (422). A published proof may only reference published proofs (its
+    references are part of the public theorem). Changing the set invalidates the
+    cached verdict of this proof and of anything that cites it, since references
+    now feed verification.
+    """
+    proof = await _get_owned_or_404(session, proof_id, user.id)
+
+    # Serialize concurrent reference edits in this system so the cycle check
+    # below can't be raced into committing a cycle.
+    await lock_system(session, proof.formal_system_id)
+
+    target_ids = [r.referenced_proof_id for r in payload.references]
+    aliases = [r.alias for r in payload.references]
+
+    if proof.id in target_ids:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "A proof cannot reference itself.")
+    if len(set(target_ids)) != len(target_ids):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "A proof may reference another proof at most once."
+        )
+    if len(set(aliases)) != len(aliases):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Reference aliases must be unique within a proof."
+        )
+
+    if target_ids:
+        targets = (await session.scalars(select(Proof).where(Proof.id.in_(target_ids)))).all()
+        by_id = {t.id: t for t in targets}
+        for tid in target_ids:
+            target = by_id.get(tid)
+            if target is None:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY, f"Referenced proof {tid} does not exist."
+                )
+            if target.formal_system_id != proof.formal_system_id:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    "A proof may only reference proofs in the same system.",
+                )
+            # Own proofs (draft or published) or anyone's published proof.
+            if target.owner_id != user.id and target.published_at is None:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    f"Referenced proof {tid} must be your own or a published proof.",
+                )
+            # A published proof's references are exposed publicly and must verify
+            # for a public reader, so they must be published too.
+            if proof.published_at is not None and target.published_at is None:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    "A published proof may only reference published proofs.",
+                )
+
+        if await _reference_would_cycle(session, proof.id, target_ids, proof.formal_system_id):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "That set of references would create a circular dependency.",
+            )
+
+    # Replace the edge set. Clear-then-flush before inserting so the unique
+    # (proof_id, alias) index can't trip on an alias reused from the old set.
+    proof.reference_links.clear()
+    await session.flush()
+    proof.reference_links = [
+        ProofReference(references_id=tid, alias=alias, position=i)
+        for i, (tid, alias) in enumerate(zip(target_ids, aliases))
+    ]
+    # References feed verification now, so this proof's check and every
+    # dependent's are stale.
+    await _discard_check(session, proof)
+    await _invalidate_dependents(session, proof.id, proof.formal_system_id)
+    # Including anything this proof established: what it proves depends on the
+    # lemmas it may cite, so dropping a reference can leave a promoted entry
+    # standing behind a proof that no longer verifies. Same rule as a source
+    # edit — the reference set is as much a part of the proof as its text.
+    await _retire_promotion(session, proof)
+    await session.commit()
+    return await _detail(
+        session, await _get_owned_or_404(session, proof_id, user.id), user
+    )
+
+
+@router.post(
+    "/{proof_id}/promote",
+    response_model=PromotedTheoremOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def promote_proof(
+    proof_id: uuid.UUID,
+    payload: ProofPromotionRequest,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_session),
+) -> PromotedTheoremOut:
+    """Enter this proof's conclusion in its system's library, as a ground theorem.
+
+    R3 of docs/system-relationships-roadmap.md, and the half of (a)/(b) that
+    reaches work a person proves: until now only an import wrote
+    `promoted_theorems`, so a lemma proved in propositional calculus could not be
+    cited from a proof written in ZFC however sound the citation was.
+
+    **Published, not merely valid.** R2 makes a system's library visible to every
+    descendant, and a descendant may be someone else's — a published parent is
+    exactly the case where it is — so promoting a draft would publish that proof's
+    statement to strangers by another route. Publication is also what keeps the
+    entry stable: `_require_publishable` re-runs on every source edit, so a
+    published proof cannot be edited into not standing, and the ways it *can*
+    stop standing (unpublish, edit, delete) each retire the entry.
+
+    The statement is the conclusion's stored term rather than its text; see
+    `website.logical.promotion.proved_theorem`. Re-promoting replaces the entry
+    rather than adding a second, so an author who re-promotes after an edit gets
+    one entry saying what the proof now concludes.
+    """
+    proof = await _get_owned_or_404(session, proof_id, user.id)
+    if proof.published_at is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Only a published proof can be promoted: its statement becomes "
+            "citable from every system that inherits this one. Publish it first.",
+        )
+
+    # Checked here rather than trusting `proof.valid`: the cached verdict is what
+    # the editor renders, and this is the write that lets other proofs rest on it.
+    verification = await _verify_with_references(session, proof)
+    await _record_verdict(session, proof, verification)
+    engine_proof = verification.engine_proof
+    if engine_proof is None or not _is_usable_lemma(engine_proof):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=verification.response.errors
+            or [
+                "Only a proof that verifies and carries no warning can be "
+                "promoted — a warning is unresolved doubt about whether it stands."
+            ],
+        )
+
+    label = payload.label or _label_from_slug(proof)
+    # Reused rather than re-derived: the verify above resolved the chain and
+    # built it, and doing either again is the duplicate work R2's review
+    # measured. Both are non-null exactly when `engine_proof` is.
+    system = verification.system
+    effective = verification.effective
+    compiled = verification.compiled_system
+
+    # A reference resolves rules before theorems, so a label a rule already
+    # carries would store an entry no citation could ever reach.
+    if any(rule.label == label for rule in compiled.inference_rules):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{label!r} is already an inference rule of this system, and a "
+            "citation resolves a rule before a theorem, so the entry would be "
+            "unreachable. Promote it under another label.",
+        )
+    # `is_distinct_from`, not `!=`: an imported entry's `proved_by_id` is NULL,
+    # and a NULL inequality is NULL rather than true — so a plain `!=` would let
+    # a clash with an imported label through the guard and into the unique index,
+    # answering 500 where this answers 409.
+    taken = await session.scalar(
+        select(PromotedTheoremRow.id).where(
+            PromotedTheoremRow.system_id == system.id,
+            PromotedTheoremRow.label == label,
+            PromotedTheoremRow.proved_by_id.is_distinct_from(proof.id),
+        )
+    )
+    # An **assumption** under this label is not a clash: it is the debt this
+    # promotion pays off. Only in the same system — an ancestor's assumption is
+    # shadowed rather than discharged, since the ancestor still asserts it and
+    # every other descendant still rests on it.
+    discharging = (
+        None
+        if taken is None
+        else await session.scalar(
+            select(AssumptionRow.theorem_id).where(AssumptionRow.theorem_id == taken)
+        )
+    )
+    if taken is not None and discharging is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{label!r} already names a theorem in this system's library.",
+        )
+
+    try:
+        if payload.metavariables:
+            # R3a. The nomination is a claim about every instance, so the engine
+            # re-checks the proof with those leaves held schematic and refuses if
+            # it stops standing — and carries forward the provisos the steps
+            # relied on. Both are its business, not this router's.
+            spec, promoted = schematic_theorem(
+                compiled,
+                engine_proof,
+                label,
+                payload.metavariables,
+                term_context(compiled),
+            )
+        else:
+            spec, promoted = proved_theorem(compiled, engine_proof, label)
+    except ValueError as exc:
+        # The engine's own guards — nothing to promote, a proof that does not
+        # stand, or a nomination the proof does not support. The second should
+        # have been caught above; the first is reachable by a proof whose every
+        # line is commentary.
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+    # Paying the debt off: the entries that rested on this assumption have to
+    # inherit what its *warrant* rests on, and both halves of that are decided
+    # before the row goes (see `_discharge`).
+    inheriting: list[uuid.UUID] = []
+    if discharging is not None:
+        inheriting = await _discharge(
+            session, proof, discharging, label, spec, promoted, compiled, effective
+        )
+
+    # Replace rather than accumulate. Retiring first also invalidates whatever
+    # cited the old entry, which a re-promotion after an edit needs just as much
+    # as an outright withdrawal does: the statement may have changed under them.
+    await _retire_promotion(session, proof)
+
+    system_id = system.id
+    # And whatever cited this *label*, which is not the same set: shadowing is
+    # legal (R2 resolves nearest-first), so promoting a label an ancestor already
+    # carries is allowed — and silently changes what every proof here and below
+    # was citing. A verdict recorded against the ancestor's entry has to go for
+    # the same reason a retirement's does.
+    await invalidate_citations(session, system_id, label)
+    digest = theorem_digest(effective.library.digest(system_id), spec)
+    symbols = {symbol.name: symbol for symbol in system.symbols}
+    position = await session.scalar(
+        select(func.count())
+        .select_from(PromotedTheoremRow)
+        .where(PromotedTheoremRow.system_id == system_id)
+    )
+    row = await session.run_sync(
+        lambda sync: store_theorem(
+            sync,
+            system,
+            spec,
+            symbols,
+            position=position or 0,
+            # Derived, not assumed: this is a theorem the system proved, which is
+            # exactly the distinction `primitive` records.
+            primitive=False,
+            digest=digest,
+            promoted=promoted,
+            proved_by_id=proof.id,
+        )
+    )
+    await session.flush()
+    # The other direction, and a different claim: this proof proves *under* the
+    # entry's hypotheses. A ground promotion has none, so it buys nothing yet —
+    # it is set because the link is what says which proof "this one" is, and a
+    # schematic promotion with premises will need it (see `hypotheses_of`).
+    proof.theorem_id = row.id
+
+    # What this entry rests on that nobody proved, settled here rather than
+    # walked later. The debts of the entries this proof cites are already stored
+    # against *those* entries, so this is one hop — and doing it at promotion is
+    # what keeps it one hop for everything promoted on top of this in turn
+    # (app/db/assumptions.py).
+    assumed = await _record_assumptions(session, proof, row.id, effective)
+    # And the entries that rested on the assumption this just discharged: their
+    # edge to it went with its row, and what replaces it is the warrant's own
+    # debts, one hop further down.
+    if inheriting:
+        settled = [entry.theorem_id for entry in assumed.assumptions]
+        await session.run_sync(
+            lambda sync: inherit_closure(sync, inheriting, settled)
+        )
+    await session.commit()
+    return PromotedTheoremOut(
+        id=row.id,
+        label=row.label,
+        statement=row.statement,
+        formal_system_id=system_id,
+        proved_by_id=proof.id,
+        assumes=[entry.label for entry in assumed.assumptions],
+        discharged=discharging is not None,
+    )
+
+
+async def _discharge(
+    session: AsyncSession,
+    proof: Proof,
+    assumption_id: uuid.UUID,
+    label: str,
+    spec: TheoremSpec,
+    promoted: PromotedTheorem,
+    compiled: EngineSystem,
+    effective: EffectiveSystem,
+) -> list[uuid.UUID]:
+    """Check that this proof pays the debt off, and say what inherits its own.
+
+    Discharging is not a special kind of promotion — the entry that lands is an
+    ordinary proved theorem, and everything after this point is the promotion
+    path unchanged. What is special is the **bookkeeping the assumption leaves
+    behind**, and it has to be read before the row goes.
+
+    Two guards, both refusals rather than repairs.
+
+    **It must state the same theorem.** Not a soundness requirement — a
+    citation of the new entry is re-checked either way, because promoting under a
+    label invalidates everything that cited it — but an honesty one, and the
+    difference a caller most needs told: paying a debt off and replacing an entry
+    with a different claim look identical from here and are opposite things.
+
+    The comparison rebuilds the assumption's stored terms and digests both sides
+    under `metavariables_only`, which is **not** the policy the stored
+    ``terms.alpha_digest`` column carries: that one renames every regex leaf, so
+    in a grammar whose numerals are a ``matches`` production it reads `2 = 5` and
+    `7 = 9` as one statement, and a proof of either would have discharged an
+    assumption of the other (found in review). Only a metavariable is renameable
+    here, which is exactly the leaf a citation instantiates. Premises are covered
+    too, since a theorem with different hypotheses is a different theorem.
+
+    **It must carry no proviso the assumption did not.** A distinct-variable
+    condition the debt never had makes the warrant *narrower* — it refuses
+    instances the assumption allowed — so what lands is not the theorem the
+    dependents were written against, and after they inherit its closure they
+    would read as unconditional besides. The other direction is fine and stays
+    allowed: an assumption with a proviso discharged by a proof needing none is a
+    stronger result, and nothing that cited it can notice.
+
+    **It must not rest on the assumption it discharges.** A proof that assumes
+    what it claims to prove discharges nothing, and left alone it would resolve
+    its own citation to the entry replacing it and record an empty closure —
+    laundering a circular argument into an unconditional theorem.
+
+    Returns the entries whose closure named the assumption, for the caller to
+    re-point once the warrant's own debts are known. Read here because the row
+    cascade takes those edges with the assumption itself.
+    """
+    claimed = await session.run_sync(lambda sync: stated(sync, assumption_id))
+    if claimed.conclusion is None or any(
+        term_id is None for term_id in claimed.premises
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{label!r} names an assumption whose statement is not stored as a "
+            "term, so this proof cannot be shown to state the same thing. "
+            "Withdraw the assumption first if you mean to replace it.",
+        )
+
+    roots = [claimed.conclusion, *claimed.premises]
+    graph = await session.run_sync(lambda sync: prefetch_terms(sync, roots))
+    context = term_context(compiled)
+    assumed = tuple(_rename_blind(graph.term(root, context)) for root in roots)
+    offered = (
+        _rename_blind(_schema_term(promoted.deduction)),
+        *(_rename_blind(_schema_term(p)) for p in promoted.antecedents),
+    )
+    if offered != assumed:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{label!r} names an assumption, and this proof does not establish "
+            "what it assumes — the statements differ. Discharging replaces a "
+            "debt with its warrant; promote this under another label, or "
+            "withdraw the assumption if you mean to replace it.",
+        )
+
+    added = frozenset(spec.distinct) - claimed.provisos
+    if added:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"This proof carries provisos {label!r} does not — "
+            + ", ".join(repr(line) for line in sorted(added))
+            + ". That is a narrower theorem than the one assumed, so it refuses "
+            "instances everything resting on the assumption was written against. "
+            "Promote it under another label.",
+        )
+
+    proof_id = proof.id
+    systems = effective.library.system_ids
+    rests = await session.run_sync(lambda sync: rests_on(sync, proof_id, systems))
+    if any(entry.theorem_id == assumption_id for entry in rests.assumptions):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"This proof rests on {label!r} itself, so it does not discharge it. "
+            "A proof of an assumption may not assume it.",
+        )
+
+    inheriting = [
+        entry.id
+        for entry in await session.run_sync(
+            lambda sync: dependent_entries(sync, assumption_id)
+        )
+    ]
+
+    # What the assumption was *standing in for*, before it goes. An edge's
+    # obligation may be discharged by a theorem and the FK is ON DELETE SET NULL,
+    # so losing this row takes the edge down with it — and the proofs that
+    # resolved *across* it cited the source's labels rather than this one, so the
+    # label walk below never reaches them. Exactly `_retire_promotion`'s reason,
+    # and missed here on the first cut (found in review). The obligation is not
+    # re-pointed at the warrant: it named this entry, and whether the warrant
+    # discharges it is the edge author's judgement rather than this route's.
+    await invalidate_warranted_edges(session, assumption_id)
+
+    # And the row goes, so the label is free for the warrant to take. Its
+    # `AssumptionRow` and every closure edge naming it cascade with it — which is
+    # why the dependents are read first: those edges *are* the record being
+    # re-pointed, and after this they no longer exist to be read.
+    #
+    # Deleted rather than mutated in place. A promotion writes a fresh row
+    # (`store_theorem`), and reusing this one would mean reconciling premises,
+    # bindings and provisos that belong to the assumption's statement, not the
+    # warrant's — for an id nothing outside this table refers to.
+    await session.execute(
+        sa_delete(PromotedTheoremRow).where(PromotedTheoremRow.id == assumption_id)
+    )
+    await session.flush()
+    return inheriting
+
+
+def _schema_term(pattern: Pattern) -> Term | None:
+    # The term a promoted theorem's schema composed, or None where it composed
+    # none. Only a `StringPattern` carries one, exactly as `_term_ids` has it: a
+    # schema that resolved to a declared grammar pattern has none, and both sides
+    # of a comparison agree about that because both are read the same way.
+    if not isinstance(pattern, StringPattern):
+        return None
+    return pattern.schema_term
+
+
+def _rename_blind(term: Term | None) -> str | None:
+    # A term as the digest two *theorems* are compared by: renameable in its
+    # metavariables and in nothing else (`metavariables_only`). None stays None,
+    # so a missing term compares equal to a missing term and to nothing else.
+    return None if term is None else alpha_digest(term, metavariables_only)
+
+
+async def _record_assumptions(
+    session: AsyncSession,
+    proof: Proof,
+    theorem_id: uuid.UUID,
+    effective: EffectiveSystem,
+) -> RestsOn:
+    """Store, and return, the assumptions an entry transitively rests on.
+
+    Read from the stored lines of this proof **and every lemma proof it cites**
+    — the resolved labels the verification that just ran recorded — against the
+    library order a citation actually resolves in (`LibraryChain.system_ids`,
+    nearest first, edges included).
+    """
+    proof_id = proof.id
+    systems = effective.library.system_ids
+    found = await session.run_sync(lambda sync: rests_on(sync, proof_id, systems))
+    ids = [entry.theorem_id for entry in found.assumptions]
+    await session.run_sync(lambda sync: record_closure(sync, theorem_id, ids))
+    return found
+
+
+@router.get("/{proof_id}/provenance", response_model=ProofProvenance)
+async def read_proof_provenance(
+    proof_id: uuid.UUID,
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> ProofProvenance:
+    """What this proof rests on that nobody has proved.
+
+    §4.2 of docs/informal-source-ingestion-roadmap.md. A proof citing an
+    assumption — or citing a theorem that cites one, at any depth — is a proof of
+    a *conditional*, and that is a legitimate thing to have. What it must not be
+    is silent, so this is the surface that says so, and it is readable by anyone
+    who can read the proof: a published proof's debts are exactly what a reader
+    resting on it needs to know.
+
+    **From rows, and only rows.** The citations are the labels the last
+    verification resolved (`proof_lines.rule`), and each cited entry's own
+    closure was settled when it was promoted — so nothing here parses, re-checks,
+    or walks a citation graph. A proof that has never been verified has no
+    resolved citations to read, and is told to verify rather than told it assumes
+    nothing.
+    """
+    proof = await _get_readable_or_404(session, proof_id, user)
+    checked = await session.scalar(
+        select(func.count())
+        .select_from(ProofLineRow)
+        .where(ProofLineRow.proof_id == proof.id)
+    )
+    if not checked:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This proof has no stored structure, so what it cites is unknown. "
+            "Verify it first.",
+        )
+
+    # The library order, and *only* if some proof in the closure still needs it.
+    # A check records which entry each citation resolved to
+    # (`proof_lines.theorem_id`), so for a proof checked since, the report is a
+    # join and the chain is not read at all — where reading it means hydrating
+    # every part row of every ancestor to use one list of ids, measured at two
+    # orders of magnitude more than the walk it replaces. The proofs that predate
+    # the column still need it, and asking is one indexed query.
+    closure = await session.run_sync(lambda sync: reference_closure(sync, proof_id))
+    reached, _unread = closure
+    legacy = await session.run_sync(lambda sync: unresolved_proofs(sync, reached))
+    systems: list[uuid.UUID] = []
+    if legacy:
+        system = await load_system(session, proof.formal_system_id)
+        if system is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, "The proof's system no longer exists."
+            )
+        effective = await load_effective(session, system)
+        if effective.errors:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=effective.errors)
+        systems = effective.library.system_ids
+
+    # Handed the closure this route already walked: deciding whether to build the
+    # library order is what needed it, and the walk is a query per generation.
+    found = await session.run_sync(
+        lambda sync: rests_on(sync, proof_id, systems, closure)
+    )
+    return ProofProvenance(
+        proof_id=proof_id,
+        assumes=[
+            AssumedOut(
+                theorem_id=entry.theorem_id,
+                formal_system_id=entry.system_id,
+                label=entry.label,
+                statement=entry.statement,
+                reason=entry.reason,
+                source=entry.source,
+            )
+            for entry in found.assumptions
+        ],
+        unresolved=list(found.unresolved),
+        unread_lemmas=list(found.unread),
+        complete=found.complete,
+    )
+
+
+@router.delete("/{proof_id}/promote", status_code=status.HTTP_204_NO_CONTENT)
+async def retire_proof_promotion(
+    proof_id: uuid.UUID,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Withdraw the library entry this proof established.
+
+    Idempotent: a proof that established none is a no-op rather than a 404, since
+    the caller's intent — "this must not be citable" — is already true.
+    """
+    proof = await _get_owned_or_404(session, proof_id, user.id)
+    await _retire_promotion(session, proof)
+    await session.commit()
+
+
+@router.delete("/{proof_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_proof(
+    proof_id: uuid.UUID,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    # Establish ownership first (404 for a stranger's id, so nothing leaks) before
+    # any dependency checks reveal the proof exists.
+    owned = (
+        await session.execute(
+            select(Proof.id, Proof.formal_system_id).where(
+                Proof.id == proof_id, Proof.owner_id == user.id
+            )
+        )
+    ).first()
+    if owned is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Proof not found.")
+    _, system_id = owned
+
+    # Deleting a proof drops its reference edges (FK cascade), so a dependent's
+    # `[alias.line]` citation would dangle. If a *published* proof rests on it,
+    # that would silently break a public theorem — block it. Otherwise just clear
+    # the (draft) dependents' stale verdicts.
+    if await _has_published_dependents(session, proof_id):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Cannot delete a proof that a published proof references.",
+        )
+    await _invalidate_dependents(session, proof_id, system_id)
+    # The library entry goes with the proof by `ON DELETE CASCADE`, but the
+    # proofs *citing* it would keep a verdict that rested on it — so retire it
+    # explicitly, which is the path that invalidates them.
+    await _retire_promotion(session, await _get_owned_or_404(session, proof_id, user.id))
+
+    await session.execute(sa_delete(Proof).where(Proof.id == proof_id))
+    await session.commit()
+
+
+def _term_out(row: ProofLineRow) -> TermSummary | None:
+    term = row.term
+    if term is None:
+        return None
+    return TermSummary(
+        id=term.id,
+        kind=term.kind,
+        constructor=term.constructor,
+        literal=term.literal,
+        sort=term.sort,
+        digest=term.digest,
+        alpha_digest=term.alpha_digest,
+    )
+
+
+def _failure_out(row: ProofLineRow) -> FailureOut | None:
+    # The stored diagnosis, as the API shape. Rebuilt through the engine's own
+    # `Failure` rather than read straight off the JSON, so the two cannot drift:
+    # one place decides what a failure's fields are.
+    failure = failure_from_row(row)
+    return None if failure is None else FailureOut(**failure.as_dict())
+
+
+def _line_out(row: ProofLineRow, rendered: str | None = None) -> ProofLineOut:
+    return ProofLineOut(
+        rendered=rendered,
+        id=row.id,
+        position=row.position,
+        number=row.number,
+        indent=row.indent,
+        display=row.display,
+        line_type=row.line_type,
+        behaviour=row.behaviour,
+        label=row.label,
+        reference=row.reference,
+        rule=row.rule,
+        definition_id=row.definition_id,
+        valid=row.valid,
+        invalid_message=row.invalid_message,
+        failure=_failure_out(row),
+        warning_message=row.warning_message,
+        opens_scope=row.opens_scope,
+        scope_id=row.scope_id,
+        term=_term_out(row),
+        antecedents=[
+            ProofLineAntecedentOut(
+                role=edge.role,
+                position=edge.position,
+                line_id=edge.antecedent_line_id,
+                proof_id=edge.antecedent_proof_id,
+                number=edge.antecedent_number,
+            )
+            for edge in row.antecedents
+        ],
+    )
+
+
+@router.get("/{proof_id}/citations", response_model=ProofCitations)
+async def read_proof_citations(
+    proof_id: uuid.UUID,
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> ProofCitations:
+    """Which theorems this proof cites, and which proofs cite it.
+
+    Its own route rather than a field on `ProofDetail`, because the two questions
+    have different costs and different readers: the detail is served by every
+    create, patch and reference edit, and none of those wants two extra joins over
+    a corpus-sized `proof_lines`. A reader looking at the citation graph asks for
+    it.
+
+    Both directions are computed, never stored — see `app.db.citations_mapping`
+    for why a materialised edge would be the wrong table. Visibility follows the
+    proof itself, and each label resolves to a page only if the viewer may open
+    it.
+    """
+    proof = await _get_readable_or_404(session, proof_id, user)
+    # Two different reaches, because the two questions have different answers.
+    # *Outgoing* resolves the way a verify does — this system then its ancestors,
+    # nearest first — since a descendant's library is not citable from here.
+    # *Incoming* is the whole spine: a dependent is usually a layer above.
+    chain = await ancestor_ids(session, proof.formal_system_id)
+    spine = await spine_ids(session, proof.formal_system_id)
+    cites = await cited_theorems(session, proof.id, chain, user)
+    # A proof is cited under its *library label*, which is not its name: promotion
+    # defaults to the slug, so "My Lemma" is cited as `my-lemma`. An entry-less
+    # proof has no label and therefore no dependents — there is nothing to cite it
+    # by (found in review, where this asked for `proof.name` and answered nothing
+    # for every hand-authored proof).
+    #
+    # Read through `theorem_id`, the link an import sets, rather than the
+    # `proved_by_id` a promotion sets: an imported entry has only the former.
+    entry = (
+        (
+            await session.execute(
+                select(PromotedTheoremRow.label, PromotedTheoremRow.system_id).where(
+                    PromotedTheoremRow.id == proof.theorem_id
+                )
+            )
+        ).first()
+        if proof.theorem_id is not None
+        else None
+    )
+    cited_by, total = (
+        await citing_proofs(session, spine, entry[0], entry[1], user, CITATION_LIMIT)
+        if entry is not None
+        else ([], 0)
+    )
+
+    def out(citation: Citation) -> TheoremCitation:
+        return TheoremCitation(
+            label=citation.label, proof_id=citation.proof_id, title=citation.title
+        )
+
+    return ProofCitations(
+        cites=[out(citation) for citation in cites],
+        cited_by=[out(citation) for citation in cited_by],
+        cited_by_total=total,
+    )
+
+
+@router.get("/{proof_id}/structure", response_model=ProofStructure)
+async def get_proof_structure(
+    proof_id: uuid.UUID,
+    notation: str | None = Query(
+        None,
+        description=(
+            "Read the lines in one of the system's stored notations. Omitted, "
+            "lines carry only the source they were written in."
+        ),
+    ),
+    user: User | None = Depends(current_active_user_optional),
+    session: AsyncSession = Depends(get_session),
+) -> ProofStructure:
+    """The proof as the checker decomposed it: lines, terms, justification edges.
+
+    Read-only and never computed on demand — it reports what the last
+    verification stored rather than quietly re-running the engine, so ``stored``
+    answers "is a structure materialised", not "was this proof checked" (which is
+    ``valid``). Visibility follows the proof itself.
+    """
+    proof = await _get_readable_or_404(session, proof_id, user)
+    rows = (
+        await session.scalars(
+            select(ProofLineRow)
+            .where(ProofLineRow.proof_id == proof.id)
+            .order_by(ProofLineRow.position)
+            .options(selectinload(ProofLineRow.term), selectinload(ProofLineRow.antecedents))
+        )
+    ).all()
+    # No rows means no structure, not "checked and empty": an empty *source*
+    # still stores its one blank line. A proof checked before this store existed
+    # also lands here, and materialises on its next verify.
+    projection = None
+    if notation is not None:
+        projection = await load_notation(session, proof.formal_system_id, notation)
+        if projection is None:
+            # A name the system does not store is a client error worth reporting:
+            # silently serving the source would look like the notation had no
+            # opinion about any of it.
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"This proof's system has no notation named {notation!r}.",
+            )
+
+    rendered: dict[uuid.UUID, str] = {}
+    if projection is not None and rows:
+        # One sweep for the whole proof's terms, then a fold per line. Rendering
+        # reads rows only — a stored notation names every constructor, so no
+        # system rebuild is needed to show a proof (see `render_stored`).
+        graph = await session.run_sync(
+            lambda sync: prefetch_terms(sync, [r.term_id for r in rows])
+        )
+        for row in rows:
+            shown = render_stored(graph, row.term_id, projection)
+            # `None` (no term) is dropped and `""` (a constructor the notation
+            # does not name) is kept, so a client can tell "nothing to read here"
+            # from "read, and the notation had nothing to say" — the second is a
+            # gap worth showing the source for.
+            if shown is not None:
+                rendered[row.id] = shown
+
+    return ProofStructure(
+        proof_id=proof.id,
+        stored=bool(rows),
+        notation=notation,
+        lines=[_line_out(row, rendered.get(row.id)) for row in rows],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Checking, on a stored proof
+# ---------------------------------------------------------------------------
+#
+# The five routes below all **rebuild the proof's whole system and re-check it**,
+# and that is why they require a signed-in caller where the reads around them do
+# not. A published proof is readable by anyone, so once an ownerless corpus is
+# published these would otherwise let an anonymous request compile a 1,441-
+# production grammar and check a proof against it, on any of 47,546 proofs, with
+# no cache in front of it (`build_system`). Nothing durable came of it — a
+# non-owner's transaction is never committed — which is exactly what makes it
+# worth refusing: the work is real and the result is thrown away.
+#
+# What this costs a legitimate caller is nothing. Applying already requires
+# ownership, and an owner is signed in by definition; the dry runs are an
+# authoring aid, and authoring starts from an account. What it removes is
+# unauthenticated compute, and that is the whole of the intent — so a later route
+# of this shape belongs on this list rather than beside the reads.
+
+
+@router.post("/{proof_id}/verify", response_model=VerifyProofResponse)
+async def verify_stored_proof(
+    proof_id: uuid.UUID,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_session),
+) -> VerifyProofResponse:
+    proof = await _get_readable_or_404(session, proof_id, user)
+
+    # Only the owner's transaction is committed (a signed-in reader of someone
+    # else's published proof gets the result but leaves the stored snapshot
+    # untouched), so a non-owner's verify must not do write work that will be
+    # rolled back.
+    owned = proof.owner_id == user.id
+    verification = await _verify_with_references(session, proof, persist=owned)
+
+    # Record the verdict and the structure behind it, so a client can render the
+    # proof without re-checking and the lines are searchable as terms.
+    if owned:
+        await _record_verdict(session, proof, verification)
+        await session.commit()
+
+    return verification.response
+
+
+@router.post("/{proof_id}/cite", response_model=CitationOutcome)
+async def propose_citation(
+    proof_id: uuid.UUID,
+    payload: CitationProposal,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_session),
+) -> CitationOutcome:
+    """Justify a line by naming a rule and the lines it uses — no text.
+
+    The write half of the structured path, and the cheap half of it: a citation
+    is a label and some integers, which are already unambiguous, so this needs
+    none of the term algebra that *stating* a new formula would
+    (docs/authoring-and-ingestion-roadmap.md §9).
+
+    **A dry run by default.** A caller trying several justifications for a hole
+    should not have to undo the ones that did not work, so nothing is written
+    unless ``apply`` is set — and applying requires ownership, as an edit does.
+
+    Checked in the proof's **whole** context rather than in isolation, because
+    that is the only place a citation means anything: scope, ordering and what
+    stands above the line all bear on it. A rejected proposal comes back with the
+    same structured `failure` a verify reports, so it names the next goal rather
+    than only saying no.
+
+    Addressed by **citation number** — the handle an antecedent edge already uses
+    — which needs the proof's stored structure. An unverified proof has none, and
+    says so rather than guessing.
+    """
+    proof = await _get_readable_or_404(session, proof_id, user)
+
+    row = await session.scalar(
+        select(ProofLineRow).where(
+            ProofLineRow.proof_id == proof.id, ProofLineRow.number == payload.line
+        )
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"This proof has no line {payload.line}. Verify it first: a line "
+                "is addressed by the citation number its stored structure gives it."
+            ),
+        )
+
+    # A line whose citation the checker never resolves cannot be justified by one,
+    # and reporting a proposal against it on the line's overall validity would say
+    # `accepted` for a citation nothing looked at. A scope opener is granted by
+    # fiat — a hypothesis holds for its subproof, a fresh variable is introduced —
+    # and an axiom line asserts itself; both are valid whatever their reference
+    # says, and a system is free to declare a reference field on either.
+    #
+    # Decided from the stored row, before any build work, because it is a fact
+    # about the line type rather than about this proposal.
+    if row.opens_scope is not None or row.behaviour != "logical":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Line {payload.line} is not justified by a citation: it "
+                + (
+                    "opens a subproof, which is granted rather than proved."
+                    if row.opens_scope is not None
+                    else f"is a {row.behaviour or 'non-logical'} line."
+                )
+            ),
+        )
+
+    # Built once and reused by the verify below. Rewriting a line needs the
+    # grammar to *read* it, so this route needs the system before it checks — and
+    # building it a second time inside the verify was the single largest thing a
+    # call of this route did (roadmap §9e).
+    #
+    # Under the system lock, which the verify would otherwise be the first to
+    # take: a build made outside it could be against a grammar that has changed
+    # by the time the check runs.
+    await lock_system(session, proof.formal_system_id)
+    built = await build_system(session, proof.formal_system_id)
+    require_a_built_system(built)
+
+    citation = citation_text(payload.rule, payload.antecedents)
+    lines = proof.source.split("\n")
+    if not 0 <= row.position < len(lines):
+        # The stored structure describes a source this proof no longer has.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This proof's stored structure is stale. Verify it first.",
+        )
+    rewritten = built.compiled.recite(lines[row.position], citation)
+    if rewritten is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Line {payload.line} cannot carry the citation {citation!r} — it "
+                "declares no reference field, carries none to replace, or would "
+                "not read back as written."
+            ),
+        )
+    lines[row.position] = rewritten
+    source = "\n".join(lines)
+
+    owned = proof.owner_id == user.id
+    if payload.apply and not owned:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the owner can apply a citation to this proof.",
+        )
+
+    verification = await _verify_with_references(
+        session, proof, persist=payload.apply and owned, source=source, built=built
+    )
+    checked = verification.engine_proof
+    line = _numbered_line(checked, payload.line)
+
+    outcome = CitationOutcome(
+        line=payload.line,
+        citation=citation,
+        # A line the check never reached — the system would not build, or the
+        # rewritten source no longer parses at that line — is not accepted.
+        accepted=line is not None and bool(line.valid),
+        failure=(
+            FailureOut(**line.failure.as_dict())
+            if line is not None and line.failure is not None
+            else None
+        ),
+    )
+    if not (payload.apply and owned):
+        return outcome
+
+    # Applying is a **source edit**, and every consequence of one applies. This
+    # mirrors `update_proof`'s post-edit block deliberately rather than by
+    # coincidence: a citation rewritten here can break a lemma, and without these
+    # a third proof laundering through that lemma would still verify against a
+    # cached verdict for a source that no longer says what it did.
+    proof.source = source
+    # Before anything re-reads this proof. The stored structure describes the
+    # *previous* source, and a verify prefers rows to text — so leaving it would
+    # make the publish gate below re-check the old proof and pass a rewrite that
+    # breaks it. `update_proof` discards for the same reason.
+    await _discard_check(session, proof)
+    await _invalidate_dependents(session, proof.id, proof.formal_system_id)
+    # Including the library entry this proof established. Defence in depth rather
+    # than a live path: promotion requires publication and the gate below refuses
+    # a rewrite that stops a published proof verifying, so a promoted proof cannot
+    # actually reach here broken. Kept because that is an invariant of *another*
+    # route, and a source edit that skipped this would be a hole the moment it
+    # loosened.
+    await _retire_promotion(session, proof)
+    # A world-readable proof may not be edited into a non-verifying state — and
+    # `[?]` is exactly such an edit, which is what makes this gate load-bearing
+    # here rather than inherited. Raising rolls the whole proposal back.
+    if proof.published_at is not None:
+        await _require_publishable(session, proof, built=built)
+    await _record_verdict(session, proof, verification)
+    await session.commit()
+    return outcome.model_copy(
+        update={
+            "applied": True,
+            "valid": verification.valid,
+            "holes": verification.response.holes,
+            "only_holes": verification.response.only_holes,
+        }
+    )
+
+
+def _numbered_line(checked: EngineProof | None, number: int) -> EngineProofLine | None:
+    # The checked line a citation number names. `numbered_lines` is indexed from
+    # 1 and a proposal may name a number the rewritten source no longer produces,
+    # so this asks rather than indexes.
+    if checked is None:
+        return None
+    for line in checked.proof_lines:
+        if line.number == number:
+            return line
+    return None
+
+
+@router.post("/{proof_id}/lines", response_model=LineOutcome)
+async def propose_line(
+    proof_id: uuid.UUID,
+    payload: LineProposal,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_session),
+) -> LineOutcome:
+    """Add a line stating a proposed term — structure in, no surface syntax.
+
+    The expensive half of the structured write path (§9's step 3). A citation is
+    a label and some integers; *stating* a formula needs the grammar, and this is
+    where the constructor vocabulary crosses the wire.
+
+    The term may **point at terms that already exist** (`ref`), which is the
+    whole reason to bother: an interned term is shared, so a caller says "that
+    subterm" instead of restating it.
+
+    **The round trip is checked, not trusted.** The resolved term is rendered
+    into the system's own spelling — exact by construction, since a production's
+    render steps *are* its source template — spliced in, and parsed back; the
+    line is refused unless the term that comes out is the term that went in. That
+    is the guarantee a notation-as-source path could not offer (§4).
+
+    A dry run unless ``apply``, and applying is owner-only, as `/cite` is.
+    """
+    proof = await _get_readable_or_404(session, proof_id, user)
+
+    rows = (
+        await session.scalars(
+            select(ProofLineRow)
+            .where(ProofLineRow.proof_id == proof.id, ProofLineRow.number.is_not(None))
+            .order_by(ProofLineRow.number)
+        )
+    ).all()
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This proof has no numbered lines to add to. Verify it first: a "
+                "new line takes its shape and indentation from an existing one."
+            ),
+        )
+    if payload.before is None:
+        anchor = rows[-1]
+        number = len(rows) + 1
+    else:
+        anchor = next((r for r in rows if r.number == payload.before), None)
+        if anchor is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"This proof has no line {payload.before}.",
+            )
+        number = payload.before
+
+    # Three questions the anchor line used to answer at once, and a subproof
+    # needs apart (§4.6): *where* the line is inserted stays the anchor's, but
+    # its **indent** is what places it in a scope and its **shape** is what
+    # decides whether it opens one. Naming neither leaves both the anchor's,
+    # which is what every proposal written before subproofs were reachable does.
+    indent = _placement(rows, anchor, payload.scope)
+    shape = _shape_source(rows, anchor, payload.line_type)
+
+    # Built once, under the lock, and reused by the verify — as `/cite` does, and
+    # for the same reason: this route needs the grammar to resolve the proposal
+    # and render it, long before anything is checked.
+    await lock_system(session, proof.formal_system_id)
+    built = await build_system(session, proof.formal_system_id)
+    require_a_built_system(built)
+    system = built.system
+    compiled = built.compiled
+
+    opener_kind, takes_citation = _line_kind(built, shape.line_type)
+    # **Whether a scope opener is justified and whether it has room to write
+    # something are two questions**, and both rounds of review landed on this
+    # line. It is never justified — `ProofLine.execute` grants an opener by fiat
+    # and never resolves its reference — but a line type is free to declare a
+    # reference field anyway (`tests.test_proofs_api._scoped_with_reference_spec`
+    # records that nothing forbids it).
+    #
+    # So no citation is *accepted* for an opener, which is `/cite`'s settled
+    # position on the same rows and for the same reason: the opener is valid
+    # whatever its reference says, so its validity is no evidence about the
+    # citation, and writing an unresolved one would mint a dependency this layer
+    # does treat as real. But where the field exists it is still *written*, as
+    # the hole keyword — because the alternative, leaving it alone, meant a new
+    # opener spliced out of an old one silently kept **the old one's** citation,
+    # invisible to every round trip below since the term, the type and the scope
+    # all come back exactly as asked.
+    if opener_kind is not None and (payload.antecedents or payload.rule != HOLE_KEY):
+        # By value rather than by `model_fields_set`: `rule` defaults to the hole
+        # keyword, which says "nothing justifies this" — the very thing an opener
+        # means — so a client spelling the default out loud is asking for what it
+        # would have got anyway and must not be refused for saying so.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Line type {shape.line_type!r} opens a subproof, which is "
+                "granted rather than proved, so it takes no rule or antecedents "
+                "— nothing would resolve them."
+            ),
+        )
+
+    term, context = await resolve_proposal(
+        session, payload.statement, system.id, compiled
+    )
+
+    # Rendered with no projection, which is `to_string` exactly — the source
+    # spelling, because a production's render steps are its source template.
+    formula = render(term)
+    if shape.display is not None:
+        stated = compiled.restate(shape.display, formula)
+    else:
+        # No line of this type to take a shape from, so it is composed from the
+        # type's declared shape instead. That is the one thing `restate` exists
+        # to avoid — but only because it is *unchecked* reconstruction that is
+        # unsafe, and the round trip below checks this one against the grammar
+        # exactly as it checks a spliced line. Without it a proof could never
+        # open its first subproof: there is no `assume` line to copy until there
+        # is an `assume` line.
+        stated = _stated_afresh(built, shape.line_type, formula)
+        if stated is None:
+            # Distinguished from the splice failing, because the two are acted on
+            # differently: this one is not about the statement at all, and the way
+            # out is to write a line of the type by hand once, after which the
+            # spliced path applies forever.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"This proof has no {shape.line_type!r} line to take a shape "
+                    "from, and that type's shape carries more than the formula, "
+                    "so one cannot be composed. Write one first."
+                ),
+            )
+    if stated is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"A {shape.line_type!r} line cannot carry this statement — it "
+                "would not read back as written."
+            ),
+        )
+    if takes_citation:
+        stated = compiled.recite(
+            stated, citation_text(payload.rule, payload.antecedents)
+        )
+        if stated is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"A {shape.line_type!r} line cannot carry that citation.",
+            )
+    # `display` is stored *stripped* — the indent is its own column — so it has
+    # to be put back. Not cosmetic: indentation is what places a line in a
+    # subproof, and a line written at the root instead would silently escape the
+    # scope it was meant to join.
+    stated = " " * indent + stated
+
+    lines = proof.source.split("\n")
+    if not 0 <= anchor.position < len(lines):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This proof's stored structure is stale. Verify it first.",
+        )
+    if payload.before is None:
+        lines.append(stated)
+        renumbered: list[int] = []
+    else:
+        # Everything from here down moves, and every citation naming one of those
+        # lines has to move with it or it silently names a different line.
+        moved = compiled.renumber(lines, number)
+        if moved is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This proof's citations could not be renumbered to make room; "
+                    "no line was added."
+                ),
+            )
+        lines = moved
+        lines.insert(anchor.position, stated)
+        renumbered = [r.number + 1 for r in rows if r.number >= number]
+    source = "\n".join(lines)
+
+    owned = proof.owner_id == user.id
+    if payload.apply and not owned:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the owner can add a line to this proof.",
+        )
+
+    verification = await _verify_with_references(
+        session, proof, persist=payload.apply and owned, source=source, built=built
+    )
+    checked = verification.engine_proof
+    added = _numbered_line(checked, number)
+
+    # The round trip, checked rather than trusted: the line that came back must
+    # state the term that went in. Anything else means the render or the splice
+    # said something the caller did not.
+    # By digest rather than by `Term.equal`: the proposal was resolved against the
+    # system built here and the line was parsed against the one the verify built,
+    # and `Var.equal` compares its sort by *identity*, which does not survive two
+    # builds. A digest is structural and independent of object identity, which is
+    # exactly the difference that matters across the boundary.
+    if (
+        added is None
+        or added.formula_term is None
+        or digest_term(added.formula_term) != digest_term(term)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "The statement did not survive the round trip: what parsed back "
+                f"from {stated!r} is not the term proposed."
+            ),
+        )
+    # The *type* survives the same round trip, and it is its own question. A
+    # digest says nothing about it: two line types stating one formula produce
+    # the same term, so a proposal asking for `assume` and getting an ordinary
+    # step would pass the check above and silently open no subproof at all.
+    landed = added.line_type.name if added.line_type is not None else None
+    if landed != shape.line_type:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"That line reads back as {landed!r} rather than "
+                f"{shape.line_type!r}, so it would not do what was asked."
+            ),
+        )
+    # And so does the scope, for the reason the indent is spliced rather than
+    # assumed: a subproof is delimited by indentation, so *where* a line landed
+    # is a fact about the checked proof and not about the request. A caller told
+    # its discharge is in the root scope when it is still inside the subproof it
+    # meant to discharge has been told the opposite of what happened.
+    if payload.scope is not None:
+        wanted = (
+            payload.scope.opener
+            if payload.scope.placement == "inside"
+            else _scope_of_row(rows, payload.scope.opener)
+        )
+        if _scope_of(added) != wanted:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "That line did not land in the scope asked for: it reads as "
+                    f"{_scope_of(added)} rather than {wanted}. A subproof is "
+                    "closed by the first line that dedents past its opener and "
+                    "indenting cannot reopen it, so a line joins one only where "
+                    "it is written between the opener and that dedent — check "
+                    "`before`."
+                ),
+            )
+
+    # And nothing that stood before may have been broken by the renumbering. A
+    # citation that now names a different line still *resolves*, so this is the
+    # only thing that would catch it.
+    broken = _broken_by_insert(rows, checked, number)
+    if broken:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Adding this line would break line {broken}, which stood before; "
+                "no line was added."
+            ),
+        )
+    # The same invariant over the other thing an insert can move. A line's scope
+    # is set by the *indent of the lines around it*, so inserting one at a
+    # different indent can close a subproof early or swallow the lines below it
+    # — and those lines can stay perfectly valid while meaning something else,
+    # which is precisely what validity cannot catch (§4.6). A discharge that now
+    # consumes a different subproof is the case that matters.
+    moved_scope = _rescoped_by_insert(rows, checked, number)
+    if moved_scope:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Adding this line would move line {moved_scope} into a different "
+                "subproof; no line was added."
+            ),
+        )
+
+    outcome = LineOutcome(
+        line=number,
+        display=stated,
+        accepted=bool(added.valid),
+        failure=(
+            FailureOut(**added.failure.as_dict()) if added.failure is not None else None
+        ),
+        renumbered=renumbered,
+        scope=_scope_of(added),
+        opens_scope=(
+            added.opened_scope.kind if added.opened_scope is not None else None
+        ),
+    )
+    if not (payload.apply and owned):
+        return outcome
+
+    proof.source = source
+    await _discard_check(session, proof)
+    await _invalidate_dependents(session, proof.id, proof.formal_system_id)
+    await _retire_promotion(session, proof)
+    if proof.published_at is not None:
+        await _require_publishable(session, proof, built=built)
+    await _record_verdict(session, proof, verification)
+    await session.commit()
+    return outcome.model_copy(
+        update={
+            "applied": True,
+            "valid": verification.valid,
+            "holes": verification.response.holes,
+            "only_holes": verification.response.only_holes,
+        }
+    )
+
+
+@router.post("/{proof_id}/lines/remove", response_model=LineRemovalOutcome)
+async def remove_line(
+    proof_id: uuid.UUID,
+    payload: LineRemoval,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_session),
+) -> LineRemovalOutcome:
+    """Take a line back out, closing the gap its number leaves.
+
+    The inverse of `/lines`, and the operation a loop working top-down needs to
+    undo a step it has decided against (§9c). Renumbering is the same problem in
+    reverse: everything below moves *up*, and a citation naming one of those lines
+    silently names the wrong one afterwards.
+
+    A line **another line cites** is refused rather than removed. Its dependents
+    would lose their justification, and there is no answer to give them — unlike
+    an insertion, which can always be undone by not making it. Naming them is more
+    use than a broken proof.
+
+    A dry run unless ``apply``; applying is owner-only, as the other two are.
+    """
+    proof = await _get_readable_or_404(session, proof_id, user)
+
+    rows = (
+        await session.scalars(
+            select(ProofLineRow)
+            .where(ProofLineRow.proof_id == proof.id, ProofLineRow.number.is_not(None))
+            .order_by(ProofLineRow.number)
+        )
+    ).all()
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This proof has no numbered lines to remove. Verify it first: a "
+                "line is addressed by the citation number its structure gives it."
+            ),
+        )
+    going = next((row for row in rows if row.number == payload.line), None)
+    if going is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"This proof has no line {payload.line}.",
+        )
+
+    # Read off the **citation text**, not the justification edges. An edge is
+    # written only where the rule applied, so a line that cites this one and does
+    # not currently check has none — and would sail past this guard and have its
+    # citation quietly retargeted by the renumbering below. The text is what
+    # `renumber` rewrites, so asking it the same question is the only way the two
+    # cannot disagree.
+    cited_by = sorted(
+        row.number for row in rows if _cites(row.reference, payload.line)
+    )
+    if cited_by:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Line {payload.line} is cited by "
+                f"{', '.join(str(n) for n in cited_by)}; removing it would leave "
+                "them unjustified. Re-cite or remove those first."
+            ),
+        )
+
+    await lock_system(session, proof.formal_system_id)
+    built = await build_system(session, proof.formal_system_id)
+    require_a_built_system(built)
+
+    lines = proof.source.split("\n")
+    if not 0 <= going.position < len(lines):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This proof's stored structure is stale. Verify it first.",
+        )
+    # Everything below closes up by one. `at` is the number *after* the one going,
+    # so the removed line's own citation — which is about to be dropped — is not
+    # rewritten on the way out.
+    moved = built.compiled.renumber(lines, payload.line + 1, by=-1)
+    if moved is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This proof's citations could not be renumbered to close the gap; "
+                "no line was removed."
+            ),
+        )
+    del moved[going.position]
+    source = "\n".join(moved)
+
+    owned = proof.owner_id == user.id
+    if payload.apply and not owned:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the owner can remove a line from this proof.",
+        )
+
+    verification = await _verify_with_references(
+        session, proof, persist=payload.apply and owned, source=source, built=built
+    )
+    broken = _broken_by_removal(rows, verification.engine_proof, payload.line)
+    if broken:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Removing this line would break line {broken}, which stood "
+                "before; no line was removed."
+            ),
+        )
+    # The mirror of the insert's, and it became reachable when the structured
+    # path learned to author subproofs at all: taking out the line that *dedents*
+    # is what leaves the lines after it inside the subproof it used to close, and
+    # they can stay valid throughout. Both edits move scopes, so both need this
+    # (found in review, where only the insert had it).
+    moved_scope = _rescoped_by_removal(rows, verification.engine_proof, payload.line)
+    if moved_scope:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Removing this line would move line {moved_scope} into a "
+                "different subproof; no line was removed."
+            ),
+        )
+
+    outcome = LineRemovalOutcome(
+        line=payload.line,
+        # The source line itself, not `indent` and `display` put back together:
+        # `display` is stored stripped and the indent as a count of columns, so
+        # rebuilding one turns a tab into spaces and drops trailing whitespace.
+        # The contract is that a caller can restore what was here, which a
+        # re-spelling of it is not.
+        removed=lines[going.position],
+        renumbered=[row.number - 1 for row in rows if row.number > payload.line],
+    )
+    if not (payload.apply and owned):
+        return outcome
+
+    proof.source = source
+    await _discard_check(session, proof)
+    await _invalidate_dependents(session, proof.id, proof.formal_system_id)
+    await _retire_promotion(session, proof)
+    if proof.published_at is not None:
+        await _require_publishable(session, proof, built=built)
+    await _record_verdict(session, proof, verification)
+    await session.commit()
+    return outcome.model_copy(
+        update={
+            "applied": True,
+            "valid": verification.valid,
+            "holes": verification.response.holes,
+            "only_holes": verification.response.only_holes,
+        }
+    )
+
+
+def _cites(reference: str | None, number: int) -> bool:
+    """Whether a stored citation names line ``number``.
+
+    Exactly `FormalSystem.renumber`'s rule for what a line number *is*: a bare
+    integer among the citation's parts. A rule's label, the definitional and hole
+    keywords and a dotted lemma reference (`[MP, A.2]`, whose `2` is a line of
+    another proof) are none, and neither shifts nor counts here.
+    """
+    if reference is None:
+        return False
+    return any(
+        part.isdigit() and int(part) == number
+        for part in reference.split(CITATION_SEPARATOR)
+    )
+
+
+def _broken_by_removal(
+    before: Sequence[ProofLineRow], checked: EngineProof | None, at: int
+) -> int | None:
+    # The first line that was valid before the removal and is not after it, by its
+    # new number. The removed line itself is skipped — it is *meant* to be gone.
+    if checked is None:
+        return None
+    after = {line.number: line for line in checked.proof_lines if line.number is not None}
+    for row in before:
+        if row.number == at:
+            continue
+        moved = row.number - 1 if row.number > at else row.number
+        line = after.get(moved)
+        if row.valid and (line is None or not line.valid):
+            return moved
+    return None
+
+
+def _broken_by_insert(
+    before: Sequence[ProofLineRow], checked: EngineProof | None, at: int
+) -> int | None:
+    # The first line that was valid before the insert and is not after it, by its
+    # new number. None when nothing regressed.
+    if checked is None:
+        return None
+    after = {line.number: line for line in checked.proof_lines if line.number is not None}
+    for row in before:
+        moved = row.number + 1 if row.number >= at else row.number
+        line = after.get(moved)
+        if row.valid and (line is None or not line.valid):
+            return moved
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Subproofs, in the structured write path (§4.6)
+# ---------------------------------------------------------------------------
+#
+# A paper's proof is case splits, inductions and "assume for contradiction", and
+# every one of those is a subproof. Nothing in the measured corpus run touched
+# one — a Metamath corpus is flat, so no scope opener, discharge line or indent
+# was ever written by the structured path, and the gap went unnoticed because
+# nothing could notice it.
+#
+# The whole of a subproof, mechanically, is **indentation**: a line indented past
+# an opener is inside it, one at or left of the opener closes it
+# (`Proof.assign_scope`). So the write path needs exactly two things it did not
+# have — a choice of line type, since opening a scope is a property of the type,
+# and a choice of indent. Everything below is those two, plus checking that what
+# was asked for is what landed.
+
+# How far a subproof is indented past its opener when the proof has not yet said.
+# A convention, and only a default: an existing line of the subproof is preferred
+# wherever there is one, so a proof that indents by two stays indented by two.
+INDENT_STEP = 4
+
+# A `<name>` hole in a line type's declared shape (`assume <formula>`).
+_PLACEHOLDER = re.compile(r"<([^<>]+)>")
+
+
+@dataclass(frozen=True)
+class _Shape:
+    """Where a proposed line's *syntax* comes from.
+
+    ``display`` is an existing line to splice into — the safe path, and the one
+    `restate` was built for. It is None when the proof has no line of the type
+    yet, which is the ordinary state of a proof about to open its first subproof;
+    the line is then composed from the type's declared shape and checked by the
+    same round trip.
+    """
+
+    line_type: str
+    display: str | None
+
+
+def _placement(
+    rows: Sequence[ProofLineRow],
+    anchor: ProofLineRow,
+    scope: ScopePlacement | None,
+) -> int:
+    """The indent a proposed line is written at.
+
+    Named by the opener's citation number rather than by a column, because that
+    is the handle a caller already has — a discharge cites it, and `/structure`
+    reports it — and because an indent is a fact about a proof's typography that
+    no caller should have to learn.
+
+    ``outside`` is the interesting one and it is not a special case: a line at
+    the opener's *own* indent dedents past it, which is exactly what closes the
+    subproof, so the discharge position is the opener's indent. ``inside`` is one
+    step deeper, or whatever the subproof's existing lines already use.
+    """
+    if scope is None:
+        return anchor.indent
+    opener = next((r for r in rows if r.number == scope.opener), None)
+    if opener is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"This proof has no line {scope.opener}.",
+        )
+    if opener.opens_scope is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Line {scope.opener} opens no subproof, so there is nothing to "
+                "be inside or outside of."
+            ),
+        )
+    if scope.placement == "outside":
+        return opener.indent
+    # A line already in the subproof settles the indent; `scope_id` points at the
+    # opener from *within*, and never from the opener itself, which is filed in
+    # the enclosing scope (see `app.db.proofs_mapping.store_proof_lines`).
+    within = [r for r in rows if r.scope_id == opener.id]
+    return within[0].indent if within else opener.indent + INDENT_STEP
+
+
+def _shape_source(
+    rows: Sequence[ProofLineRow], anchor: ProofLineRow, line_type: str | None
+) -> _Shape:
+    """Which line type a proposed line is written as, and what to splice into."""
+    if line_type is None:
+        if anchor.opens_scope is not None or anchor.behaviour != "logical":
+            # The new line copies this one's shape, so it would inherit a line
+            # type that states nothing checkable. Naming a `line_type` is the way
+            # past this, and is how a scope opener is written on purpose.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Line {anchor.number} is not an ordinary logical line, so a "
+                    "new statement cannot take its shape; name a `line_type` to "
+                    "write a different kind of line."
+                ),
+            )
+        return _Shape(line_type=anchor.line_type, display=anchor.display)
+    # The *last* line of the type, so a proof that has drifted in how it writes
+    # one follows its own most recent practice rather than its oldest.
+    kin = [r for r in rows if r.line_type == line_type]
+    return _Shape(line_type=line_type, display=kin[-1].display if kin else None)
+
+
+def _line_kind(built: BuiltSystem, line_type: str) -> tuple[str | None, bool]:
+    """What scope ``line_type`` opens, and whether it has room for a citation.
+
+    Two independent properties, kept apart because they are independent: a line
+    type may open a subproof, carry a reference field, both or neither, and the
+    system is the authority on each. Answered together only because one lookup
+    serves both.
+
+    Raises when the system declares no such type, which is a 422 rather than a
+    silent fall back to the anchor's: a caller naming a type that does not exist
+    has asked for something specific and got something else.
+    """
+    # `built.compiled`, not `built.system`: the first is the engine's system and
+    # the second the database row it was built from.
+    found = next(
+        (t for t in built.compiled.line_types if t.name == line_type), None
+    )
+    if found is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"This system declares no line type named {line_type!r}.",
+        )
+    return found.scope, found.reference_field is not None
+
+
+def _stated_afresh(built: BuiltSystem, line_type: str, formula: str) -> str | None:
+    """A line of ``line_type`` stating ``formula``, composed from its shape.
+
+    The fallback for a type this proof has no line of — without which no proof
+    could open its first subproof, since there is no `assume` line to copy until
+    there is an `assume` line.
+
+    Only a shape whose **sole** placeholder is the formula is composed. Anything
+    else needs values this does not have (a `<reference>` cannot be filled before
+    the line parses, and the line does not parse with a placeholder still in it),
+    and guessing one would be reconstructing a line type's syntax rather than
+    reading it. A scope opener is the case that matters and it is this shape, for
+    the reason it takes no citation.
+
+    The spec is the whole inheritance chain's, so a type declared by an ancestor
+    is composable from a child's proof.
+    """
+    spec = built.effective.spec
+    declared = next((line for line in spec.lines if line.name == line_type), None)
+    if declared is None or declared.behaviour != "logical":
+        return None
+    holes = _PLACEHOLDER.findall(declared.shape)
+    if len(holes) != 1:
+        return None
+    return _PLACEHOLDER.sub(lambda _: formula, declared.shape)
+
+
+def _scope_of(line: object) -> int | None:
+    """The number of the line opening the subproof ``line`` sits in, or None.
+
+    An opener is filed in the scope it opens *from*, not the one it opens, which
+    is `store_proof_lines`' rule and the one that keeps the chain a tree. Read the
+    same way here so a stored row and a freshly checked line answer alike.
+    """
+    opened = line.opened_scope
+    scope = opened.parent if opened is not None else line.scope
+    opener = scope.assumption if scope is not None else None
+    return opener.number if opener is not None else None
+
+
+def _scope_of_row(rows: Sequence[ProofLineRow], number: int) -> int | None:
+    # The same question of a stored row: which subproof is line `number` in.
+    row = next((r for r in rows if r.number == number), None)
+    if row is None or row.scope_id is None:
+        return None
+    holder = next((r for r in rows if r.id == row.scope_id), None)
+    return holder.number if holder is not None else None
+
+
+def _rescoped_by_insert(
+    before: Sequence[ProofLineRow], checked: EngineProof | None, at: int
+) -> int | None:
+    """The first line the insert moved into a different subproof, by its new number.
+
+    The other half of `_broken_by_insert`, and it exists because validity does
+    not cover it. A line's scope comes from the indents around it, so inserting a
+    dedented line closes a subproof early and everything below lands in the
+    parent — where it can go on checking perfectly well while meaning something
+    else entirely. A discharge that now consumes a *different* subproof is the
+    sharp case: it still cites a real opener, still finds a real subproof, and
+    still passes.
+
+    Compared by opener number rather than by identity, since the two sides are a
+    stored row and a fresh parse with no object in common, and numbers are what
+    the insert shifted — so both sides are read after the shift.
+    """
+    return _rescoped(before, checked, at, by=1)
+
+
+def _rescoped_by_removal(
+    before: Sequence[ProofLineRow], checked: EngineProof | None, at: int
+) -> int | None:
+    """The first line the removal moved into a different subproof, by its new number.
+
+    :func:`_rescoped_by_insert`'s mirror, and reachable for the same reason the
+    other is: the line that *dedents* is what closes a subproof, so taking it out
+    leaves everything after it inside the block it used to end — still checking,
+    still citing what it cited, and a step of something else.
+
+    The removed line is skipped: it is meant to be gone, and it has no scope after.
+    """
+    return _rescoped(before, checked, at, by=-1, dropped=at)
+
+
+# The scope a removed opener used to name. Not a number, because the whole point
+# is that it corresponds to nothing after the edit: shifting it like any other
+# number lands it on the line before it — which, for the ordinary nesting shape
+# where a subproof opens immediately inside its parent, *is* the parent, so a
+# reparented line would compare equal to itself and pass (found in review).
+_GONE = object()
+
+
+def _rescoped(
+    before: Sequence[ProofLineRow],
+    checked: EngineProof | None,
+    at: int,
+    *,
+    by: int,
+    dropped: int | None = None,
+) -> int | None:
+    # Shared by the two above. Both sides are read *after* the shift, since a
+    # stored row and a fresh parse have no object in common and numbers are the
+    # only thing they both speak — so the before-scope is shifted the same way
+    # the line it names was.
+    if checked is None:
+        return None
+    after = {
+        line.number: line for line in checked.proof_lines if line.number is not None
+    }
+
+    def shifted(number: int | None) -> object:
+        if number is None:
+            return None
+        if number == dropped:
+            # The subproof this named is gone with its opener, so every line that
+            # was in it has been reparented — which is exactly what to report.
+            return _GONE
+        return number + by if number >= at else number
+
+    for row in before:
+        if row.number == dropped:
+            continue
+        moved = shifted(row.number)
+        line = after.get(moved)
+        if line is None:
+            continue
+        if shifted(_scope_of_row(before, row.number)) != _scope_of(line):
+            return moved
+    return None
+
+
+def _suggestion(
+    application: Application,
+    source: str,
+    *,
+    exact: bool = False,
+    assumption: bool = False,
+) -> CitationSuggestion:
+    # A found application, in the shape `/cite` takes back. `citation` is composed
+    # by the engine rather than formatted here, so what a caller is shown is
+    # exactly what applying it would write (see `FormalSystem.cite`).
+    numbers_cited = application.numbers
+    return CitationSuggestion(
+        rule=application.rule.label,
+        antecedents=numbers_cited,
+        citation=citation_text(application.rule.label, numbers_cited),
+        source=source,
+        discharge=application.discharge,
+        exact=exact,
+        assumption=assumption,
+    )
+
+
+@router.get("/{proof_id}/lines/{number}/citations", response_model=CitationSearch)
+async def find_citations(
+    proof_id: uuid.UUID,
+    number: int,
+    limit: int = Query(
+        10, ge=1, le=50, description="How many confirmed suggestions to return."
+    ),
+    candidates: int = Query(
+        25,
+        ge=0,
+        le=50,
+        description=(
+            "How many library candidates the prefilter may offer for "
+            "unification. Zero searches the system's own rules only."
+        ),
+    ),
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_session),
+) -> CitationSearch:
+    """What could justify this line — proposals that have already been checked.
+
+    The move the loop was missing (docs/authoring-and-ingestion-roadmap.md §9d).
+    `/verify` says a line is a hole and `/cite` says whether a *named*
+    justification works; between them sat the question neither answered — **which
+    justification to name** — and on a library of 47,589 theorems a caller had no
+    way to guess. Every suggestion here comes back in `CitationProposal`'s own
+    shape, so acting on one is a copy into `POST /proofs/{id}/cite` rather than a
+    translation.
+
+    Two pools, searched differently because they are differently bounded. The
+    system's **rules** are few, so every one is tried. Its **library** is not —
+    an imported corpus contributes tens of thousands — so it is narrowed first by
+    the root production of the goal's statement (`app/db/retrieval.py`) and only
+    the survivors are unified. Both are confirmed the same way in the end: by the
+    check a verify runs, against the lines that actually stand above the goal.
+
+    **Confirmed, not guessed.** A suggestion here applies. That is what makes the
+    endpoint worth its cost, and the cost is why it lives on a proof rather than
+    on a system: checking the proof has already built the system, so unifying a
+    candidate against a real goal in a real scope adds almost nothing.
+
+    What bounds the work is the ladder rather than a budget. `candidates` caps how
+    many library entries are offered at all, and each is met first by `concludes`
+    — one unification against the goal — so only the few that could actually
+    conclude it go on to pay `admissibility`, which is the term that scales with
+    the proof's length. The verify above dominates either way.
+
+    Depth one. This finds the rule that justifies a line **from lines that
+    already stand** — it does not prove a gap, which is a search over sequences
+    of steps and a different piece of work. Nothing is written: like `/cite`'s
+    dry run, asking what could justify a line must never fill it in.
+    """
+    proof = await _get_readable_or_404(session, proof_id, user)
+
+    # Checked rather than read: the search runs against live proof lines — their
+    # scopes, their terms, their order — and a stored row carries no `ProofLine`
+    # to unify with. Never persisted, because a read must not write, and a
+    # non-owner's transaction is rolled back anyway.
+    verification = await _verify_with_references(session, proof, persist=False)
+    checked = verification.engine_proof
+    if checked is None or verification.compiled_system is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=verification.response.errors
+            or ["This proof could not be checked, so nothing can be proposed for it."],
+        )
+
+    goal = _numbered_line(checked, number)
+    if goal is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"This proof has no line {number}.",
+        )
+    # The same three refusals `/cite` makes, and for the same reason: a line whose
+    # citation the checker never resolves cannot be justified by one, so proposing
+    # a justification for it would be proposing something that means nothing.
+    if goal.opened_scope is not None or (
+        goal.line_type is not None and goal.line_type.behaviour != "logical"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Line {number} is not justified by a citation: it "
+                + (
+                    "opens a subproof, which is granted rather than proved."
+                    if goal.opened_scope is not None
+                    else "is not an ordinary logical line."
+                )
+            ),
+        )
+    if goal.formula_term is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Line {number} states no formula this system could read, so there "
+                "is no goal to search for."
+            ),
+        )
+
+    compiled = verification.compiled_system
+    context = term_context(compiled)
+    pool = accessible_lines(goal)
+    openers = dischargeable_openers(goal)
+
+    found: list[CitationSuggestion] = []
+    for rule in compiled.inference_rules:
+        for application in (
+            discharges(rule, goal, openers, context)
+            if rule.is_discharge
+            else applications(rule, goal, pool, context)
+        ):
+            found.append(
+                _suggestion(
+                    application,
+                    "rule",
+                    assumption=rule.concludes_anything(context),
+                )
+            )
+
+    # The library, narrowed before it is unified. A rule's label wins a clash, so
+    # a theorem sharing one is left out rather than proposed under a name that
+    # resolves to something else.
+    rule_labels = [rule.label for rule in compiled.inference_rules]
+    root = goal.formula_term
+    prefiltered = None
+    if candidates and isinstance(root, Node) and verification.effective is not None:
+        prefiltered = await session.run_sync(
+            lambda sync: conclusion_candidates(
+                sync,
+                verification.effective.library,
+                root.constructor.name,
+                alpha_digest=alpha_digest(root),
+                # The proof is built, so the goal term is in hand — fingerprint it
+                # to prune below the root before the unifier confirms each match.
+                goal_fingerprint=fingerprint(root),
+                limit=candidates,
+                exclude=rule_labels,
+            )
+        )
+        exact_labels = {c.label for c in prefiltered.candidates if c.exact}
+        promoted = await session.run_sync(
+            lambda sync: load_citable_theorems(
+                sync,
+                verification.effective.library,
+                [c.label for c in prefiltered.candidates],
+                compiled,
+                context,
+            )
+        )
+        for label, theorem in promoted.items():
+            for application in applications(theorem.as_rule(), goal, pool, context):
+                found.append(
+                    _suggestion(application, "theorem", exact=label in exact_labels)
+                )
+
+    # A rule that justifies every line is true of this one and says nothing about
+    # it, so it goes last however few premises it needs — otherwise `[HYP]` would
+    # head every answer. Then exact matches, then the justification needing the
+    # fewest premises found for it, then the system's own rules before its
+    # library, then by label: a stable order whose front is what to try first.
+    found.sort(
+        key=lambda s: (
+            s.assumption,
+            not s.exact,
+            len(s.antecedents),
+            s.source != "rule",
+            s.rule,
+        )
+    )
+
+    return CitationSearch(
+        line=number,
+        suggestions=found[:limit],
+        rules_tried=len(rule_labels),
+        candidates_tried=0 if prefiltered is None else len(prefiltered.candidates),
+        unindexed=0 if prefiltered is None else prefiltered.unindexed,
+        unfiltered=0 if prefiltered is None else prefiltered.unfiltered,
+        truncated=len(found) > limit or (prefiltered is not None and prefiltered.truncated),
+    )
+
+
+async def _label_title(
+    session: AsyncSession, chain: Sequence[FormalSystem], label: str
+) -> str | None:
+    # Across the chain rather than the proof's own system: a citation resolves up
+    # the spine, so an imported theorem's prose sits on whichever layer declared
+    # it. One query, since a chain is a handful of systems, and the nearest of
+    # what comes back is the one the citation meant.
+    nearness = nearest_first(chain)
+    rows = await session.scalars(
+        select(LabelDescriptionRow).where(
+            LabelDescriptionRow.formal_system_id.in_(list(nearness)),
+            LabelDescriptionRow.label == label,
+        )
+    )
+    described = min(
+        rows, key=lambda row: nearness[row.formal_system_id], default=None
+    )
+    return None if described is None else described.title
+
+
+async def _proof_of_label(
+    session: AsyncSession,
+    chain: Sequence[FormalSystem],
+    label: str,
+    user: User | None,
+) -> uuid.UUID | None:
+    """The proof establishing ``label``, when the viewer may read it.
+
+    **Through the library entry, not by name.** A citation names a *theorem*, and
+    `proofs.theorem_id` is the edge an import and a promotion both write — so the
+    entry the citation resolved to identifies its proof exactly. Matching
+    `proofs.name` instead gets it wrong twice over: a proof promoted under a
+    label other than its own name would not be found, and an unrelated proof that
+    merely happens to be *called* `imbi12d` would be linked in its place.
+
+    Resolved **nearest layer first**, the way a citation resolves: where a child
+    and an ancestor both declare a label, the child's entry is the one the check
+    used, and linking the ancestor's proof would send a reader to a theorem the
+    step did not apply.
+
+    None when there is no such entry (the label is a rule the system declares
+    rather than a theorem), when the entry has no proof (an imported primitive,
+    a `$a`), or when the viewer may not read the proof there is — which is the
+    same answer to a client either way: there is nothing to link to.
+    """
+    nearness = nearest_first(chain)
+    entries = await session.scalars(
+        select(PromotedTheoremRow).where(
+            PromotedTheoremRow.system_id.in_(list(nearness)),
+            PromotedTheoremRow.label == label,
+        )
+    )
+    entry = min(entries, key=lambda row: nearness[row.system_id], default=None)
+    if entry is None:
+        return None
+    proof = await session.scalar(select(Proof).where(Proof.theorem_id == entry.id))
+    if proof is None or not _is_readable(proof, user):
+        return None
+    return proof.id
+
+
+@router.get(
+    "/{proof_id}/lines/{number}/justification", response_model=LineJustification
+)
+async def explain_line(
+    proof_id: uuid.UUID,
+    number: int,
+    notation: str | None = Query(
+        None,
+        description=(
+            "Read the terms in this record through one of the system's stored "
+            "notations, as `/structure` does. Omit for the source spelling."
+        ),
+    ),
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_session),
+) -> LineJustification:
+    """Why this line follows — the step's own rule, substitution and provisos.
+
+    `[imbi12d, 2, 3]` names a step without explaining it. On a corpus of 47,589
+    theorems a reader does not know what `imbi12d` says, let alone what it was
+    applied *to*, and everything that would tell them is something the checker
+    already worked out and threw away.
+
+    **Checked rather than read**, like `/lines/{n}/citations` and for the same
+    reason: the substitution is derived by the match, and no stored row carries
+    it. Storing one per citation was the alternative and is the wrong trade — a
+    whole-corpus import would write tens of millions of rows for a record only
+    ever read one line at a time, and on the hover that asks for it.
+
+    Which is also why it is **signed-in only**, for all that it reads rather than
+    writes: it rebuilds the proof's whole system and re-checks it, so it is a
+    route of the shape the block comment above `verify_stored_proof` describes,
+    and that comment says such a route belongs on its list rather than beside the
+    reads. More so than the rest of them — this one is fired by *hovering*, so an
+    anonymous reader sweeping a citation column would be the cheapest way there
+    is to spend the server's compute.
+
+    Nothing is written. A read must not write, and a non-owner's transaction is
+    rolled back anyway.
+    """
+    proof = await _get_readable_or_404(session, proof_id, user)
+
+    # Unlocked, unlike `/citations`: this is fired by hovering a citation, and a
+    # reader sweeping a column would otherwise take the system's exclusive lock
+    # once per step and queue behind every verify and import on it. Nothing here
+    # writes, so the lock protects nothing; the cost is that a record read across
+    # a concurrent edit may describe the grammar either side of it, which is a
+    # cosmetic answer on a display-only endpoint.
+    verification = await _verify_with_references(
+        session, proof, persist=False, lock=False
+    )
+    checked = verification.engine_proof
+    if checked is None or verification.effective is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=verification.response.errors
+            or ["This proof could not be checked, so no step of it can be explained."],
+        )
+
+    line = _numbered_line(checked, number)
+    if line is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"This proof has no line {number}.",
+        )
+
+    projection = None
+    if notation is not None:
+        projection = await load_notation(session, proof.formal_system_id, notation)
+        if projection is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"This proof's system has no notation named '{notation}'.",
+            )
+
+    told = justification(line, projection)
+    if told is None:
+        # Not an error: a hole, a scope opener, a comment and a line whose check
+        # failed are all lines a citation never resolved for. Which one it is is
+        # `Failure`'s question, and answering it here would be a second, weaker
+        # copy of `diagnostics`.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Line {number} is not justified by a rule, so there is nothing "
+                "to explain: it opens a scope, states a hole, or did not check."
+            ),
+        )
+
+    chain = verification.effective.chain
+    return LineJustification(
+        line=number,
+        citation=line.reference_string_display,
+        kind=told.kind,
+        label=told.label,
+        name=told.name,
+        conclusion=told.conclusion,
+        premises=[
+            JustifyingPremise(
+                position=premise.position,
+                schema_form=premise.schema,
+                number=premise.number,
+                statement=premise.statement,
+                extra=premise.extra,
+            )
+            for premise in told.premises
+        ],
+        assignments=[
+            JustifyingAssignment(variable=a.variable, stands_for=a.stands_for)
+            for a in told.assignments
+        ],
+        provisos=[
+            JustifyingProviso(source=p.source, variables=list(p.variables))
+            for p in told.provisos
+        ],
+        discharges=told.discharges,
+        # Only for a label that names something. An unlabelled definition reports
+        # none, and looking one up by a stand-in would attach another label's
+        # prose — or another proof — to a card about this step.
+        title=(
+            await _label_title(session, chain, told.label) if told.label else None
+        ),
+        proof_id=(
+            await _proof_of_label(session, chain, told.label, user)
+            if told.label
+            else None
+        ),
+        notation=notation,
+    )

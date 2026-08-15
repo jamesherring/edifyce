@@ -6,20 +6,29 @@ and then builds a propositional natural-deduction system whose entire *term
 algebra* (atoms, variables, formulae) is regex-free, and whose discharge rules
 are checked on the kernel's term representation via `unify`.
 
-Note on scope: the one remaining `Regex` below is `reference` - the surface
-lexer for citation labels like "CP, 1". That is proof *surface syntax*, not part
-of the formal system's term algebra; the logic itself (what the atoms and
-formulae are) uses no regex.
+The system is assembled declaratively (`regex_free_spec` + `build_spec`), the
+same build path the database and API use. Note on scope: the one remaining regex
+is the `reference` line part - the surface lexer for citation labels like
+"CP, 1". That is proof *surface syntax*, not part of the formal system's term
+algebra; the logic itself (what the atoms and formulae are) uses no regex.
 """
 
 import pytest
 
 pytest.importorskip("regex")
 
-from copy import copy
-
-from website.logical.compiler import compile as compile_formal_system
+from website.logical.declarative import Rule, Subproof, SystemSpec, build_spec
 from website.logical.matching.patterns import AtomPattern
+
+from tests.spec_helpers import (
+    assumption_line,
+    atom_const_prod,
+    atom_family_prod,
+    brackets,
+    rule,
+    statement_line,
+    template_prod,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -67,98 +76,51 @@ def test_constant_and_family_are_mutually_exclusive():
 # ---------------------------------------------------------------------------
 # A regex-free-term-algebra propositional ND system, discharge via unify
 # ---------------------------------------------------------------------------
-REGEX_FREE = r"""FormalSystem RegexFree:
+def regex_free_spec() -> SystemSpec:
+    """A propositional ND system whose whole term algebra is regex-free.
 
-    Atom prop: p_#
-    Atom falsum: ⊥
-
-    UnionPattern formula:
-        prop
-        falsum
-
-    Pattern implication:
-        with a as formula, b as formula:
-            (a → b)
-
-    Pattern negation:
-        with a as formula:
-            ¬a
-
-    formula:
-        implication
-        negation
-
-    Regex reference:
-        ^[A-Za-z0-9, ]+$
-
-    Pattern statement:
-        with f as formula, r as reference:
-            f [r]
-    statement.formula():
-        return self.f
-    statement.reference():
-        return self.r
-
-    Pattern assumption_pattern:
-        with phi as formula:
-            assume phi
-    assumption_pattern.formula():
-        return self.phi
-
-    LineType claim:
-        pattern: statement
-        behaviour: logical
-    LineType assume:
-        pattern: assumption_pattern
-        behaviour: logical
-        scope: assumption
-
-    with a as formula, b as formula:
-
-        InferenceRule reiteration:
-            label:
-                R
-            antecedents:
-                a
-            deduction:
-                a
-
-        InferenceRule contradiction:
-            label:
-                X
-            antecedents:
-                a
-                ¬a
-            deduction:
-                ⊥
-
-        InferenceRule negation_intro:
-            label:
-                NI
-            subproof:
-                assume:
-                    a
-                derive:
-                    ⊥
-            deduction:
-                ¬a
-
-        InferenceRule conditional_proof:
-            label:
-                CP
-            subproof:
-                assume:
-                    a
-                derive:
-                    b
-            deduction:
-                (a → b)
-"""
+    Every formula is built from atoms only -- the infinite family ``p_#`` and the
+    constant ``⊥`` -- plus implication and negation. The discharge rules (``NI``,
+    ``CP``) are checked on the kernel term representation via ``unify``. The
+    metavariables are ``a``/``b`` (not ``p``): ``p`` is a concrete atom of the
+    family, so a schema variable named ``p`` would collide with it.
+    """
+    return SystemSpec(
+        name="RegexFree",
+        brackets=brackets(),
+        productions=[
+            atom_family_prod("formula", "prop", "p"),   # p, p_0, p_1, … (infinite)
+            atom_const_prod("formula", "falsum", "⊥"),  # the single literal ⊥
+            template_prod("formula", "implication", "(a → b)", [("a", "formula"), ("b", "formula")]),
+            template_prod("formula", "negation", "¬a", [("a", "formula")]),
+        ],
+        lines=[statement_line(), assumption_line()],
+        rules=[
+            rule("R", "reiteration", ["a"], "a", [("a", "formula")]),
+            rule("X", "contradiction", ["a", "¬a"], "⊥", [("a", "formula")]),
+            Rule(
+                label="NI",
+                name="negation introduction",
+                antecedents=[],
+                deduction="¬a",
+                bindings=[("a", "formula")],
+                subproof=Subproof(assume="a", derive="⊥"),
+            ),
+            Rule(
+                label="CP",
+                name="conditional proof",
+                antecedents=[],
+                deduction="(a → b)",
+                bindings=[("a", "formula"), ("b", "formula")],
+                subproof=Subproof(assume="a", derive="b"),
+            ),
+        ],
+    )
 
 
 @pytest.fixture(scope="module")
 def regex_free():
-    result = compile_formal_system(REGEX_FREE)
+    result = build_spec(regex_free_spec())
     assert "errors" not in result, result.get("errors")
     return result["system"]
 

@@ -1,15 +1,16 @@
 """Term trees: a parse-once representation of formulae.
 
-Today a formula only ever exists as a *string*. The matcher recovers its
-structure by backtracking over that string every time structure is needed
-(``StringPattern.match``), and serialises trees back to strings to compare
-them (``Match.reset_string`` / ``formatted_string``). Structure is therefore
-re-derived, over and over, from text.
+A formula reaches the engine as a *string*, and recovering its structure means
+backtracking over that string (``StringPattern.match``). Doing that every time
+structure is needed - which is what the matching layer used to do, comparing
+formulae by re-serialising trees back to text - re-derives the same structure
+over and over.
 
 A :class:`Term` is that structure captured once. You parse a string with the
-existing engine, project the resulting :class:`~website.logical.matching.Match`
-into a :class:`Term` with :func:`from_match`, and from then on every operation
-- equality, substitution, rendering - walks the tree. No string is re-parsed.
+matcher, project the resulting :class:`~website.logical.matching.Match` into a
+:class:`Term` with :func:`from_match`, and from then on every operation -
+equality, substitution, rendering - walks the tree. No string is re-parsed, and
+the ``Match`` has done its job.
 
 Worked example
 --------------
@@ -39,10 +40,10 @@ treated as immutable once built. See the interning section below.
 
 Design invariant - *the kernel hard-codes no logic*
 ---------------------------------------------------
-A :class:`Node` is a production (an arbitrary per-system ``Pattern``) applied
-to named child terms. A :class:`Var` ranges over a *sort*, which is likewise
-an arbitrary ``Pattern``. The term type knows nothing about definitions:
-relating a defined and defining form is an explicit, cited step verified in
+A :class:`Node` is an arbitrary per-system ``Constructor`` (the projection of
+a production) applied to named child terms. A :class:`Var` ranges over a *sort*,
+which is likewise an arbitrary constructor. The term type knows nothing about
+definitions: relating a defined and defining form is an explicit, cited step in
 :mod:`definitions`, never something ``equal`` or ``unify`` does implicitly.
 Nothing in this module enumerates connectives, quantifiers or set-builder
 syntax, so first-order logic, ZF(C) and near-English definitional statements
@@ -58,7 +59,7 @@ structural ``equal``, ``to_string``). It is deliberately the foundation the
 later steps build on, not a dependency of them:
 
 * Step 2 (:mod:`unify`) - first-order matching that *derives* a substitution
-  making a schema equal a term, reusing ``_signature`` for constructor
+  making a schema equal a term, reusing the constructor's signature for
   identity and ``substitute`` / ``equal`` here as its ground cases.
 * Step 3 (:mod:`side_conditions`) - a small, closed vocabulary of provisos
   (occurrence, leaf-disjointness, atomicity) checked structurally over these
@@ -76,7 +77,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from weakref import WeakValueDictionary
 
-from ..matching.patterns import AtomPattern, RegexPattern, StringPattern, UnionPattern
+from .constructors import Constructor, constructor_for
 
 if TYPE_CHECKING:
     from ..matching.context import Context
@@ -87,8 +88,8 @@ if TYPE_CHECKING:
     # "Term" is quoted: this is a real assignment (not a PEP 563 annotation),
     # and the Term class is defined further down this module.
     Binding = dict[str, "Term"]
-    # Free-variable inventory: variable name -> its sort (an arbitrary Pattern).
-    FreeVars = dict[str, Pattern]
+    # Free-variable inventory: variable name -> its sort (a Constructor).
+    FreeVars = dict[str, Constructor]
 
 
 class Term:
@@ -133,14 +134,16 @@ class Term:
 class Var(Term):
     """A schematic variable (metavariable) ranging over a sort.
 
-    ``sort`` is an arbitrary ``Pattern`` (e.g. ``formula``, ``term``,
-    ``setvar``) - the term layer places no constraints on what it may be. For
-    example the ``p`` in a modus-ponens schema is ``Var("p", <formula sort>)``.
+    ``sort`` is an arbitrary
+    :class:`~website.logical.kernel.constructors.Constructor` (e.g. ``formula``,
+    ``term``, ``setvar``) - the term layer places no constraints on what it may
+    be. For example the ``p`` in a modus-ponens schema is
+    ``Var("p", <formula sort>)``.
     """
 
-    def __init__(self, name: str, sort: Pattern) -> None:
+    def __init__(self, name: str, sort: Constructor) -> None:
         self.name: str = name
-        self.sort: Pattern = sort
+        self.sort: Constructor = sort
 
     def free_vars(self, acc: FreeVars | None = None) -> FreeVars:
         if acc is None:
@@ -157,12 +160,15 @@ class Var(Term):
         # Interned terms are shared, so identity is the common fast path (O(1)).
         if self is other:
             return True
-        # Two variables are equal when they share a name and an equivalent sort,
-        # e.g. Var("p", formula) == Var("p", formula), but != Var("q", formula).
+        # Two variables are equal when they share a name and a sort, e.g.
+        # Var("p", formula) == Var("p", formula), but != Var("q", formula).
+        # Sorts compare by identity: one constructor is projected per production
+        # and a built system's productions are canonical, so two sorts are the
+        # same exactly when they are the same object (see Constructor.admits).
         return (
             isinstance(other, Var)
             and other.name == self.name
-            and self.sort.equivalent(other.sort, context)
+            and self.sort is other.sort
         )
 
     def to_string(self) -> str:
@@ -179,7 +185,13 @@ class Var(Term):
 _BOUND_PREFIX = "\x00bound:"
 
 
-def _bound_label(index: int) -> str:
+def bound_label(index: int) -> str:
+    """The reserved name ``Bound(index)`` carries.
+
+    Public because a *reader* needs it too: a defining form stores its binders
+    abstractly, so anything showing one to a person has to put the declared name
+    back where the index sits (`formal_system.justification`).
+    """
     return f"{_BOUND_PREFIX}{index}"
 
 
@@ -202,8 +214,8 @@ class Bound(Var):
     ever produced by :func:`bind` from a definition's ``fresh`` declaration.
     """
 
-    def __init__(self, index: int, sort: Pattern) -> None:
-        super().__init__(_bound_label(index), sort)
+    def __init__(self, index: int, sort: Constructor) -> None:
+        super().__init__(bound_label(index), sort)
         self.index: int = index
 
     def free_vars(self, acc: FreeVars | None = None) -> FreeVars:
@@ -223,15 +235,15 @@ class Bound(Var):
 class Node(Term):
     """A compound term: a production applied to named child terms.
 
-    ``pattern``    - the production (an arbitrary ``Pattern``); the constructor.
-                     For ``"(a -> b)"`` this is the ``implication`` pattern.
+    ``constructor`` - the production it applies, projected. For ``"(a -> b)"``
+                     this is the ``implication`` constructor.
     ``children``   - ``{slot_label: Term}`` for the production's variable slots,
                      e.g. ``{"p": <term a>, "q": <term b>}``. Empty for a leaf.
     ``literal``    - surface string for a ground leaf with no slots (a constant,
                      atom or regex token), e.g. ``Node(atom, literal="a")``.
                      Mutually exclusive with ``children``.
-    ``sort``       - the ``Pattern`` this term *inhabits* (its type), used only
-                     by sort checks in matching. Normally ``None``: a term's sort
+    ``sort``       - the sort this term *inhabits* (its type), used only by
+                     sort checks in matching. Normally ``None``: a term's sort
                      is then its own constructor, which is already a member of
                      whatever union it belongs to. It is set only when the
                      surface constructor is *not* itself a member of the sort -
@@ -246,15 +258,15 @@ class Node(Term):
 
     def __init__(
         self,
-        pattern: Pattern,
+        constructor: Constructor,
         children: dict[str, Term] | None = None,
         literal: str | None = None,
-        sort: Pattern | None = None,
+        sort: Constructor | None = None,
     ) -> None:
-        self.pattern: Pattern = pattern
+        self.constructor: Constructor = constructor
         self.children: dict[str, Term] = children if children is not None else {}
         self.literal: str | None = literal
-        self.sort: Pattern | None = sort
+        self.sort: Constructor | None = sort
 
     def free_vars(self, acc: FreeVars | None = None) -> FreeVars:
         if acc is None:
@@ -270,7 +282,7 @@ class Node(Term):
         # Otherwise rebuild the same constructor over substituted children, e.g.
         # implication{p, q}.substitute({p: a, q: b}) -> implication{a, b}.
         return _node(
-            pattern=self.pattern,
+            constructor=self.constructor,
             children={
                 label: child.substitute(binding, context)
                 for label, child in self.children.items()
@@ -288,10 +300,10 @@ class Node(Term):
         if not isinstance(other, Node):
             return False
 
-        # Compare constructors by shape, not by pattern name: a rule schema's
-        # inline "(p -> q)" and a system's named `implication` production are
-        # the same constructor even though the Pattern objects differ.
-        if _signature(self.pattern) != _signature(other.pattern):
+        # Compare constructors by shape, not by name: a rule schema's inline
+        # "(p -> q)" and a system's named `implication` production are the same
+        # constructor even though they are different objects.
+        if self.constructor.signature != other.constructor.signature:
             return False
 
         # Ground leaves compare by their surface string, e.g. atom "a" == "a".
@@ -302,8 +314,8 @@ class Node(Term):
         # label - the two constructors may spell their variables differently
         # (e.g. `p`/`q` vs `lhs`/`rhs`) and either may repeat a variable.
         # Matching signatures guarantee an equal number of occurrences.
-        self_locations = _locations(self.pattern)
-        other_locations = _locations(other.pattern)
+        self_locations = self.constructor.slots
+        other_locations = other.constructor.slots
         if len(self_locations) != len(other_locations):
             return False
 
@@ -316,120 +328,33 @@ class Node(Term):
         return True
 
     def to_string(self) -> str:
-        # Rebuild the surface string from the production template and children.
-        # This is the parse-once payoff: reconstruction never calls match().
-        # e.g. implication{p: a, q: (b -> a)} with template "(p -> q)" walks the
-        # template emitting "(", then a, then " -> ", then "(b -> a)", then ")".
+        # Rebuild the surface string from the constructor's render steps and the
+        # children. This is the parse-once payoff: reconstruction never calls
+        # match(). e.g. implication{p: a, q: (b -> a)} walks ("lit", "("),
+        # ("slot", "p"), ("lit", " -> "), ("slot", "q"), ("lit", ")").
         if self.literal is not None:
             return self.literal
 
-        pattern = self.pattern
-        template = getattr(pattern, "pattern", None)
-        var_locations = getattr(pattern, "variable_locations", None)
-        non_variable_locations = getattr(pattern, "non_variable_locations", None)
-
-        if not isinstance(template, str) or var_locations is None or non_variable_locations is None:
-            # No template structure to walk (e.g. a bare regex/abstract sort).
+        pieces = self.constructor.pieces
+        if not pieces:
+            # No template structure to walk (a bare regex, atom or abstract sort).
             if len(self.children) == 1:
                 return next(iter(self.children.values())).to_string()
             return ""
 
         out = []
-        i = 0
-        while i < len(template):
-            if i in non_variable_locations:
-                # A literal chunk of the template, e.g. "(" or " -> ".
-                part = non_variable_locations[i]
-                out.append(part)
-                i += len(part)
-            elif i in var_locations:
-                # A slot: splice in the child's rendered string.
-                label = var_locations[i]["label"]
-                child = self.children.get(label)
-                out.append(child.to_string() if child is not None else label)
-                i += len(label)
+        for kind, text in pieces:
+            if kind == "lit":
+                out.append(text)
             else:
-                # Should not happen for a well-formed template; skip defensively.
-                i += 1
-
+                child = self.children.get(text)
+                out.append(child.to_string() if child is not None else text)
         return "".join(out)
 
     def __repr__(self) -> str:
         if self.literal is not None:
-            return f"Node({self.pattern.name}={self.literal!r})"
-        return f"Node({self.pattern.name}, {list(self.children)})"
-
-
-def _signature(pattern: Pattern) -> tuple[str, ...]:
-    r"""A constructor identity: the template's literal skeleton with every
-    variable *occurrence* replaced by an anonymous hole. It ignores the
-    pattern's name and its variable spellings, so structurally identical
-    productions - a rule's synthesised "(p -> q)" schema and a system's named
-    `implication` - are the same constructor.
-
-    For an :class:`~website.logical.matching.patterns.AtomPattern` the identity
-    is what the atom *denotes*, not which object declared it: a constant is
-    keyed by its value, a family by its base. So a rule's inline literal ``⊥``
-    and the system's declared ``falsum`` atom are one constructor even though
-    they are different pattern objects - which is what lets discharge match a
-    literal conclusion on the term representation. Family members share a
-    constructor and are told apart by their leaf literal.
-
-    Repetition is deliberately *not* encoded: both "(p -> q)" and "(p -> p)"
-    give ``'(\x00 -> \x00)'``. That lets a repeated-variable schema like
-    "(p -> p)" share a constructor with the production "(p -> q)" that parses a
-    subject like "(a -> a)"; whether the two holes actually hold *equal*
-    subterms is then enforced by the shared variable binding during child
-    alignment (see :meth:`Node.equal` / :func:`unify.match`), not here.
-
-    Examples::
-
-        "(p -> q)"  ->  ('string', '(\x00 -> \x00)')
-        "(p -> p)"  ->  ('string', '(\x00 -> \x00)')   # same constructor
-        "(a ∧ b)"   ->  ('string', '(\x00 ∧ \x00)')    # differs: different literals
-    """
-    if isinstance(pattern, StringPattern):
-        template = pattern.pattern
-        out = []
-        i = 0
-        while i < len(template):
-            if i in pattern.non_variable_locations:
-                part = pattern.non_variable_locations[i]
-                out.append(part)
-                i += len(part)
-            elif i in pattern.variable_locations:
-                out.append("\x00")
-                i += len(pattern.variable_locations[i]["label"])
-            else:
-                i += 1
-        return ("string", "".join(out))
-
-    if isinstance(pattern, AtomPattern):
-        if pattern.is_constant:
-            return ("atom", "const", pattern.value)
-        return ("atom", "family", pattern.base)
-
-    if isinstance(pattern, RegexPattern):
-        return ("regex", pattern.pattern)
-
-    return ("named", pattern.name)
-
-
-def _locations(pattern: Pattern) -> list[str]:
-    r"""Variable-slot labels in template order, **with repetition** - one entry
-    per occurrence. Two constructors with the same signature have the same
-    number of occurrences, so their location lists align position by position.
-
-    A repeated schema label forces the aligned subterms to be equal: "(p -> p)"
-    yields ``["p", "p"]``, so matching it against a production "(lhs -> rhs)"
-    (``["lhs", "rhs"]``) looks up ``children["p"]`` for both positions, and the
-    shared binding then requires ``lhs`` and ``rhs`` to agree. Distinct labels
-    like ``["p", "q"]`` simply pair up with the other side's labels in order.
-    """
-    return [
-        pattern.variable_locations[offset]["label"]
-        for offset in sorted(getattr(pattern, "variable_locations", {}))
-    ]
+            return f"Node({self.constructor.name}={self.literal!r})"
+        return f"Node({self.constructor.name}, {list(self.children)})"
 
 
 # ---------------------------------------------------------------------------
@@ -457,13 +382,13 @@ def _term_key(term: Term) -> tuple:
     in template-position order (with repetition). Children are already interned,
     so identity captures structure.
 
-    The constructor is keyed by pattern *identity*, not by ``_signature`` - two
-    productions with the same shape but different identity (a rule schema's
-    inline ``(p -> q)`` and a system's ``implication``) must not be merged: they
-    are still ``equal``, but they carry different sorts, and ``_term_sort``/
-    sort admission depend on a node keeping its own constructor. Interning is
-    therefore finer than equality (which is sound - ``equal`` remains the
-    authority); it only forgoes sharing between alpha-equivalent constructors.
+    The constructor is keyed by *identity*, not by its signature - two productions
+    with the same shape but different identity (a rule schema's inline ``(p -> q)``
+    and a system's ``implication``) must not be merged: they are still ``equal``,
+    but they carry different sorts, and ``_term_sort``/sort admission depend on a
+    node keeping its own constructor. Interning is therefore finer than equality
+    (which is sound - ``equal`` remains the authority); it only forgoes sharing
+    between alpha-equivalent constructors.
     """
     if isinstance(term, Bound):
         # Keyed by index (its identity), kept distinct from a plain Var so the
@@ -473,10 +398,10 @@ def _term_key(term: Term) -> tuple:
         return ("var", term.name, id(term.sort))
     child_ids = tuple(
         id(term.children[label])
-        for label in _locations(term.pattern)
+        for label in term.constructor.slots
         if label in term.children
     )
-    return ("node", id(term.pattern), term.literal, id(term.sort), child_ids)
+    return ("node", id(term.constructor), term.literal, id(term.sort), child_ids)
 
 
 def _canonical(term: Term) -> Term:
@@ -490,21 +415,21 @@ def _canonical(term: Term) -> Term:
     return term
 
 
-def _var(name: str, sort: Pattern) -> Var:
+def _var(name: str, sort: Constructor) -> Var:
     return _canonical(Var(name, sort))  # type: ignore[return-value]
 
 
-def _bound(index: int, sort: Pattern) -> Bound:
+def _bound(index: int, sort: Constructor) -> Bound:
     return _canonical(Bound(index, sort))  # type: ignore[return-value]
 
 
 def _node(
-    pattern: Pattern,
+    constructor: Constructor,
     children: dict[str, Term] | None = None,
     literal: str | None = None,
-    sort: Pattern | None = None,
+    sort: Constructor | None = None,
 ) -> Node:
-    return _canonical(Node(pattern, children, literal, sort))  # type: ignore[return-value]
+    return _canonical(Node(constructor, children, literal, sort))  # type: ignore[return-value]
 
 
 def intern(term: Term) -> Term:
@@ -518,7 +443,7 @@ def intern(term: Term) -> Term:
     """
     if isinstance(term, Node) and term.children:
         term = Node(
-            pattern=term.pattern,
+            constructor=term.constructor,
             children={label: intern(child) for label, child in term.children.items()},
             literal=term.literal,
             sort=term.sort,
@@ -526,7 +451,7 @@ def intern(term: Term) -> Term:
     return _canonical(term)
 
 
-def from_match(match: Match, context: Context) -> Term:
+def from_match(match: Match) -> Term:
     r"""Project a :class:`Match` tree into a :class:`Term` (the parse-once bridge).
 
     The engine's ``Match`` tree carries scaffolding the term layer does not
@@ -535,16 +460,28 @@ def from_match(match: Match, context: Context) -> Term:
     parsed ``"(a -> b)"``). Those are collapsed, so a formula is the same term
     however many union layers happened to parse it.
 
+    Takes no context: projection reads only the match's own structure, so where
+    it runs cannot change what it returns. That is what makes it safe to do once,
+    at parse time (see ``FormalSystem.parse``), rather than per check.
+
+    Nothing here knows definitions exist. Defined notation arrives already
+    shaped like any other production - its template *is* the constructor, and
+    ``Match.sort`` names the sort that ad-hoc constructor inhabits, which reads
+    straight across to :attr:`Node.sort` (see ``Definition.match``).
+
     The branches below, by example, for a system with ``formula`` (a union of
     ``atom`` and ``implication``)::
 
         match of "a"           (a declared variable)  -> Var("a", formula)
-        match of "a is a … of" (definition-backed)    -> Node(<defn.higher>, {...})
         match of "(a -> b)"    (union coercion)       -> collapse to the implication Node
         match of "a"           (a ground atom)        -> Node(atom, literal="a")
         match of "(a -> b)"    (compound)             -> Node(implication, {"p": .., "q": ..})
+        match of "a is a … of" (defined notation)     -> Node(<template>, {...}, sort=formula)
     """
-    pattern = match.pattern
+    constructor = constructor_for(match.pattern)
+    # The sort an ad-hoc constructor inhabits, projected like the constructor
+    # itself so a term carries no pattern.
+    sort = constructor_for(match.sort) if match.sort is not None else None
 
     def child_terms(m: Match) -> dict[str, Term]:
         children = {}
@@ -552,53 +489,34 @@ def from_match(match: Match, context: Context) -> Term:
             if isinstance(sub, list):
                 # Rare shape seen in a few matcher paths; take the representative.
                 sub = sub[0]
-            children[label] = from_match(sub, context)
+            children[label] = from_match(sub)
         return children
 
     # A variable leaf: the string is itself a declared schematic variable, e.g.
     # a formula written "phi" where phi was declared `with phi as formula`.
     if match.is_variable:
-        return _var(name=match.formatted_string(), sort=pattern)
-
-    # A definition-backed match: the matched sort (often a UnionPattern) is not
-    # itself a template, and its sub-matches are the definition's variables. The
-    # definition's `higher` form carries both the surface template and those
-    # variables, so we use it to build a faithfully-structured node - e.g. for a
-    # definition "x is a subset of y" of `formula`, "a is a subset of b" becomes
-    # Node(<higher "x is a subset of y">, {"x": .., "y": ..}). The definition
-    # itself is used only transiently to pick the constructor; the term keeps no
-    # reference to it (relating higher and lower forms is a cited step 4). Its
-    # ad-hoc higher constructor is not a member of the matched sort, so record
-    # that sort (e.g. `formula`) explicitly so sort checks still admit it.
-    if match.definition is not None:
-        higher = match.definition.higher
-        sort = match.definition.pattern
-        if match.sub_matches:
-            return _node(pattern=higher, children=child_terms(match), sort=sort)
-        return _node(pattern=higher, literal=match.formatted_string(), sort=sort)
+        return _var(name=match.string, sort=constructor)
 
     # A union match is a coercion wrapper around a single chosen branch: e.g.
     # `formula` wrapping the `implication` that matched "(a -> b)". Collapse it.
-    if isinstance(pattern, UnionPattern):
+    if constructor.kind == "union":
         subs = list(match.sub_matches.values())
         if len(subs) == 1:
-            return from_match(subs[0], context)
+            return from_match(subs[0])
         # No single branch (nothing to collapse to): treat as a ground leaf.
-        return _node(pattern=pattern, literal=match.formatted_string())
+        return _node(constructor=constructor, literal=match.string, sort=sort)
 
     # A ground leaf: regex/atomic token or a literal pattern with no slots, e.g.
     # the atom "a" -> Node(atom, literal="a").
     if not match.sub_matches:
-        return _node(pattern=pattern, literal=match.formatted_string())
+        return _node(constructor=constructor, literal=match.string, sort=sort)
 
     # A compound: recurse into the named sub-matches, e.g. "(a -> b)" ->
     # Node(implication, {"p": <term a>, "q": <term b>}).
-    return _node(pattern=pattern, children=child_terms(match))
+    return _node(constructor=constructor, children=child_terms(match), sort=sort)
 
 
-def from_pattern(
-    pattern: Pattern, context: Context, schematic: set[str] | None = None
-) -> Term:
+def from_pattern(pattern: Pattern, schematic: set[str] | None = None) -> Term:
     """Project a rule-schema ``Pattern`` into a :class:`Term` whose variable
     slots become :class:`Var` leaves.
 
@@ -617,56 +535,68 @@ def from_pattern(
     so ``antecedent2.substitute({"p": a, "q": b})`` yields the term for
     ``"(a -> b)"`` - the same term ``from_match`` produces for that string.
 
+    Takes no context, like :func:`from_match`: projection reads only the
+    production's own declarations, so where it runs cannot change what it
+    returns. It read one until a slot's sort became kernel data - the recursion
+    into a non-schematic slot used to re-enter here with that slot's *pattern*,
+    and needed a context to do it.
+
     Today a caller applies a rule by supplying the binding and checking the
     result with :meth:`Term.equal`. Step 2 will instead *derive* that binding
     by unifying this schema against the proof line, closing the loop into a
     term-based proof checker.
     """
+    return _from_constructor(constructor_for(pattern), schematic)
+
+
+def _from_constructor(constructor: Constructor, schematic: set[str] | None) -> Term:
+    """The body of :func:`from_pattern`, over the projected constructor.
+
+    Split out because a non-schematic slot recurses into that slot's *sort*, which
+    is a constructor rather than a production - the projection is the boundary,
+    and past it there are no patterns left to read.
+    """
 
     def is_schematic(label: str) -> bool:
         return schematic is None or label in schematic
 
-    if isinstance(pattern, AtomPattern):
+    if constructor.kind == "atom":
         # A constant in schema position is a ground leaf (e.g. `derive: ⊥`); a
         # family (e.g. a propositional-variable sort `p_#`) used directly is a
         # fresh variable ranging over it, like any other sort.
-        if pattern.is_constant:
-            return Node(pattern=pattern, literal=pattern.value)
-        return Var(name=pattern.name, sort=pattern)
+        if constructor.atom_value is not None:
+            return Node(constructor=constructor, literal=constructor.atom_value)
+        return Var(name=constructor.name, sort=constructor)
 
-    if isinstance(pattern, StringPattern):
+    if constructor.kind == "string":
         # Whole template is a single variable, e.g. an antecedent written "s"
         # (or "p"/"q"): the pattern is just that variable, so it is a bare Var.
-        if (
-            len(pattern.variable_locations) == 1
-            and not pattern.non_variable_locations
-            and 0 in pattern.variable_locations
-        ):
-            info = pattern.variable_locations[0]
-            if is_schematic(info["label"]):
-                return _var(name=info["label"], sort=info["pattern"])
+        pieces = constructor.pieces
+        if len(pieces) == 1 and pieces[0][0] == "slot":
+            label = pieces[0][1]
+            if is_schematic(label):
+                return _var(name=label, sort=constructor.slot_sorts[label])
 
-        if pattern.variables:
+        if constructor.has_declared_variables:
             # Compound, e.g. "(p -> q)": each variable slot is a Var of its
             # declared sort. A non-schematic slot recurses (kept for symmetry;
             # rule schemas rarely nest fixed structure).
             children = {}
-            for info in pattern.variable_locations.values():
-                label = info["label"]
+            for label, slot_sort in constructor.slot_sorts.items():
                 if is_schematic(label):
-                    children[label] = _var(name=label, sort=info["pattern"])
+                    children[label] = _var(name=label, sort=slot_sort)
                 else:
-                    children[label] = from_pattern(info["pattern"], context, schematic)
-            return _node(pattern=pattern, children=children)
+                    children[label] = _from_constructor(slot_sort, schematic)
+            return _node(constructor=constructor, children=children)
 
         # No variables: a ground literal production, e.g. a rule that fixes a
         # specific constant like the axiom schema "true".
-        return _node(pattern=pattern, literal=pattern.pattern)
+        return _node(constructor=constructor, literal=constructor.template)
 
     # A sort used directly in schema position (union/regex/abstract) is a
     # fresh variable ranging over that sort, e.g. an antecedent written
     # `formula` meaning "any formula".
-    return _var(name=pattern.name, sort=pattern)
+    return _var(name=constructor.name, sort=constructor)
 
 
 def abstract(term: Term, variables: FreeVars) -> Term:
@@ -697,7 +627,7 @@ def abstract(term: Term, variables: FreeVars) -> Term:
                 return _var(name=term.literal, sort=variables[term.literal])
             return term
         return _node(
-            pattern=term.pattern,
+            constructor=term.constructor,
             children={label: abstract(child, variables) for label, child in term.children.items()},
             sort=term.sort,
         )
@@ -727,7 +657,7 @@ def bind(term: Term, bound: dict[str, Bound]) -> Term:
                 return bound[term.literal]
             return term
         return _node(
-            pattern=term.pattern,
+            constructor=term.constructor,
             children={label: bind(child, bound) for label, child in term.children.items()},
             sort=term.sort,
         )

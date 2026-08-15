@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -32,29 +32,40 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.auth import current_active_user
-from app.db import Base, get_session
+from app.db import Base, discard_system_checks, get_session
 from app.db.models import User
+from app.db.side_conditions import SideConditionRow
+from app.db.side_conditions_mapping import (
+    build_definition_provisos,
+    build_rule_side_conditions,
+    validate_side_condition_metavars,
+)
 from app.db.systems import (
     AxiomBindingRow,
     AxiomRow,
     BracketRow,
     DefinitionBindingRow,
+    DefinitionFreshRow,
     DefinitionRow,
     LinePartRow,
     LineRow,
     ProductionBindingRow,
+    ProductionBindingScopeRow,
     RuleAntecedentRow,
     RuleBindingRow,
     RuleRow,
     SymbolRow,
 )
+from app.routers._common import lock_system
 from app.routers.systems import (
     axiom_out,
     bracket_out,
     definition_out,
     line_out,
-    owned_system_id_or_404,
+    load_effective,
+    load_system,
     production_out,
+    require_editable_system,
     rule_out,
     sort_out,
 )
@@ -73,6 +84,7 @@ from app.schemas import (
     LineTypeCreate,
     LineTypeUpdate,
     Production,
+    ProductionBinding,
     ProductionCreate,
     ProductionUpdate,
     ReorderRequest,
@@ -83,6 +95,7 @@ from app.schemas import (
     SortCreate,
     SortUpdate,
 )
+from website.logical.declarative import registered_definition_layering
 
 router = APIRouter(prefix="/formal-systems/{system_id}", tags=["formal-systems"])
 
@@ -93,10 +106,15 @@ Payload = BaseModel
 _SYMBOL_REFERENCES = (
     ProductionBindingRow.symbol_id,
     DefinitionBindingRow.symbol_id,
+    DefinitionFreshRow.symbol_id,
     AxiomBindingRow.symbol_id,
     RuleBindingRow.symbol_id,
     DefinitionRow.symbol_id,
     LineRow.logical_symbol_id,
+    # A sort named by a `disjoint`/`atom` proviso (definition or rule). Its
+    # ON DELETE CASCADE would otherwise silently drop the predicate node and
+    # weaken a soundness condition, so a referenced sort must be undeletable too.
+    SideConditionRow.sort_symbol_id,
 )
 
 
@@ -106,7 +124,22 @@ _SYMBOL_REFERENCES = (
 
 
 async def _owned(session: AsyncSession, system_id: uuid.UUID, user: User) -> None:
-    await owned_system_id_or_404(session, system_id, user.id)
+    # Every child mutation guards on this: the system must be owned *and* still a
+    # draft. A published system is frozen (see require_editable_system) — its
+    # compiled behaviour is what its published proofs were verified against, so a
+    # part edit could silently invalidate them. Editing one is a 409.
+    await require_editable_system(session, system_id, user.id)
+
+    # A draft's parts *are* editable, and every one of them can change how its
+    # proofs check — so the edit invalidates them. Done here rather than after
+    # each mutation because this is the single point every part route passes
+    # through; the two land in one transaction, so a failed edit rolls the
+    # invalidation back with it.
+    # Under the system lock: a verify in flight is reading these proofs' stored
+    # lines and trusting them, so the invalidation must not land between its read
+    # and its write (see _common.lock_system).
+    await lock_system(session, system_id)
+    await session.run_sync(lambda sync: discard_system_checks(sync, system_id))
 
 
 async def _commit(session: AsyncSession) -> None:
@@ -146,7 +179,7 @@ async def _delete_child(
     )
     if result.rowcount == 0:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found.")
-    await session.commit()
+    await _commit(session)
 
 
 async def _reorder_rows(
@@ -182,7 +215,13 @@ async def _apply_order(
 # Symbol helpers (sorts + productions live in one table)
 # ---------------------------------------------------------------------------
 
-_PRODUCTION_LOADS = (selectinload(SymbolRow.union), selectinload(SymbolRow.bindings).selectinload(ProductionBindingRow.symbol))
+_PRODUCTION_LOADS = (
+    selectinload(SymbolRow.union),
+    selectinload(SymbolRow.bindings).selectinload(ProductionBindingRow.symbol),
+    selectinload(SymbolRow.bindings)
+    .selectinload(ProductionBindingRow.scopes)
+    .selectinload(ProductionBindingScopeRow.scoped),
+)
 
 
 async def _resolve_symbol(session: AsyncSession, system_id: uuid.UUID, name: str) -> SymbolRow:
@@ -201,6 +240,14 @@ async def _resolve_sort(session: AsyncSession, system_id: uuid.UUID, name: str) 
     return symbol
 
 
+async def _system_symbols(session: AsyncSession, system_id: uuid.UUID) -> dict[str, SymbolRow]:
+    """The system's symbol namespace by name — for resolving a proviso's sorts."""
+    symbols = await session.scalars(
+        select(SymbolRow).where(SymbolRow.system_id == system_id)
+    )
+    return {symbol.name: symbol for symbol in symbols}
+
+
 async def _binding_rows(
     session: AsyncSession, system_id: uuid.UUID, row_cls: type[Base], bindings: Sequence[Binding]
 ) -> list[Base]:
@@ -208,6 +255,46 @@ async def _binding_rows(
     for i, b in enumerate(bindings):
         symbol = await _resolve_symbol(session, system_id, b.sort)
         rows.append(row_cls(position=i, var=b.var, symbol=symbol))
+    return rows
+
+
+async def _production_binding_rows(
+    session: AsyncSession, system_id: uuid.UUID, bindings: Sequence[ProductionBinding]
+) -> list[ProductionBindingRow]:
+    """A production's binding rows, with each binder's scope links.
+
+    Unlike a rule's or a definition's, a production's slot may *bind* over its
+    siblings, and that relation is stored as rows pointing at those siblings —
+    so it can only be built once the whole list exists.
+
+    Checked here for the same reason a binding's sort is: a payload naming a slot
+    the production does not have is a 400, not a row to store and surface as an
+    opaque build failure later. The engine's own check
+    (``declarative._binding_scopes``) is the stricter one — it knows the template,
+    so it also rejects a declared variable that occupies no slot.
+    """
+    rows: list[ProductionBindingRow] = []
+    for i, b in enumerate(bindings):
+        symbol = await _resolve_symbol(session, system_id, b.sort)
+        rows.append(ProductionBindingRow(position=i, var=b.var, symbol=symbol))
+
+    by_var = {row.var: row for row in rows}
+    for binding, row in zip(bindings, rows, strict=True):
+        for j, target in enumerate(binding.scopes_over):
+            if target == binding.var:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"Slot '{binding.var}' cannot scope over itself.",
+                )
+            if target not in by_var:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"Slot '{binding.var}' scopes over '{target}', which is not a "
+                    f"slot of this production.",
+                )
+            row.scopes.append(
+                ProductionBindingScopeRow(position=j, scoped=by_var[target])
+            )
     return rows
 
 
@@ -219,6 +306,19 @@ async def _require_symbol_name_free(
         stmt = stmt.where(SymbolRow.id != exclude_id)
     if await session.scalar(stmt) is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, f"A sort or production named '{name}' already exists.")
+
+
+async def _require_line_name_free(
+    session: AsyncSession, system_id: uuid.UUID, name: str, exclude_id: uuid.UUID | None = None
+) -> None:
+    # The engine keys line types by name (`add_line_type` replaces one of the
+    # same name), so two same-named lines would silently drop a shape. Keep names
+    # unique per system.
+    stmt = select(LineRow.id).where(LineRow.system_id == system_id, LineRow.name == name)
+    if exclude_id is not None:
+        stmt = stmt.where(LineRow.id != exclude_id)
+    if await session.scalar(stmt) is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"A line type named '{name}' already exists.")
 
 
 async def _symbol_referenced(session: AsyncSession, symbol_id: uuid.UUID) -> bool:
@@ -256,12 +356,21 @@ async def _get_symbol_or_404(
     return symbol
 
 
-def _production_kind(template: str | None, regex: str | None) -> str:
-    if (template is None) == (regex is None):
+def _production_kind(
+    template: str | None, regex: str | None, atom_value: str | None, atom_base: str | None
+) -> str:
+    # A production is exactly one of: a composite (notation `template`), a leaf
+    # `regex`, an atom constant (`atom_value`), or an atom family (`atom_base`).
+    if sum(field is not None for field in (template, regex, atom_value, atom_base)) != 1:
         raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "A production needs exactly one of 'template' or 'regex'."
+            status.HTTP_400_BAD_REQUEST,
+            "A production needs exactly one of 'template', 'regex', 'atom_value', or 'atom_base'.",
         )
-    return "regex" if regex is not None else "composite"
+    if regex is not None:
+        return "regex"
+    if atom_value is not None or atom_base is not None:
+        return "atom"
+    return "composite"
 
 
 async def _delete_symbol(
@@ -274,7 +383,7 @@ async def _delete_symbol(
     if await _symbol_referenced(session, symbol_id):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            f"This {noun} is referenced by a binding, definition, or line type; remove those first.",
+            f"This {noun} is referenced by a binding, definition, line type, or proviso; remove those first.",
         )
     if union and await session.scalar(
         select(SymbolRow.id).where(SymbolRow.member_of_union_id == symbol_id).limit(1)
@@ -283,7 +392,7 @@ async def _delete_symbol(
             status.HTTP_409_CONFLICT, "This sort still has productions; delete them first."
         )
     await session.execute(sa_delete(SymbolRow).where(SymbolRow.id == symbol_id))
-    await session.commit()
+    await _commit(session)
 
 
 async def _reorder_symbols(
@@ -368,11 +477,13 @@ async def create_production(
     union = await _resolve_sort(session, system_id, payload.sort)
     row = SymbolRow(
         system_id=system_id, name=payload.name,
-        kind=_production_kind(payload.template, payload.regex),
-        template=payload.template, regex=payload.regex, union=union,
+        kind=_production_kind(payload.template, payload.regex, payload.atom_value, payload.atom_base),
+        template=payload.template, regex=payload.regex,
+        atom_value=payload.atom_value, atom_base=payload.atom_base,
+        denotes_constant=payload.denotes_constant, union=union,
         position=await _next_symbol_position(session, system_id, union=False),
     )
-    row.bindings = await _binding_rows(session, system_id, ProductionBindingRow, payload.bindings)
+    row.bindings = await _production_binding_rows(session, system_id, payload.bindings)
     session.add(row)
     await _commit(session)
     return production_out(await _get_symbol_or_404(session, system_id, row.id, False, *_PRODUCTION_LOADS))
@@ -395,10 +506,16 @@ async def update_production(
         row.template = payload.template
     if "regex" in fields:
         row.regex = payload.regex
-    if "template" in fields or "regex" in fields:
-        row.kind = _production_kind(row.template, row.regex)
+    if "atom_value" in fields:
+        row.atom_value = payload.atom_value
+    if "atom_base" in fields:
+        row.atom_base = payload.atom_base
+    if "denotes_constant" in fields and payload.denotes_constant is not None:
+        row.denotes_constant = payload.denotes_constant
+    if fields & {"template", "regex", "atom_value", "atom_base"}:
+        row.kind = _production_kind(row.template, row.regex, row.atom_value, row.atom_base)
     if "bindings" in fields and payload.bindings is not None:
-        row.bindings = await _binding_rows(session, system_id, ProductionBindingRow, payload.bindings)
+        row.bindings = await _production_binding_rows(session, system_id, payload.bindings)
     await _commit(session)
     return production_out(await _get_symbol_or_404(session, system_id, production_id, False, *_PRODUCTION_LOADS))
 
@@ -437,19 +554,40 @@ async def _assign_bracket(session: AsyncSession, system_id: uuid.UUID, row: Brac
 
 
 async def _assign_line(session: AsyncSession, system_id: uuid.UUID, row: LineRow, payload: Payload, fields: set[str], creating: bool) -> None:
-    if creating and await session.scalar(
-        select(LineRow.id).where(LineRow.system_id == system_id)
-    ) is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "A system has at most one line type.")
+    # A system may declare several logical line types (e.g. a `claim` line and a
+    # scoped `assume` line); the engine tries each when parsing a proof line, but
+    # keys them by name, so names must stay unique.
     if "name" in fields and payload.name is not None:
+        await _require_line_name_free(session, system_id, payload.name, exclude_id=row.id)
         row.name = payload.name
     if "shape" in fields and payload.shape is not None:
         row.shape = payload.shape
+    if "scope" in fields:
+        # None clears the scope (a plain line); the Literal on the payload has
+        # already rejected any value other than "assumption"/"variable".
+        row.scope = payload.scope
+    if "behaviour" in fields and payload.behaviour is not None:
+        row.behaviour = payload.behaviour
     if "logical_sort" in fields:
         row.logical_symbol = (
             await _resolve_sort(session, system_id, payload.logical_sort)
             if payload.logical_sort is not None else None
         )
+    # Commentary carries no formula and opens no scope: the build rejects either
+    # pairing, so catch it here as a 422 rather than letting the system fail to
+    # compile later. (See declarative._build_line for why each is refused.)
+    if row.behaviour == "comment":
+        if row.logical_symbol is not None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "A comment line carries no formula, so it cannot have a logical sort.",
+            )
+        if row.scope is not None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "A comment line is unnumbered, so it cannot open a subproof scope; "
+                "no rule could discharge it.",
+            )
     if "parts" in fields and payload.parts is not None:
         row.parts = [LinePartRow(position=i, name=p.name, regex=p.regex) for i, p in enumerate(payload.parts)]
 
@@ -463,10 +601,53 @@ async def _assign_definition(session: AsyncSession, system_id: uuid.UUID, row: D
         row.higher = payload.higher
     if "lower" in fields and payload.lower is not None:
         row.lower = payload.lower
-    if "condition" in fields:
-        row.condition = payload.condition
-    if "bindings" in fields and payload.bindings is not None:
+    # `label` is nullable (an unnamed definition is cited only via `[Def, ...]`), so
+    # a client may clear it by sending null — assign whenever the field is present.
+    if "label" in fields:
+        row.label = payload.label
+    # Nullable like `label`, and the two columns move together: a stored label with
+    # no statement would name an obligation with nothing to check.
+    if "justification" in fields:
+        row.justification_label = (
+            payload.justification.label if payload.justification is not None else None
+        )
+        row.justification_statement = (
+            payload.justification.statement if payload.justification is not None else None
+        )
+    # Bindings first: a proviso's metavariables are validated against them, so a
+    # same-request binding change must land before the provisos are rebuilt.
+    bindings_changed = "bindings" in fields and payload.bindings is not None
+    if bindings_changed:
         row.bindings = await _binding_rows(session, system_id, DefinitionBindingRow, payload.bindings)
+    # The `fresh` clause (the defining form's bound variables) replaces wholesale
+    # like bindings; it's a distinct role, not a proviso metavariable source, so it
+    # doesn't feed the side-condition validation below.
+    if "fresh" in fields and payload.fresh is not None:
+        row.fresh = await _binding_rows(session, system_id, DefinitionFreshRow, payload.fresh)
+    # "Touched" means the client addressed the proviso at all — on create every
+    # field is in `fields`, so this is always true there; on PATCH it is the
+    # `model_fields_set`, so a name-only edit leaves the stored tree alone. An
+    # empty list clears the proviso.
+    if "provisos" in fields and payload.provisos is not None:
+        # Rebuild the proviso as structured side-condition rows. `side_conditions`
+        # is eager-loaded (see the definitions resource), so clearing it here is
+        # safe on the async path; delete-orphan removes the previous tree.
+        row.side_conditions = []
+        try:
+            if payload.provisos:
+                symbols = await _system_symbols(session, system_id)
+                build_definition_provisos(
+                    row, payload.provisos, symbols, {b.var for b in row.bindings}
+                )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    elif bindings_changed and row.side_conditions:
+        # Bindings changed but the proviso wasn't rewritten: re-check the stored
+        # tree so a dropped binding can't orphan a metavariable it still names.
+        try:
+            validate_side_condition_metavars(row.side_conditions, {b.var for b in row.bindings})
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
 
 async def _assign_axiom(session: AsyncSession, system_id: uuid.UUID, row: AxiomRow, payload: Payload, fields: set[str], creating: bool) -> None:
@@ -487,12 +668,73 @@ async def _assign_rule(session: AsyncSession, system_id: uuid.UUID, row: RuleRow
         row.name = payload.name
     if "deduction" in fields and payload.deduction is not None:
         row.deduction = payload.deduction
+    if "matching" in fields and payload.matching is not None:
+        row.matching = payload.matching
+    if "allow_extra_antecedents" in fields and payload.allow_extra_antecedents is not None:
+        row.allow_extra_antecedents = payload.allow_extra_antecedents
+    if "subproof" in fields:
+        # None clears the discharge subproof (a plain line-antecedent rule); the
+        # Subproof model has already enforced exactly one of assume/fresh.
+        sub = payload.subproof
+        row.subproof_derive = sub.derive if sub is not None else None
+        row.subproof_assume = sub.assume if sub is not None else None
+        row.subproof_fresh = sub.fresh if sub is not None else None
     if "antecedents" in fields and payload.antecedents is not None:
         row.antecedents = [
             RuleAntecedentRow(position=i, pattern=pattern) for i, pattern in enumerate(payload.antecedents)
         ]
-    if "bindings" in fields and payload.bindings is not None:
+    bindings_changed = "bindings" in fields and payload.bindings is not None
+    if bindings_changed:
         row.bindings = await _binding_rows(session, system_id, RuleBindingRow, payload.bindings)
+    rebuilt = "side_conditions" in fields and payload.side_conditions is not None
+    if rebuilt:
+        # Rebuild the provisos as structured side-condition rows. `side_conditions`
+        # is eager-loaded (see the rules resource), so clearing it here is safe on
+        # the async path; delete-orphan removes the previous tree.
+        row.side_conditions = []
+        if payload.side_conditions:
+            symbols = await _system_symbols(session, system_id)
+            try:
+                build_rule_side_conditions(
+                    row, payload.side_conditions, symbols, {b.var for b in row.bindings}
+                )
+            except ValueError as exc:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    elif bindings_changed and row.side_conditions:
+        # Bindings changed but the provisos weren't rewritten: re-check the stored
+        # tree so a dropped binding can't orphan a metavariable it still names.
+        try:
+            validate_side_condition_metavars(row.side_conditions, {b.var for b in row.bindings})
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+    # A string-rewriting rule is checked by associative matching, which has no
+    # term binding to evaluate a side-condition against; the engine would ignore
+    # any proviso on it. Reject the pairing here (across the final combined state,
+    # so flipping either field into conflict is caught) rather than let an author
+    # silently weaken a rule by choosing string matching. Mirrors the guard in
+    # website.logical.declarative.build_system.
+    if row.matching == "string" and row.side_conditions:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "String-rewriting rules cannot carry side-conditions; drop them or "
+            "switch the rule to structural matching.",
+        )
+
+    # A discharge rule is checked by consuming its subproof; that path never
+    # evaluates line antecedents or side-conditions, so keeping either would
+    # silently drop a soundness constraint. Reject across the final combined
+    # state (so adding a subproof to a rule that still has antecedents, or vice
+    # versa, is caught). Mirrors the guard in declarative.build_system.
+    # (`allow_extra_antecedents` is *not* part of this guard: the discharge check
+    # ignores it too, but an ignored allowance is only ever stricter, so it is
+    # inert rather than a dropped soundness constraint. See declarative.Rule.)
+    if row.subproof_derive is not None and (row.antecedents or row.side_conditions):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "A discharge rule (with a subproof) cannot also carry antecedents or "
+            "side-conditions; the discharge check ignores them. Remove them.",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -500,6 +742,81 @@ async def _assign_rule(session: AsyncSession, system_id: uuid.UUID, row: RuleRow
 # ---------------------------------------------------------------------------
 
 AssignFn = Callable[[AsyncSession, uuid.UUID, Base, Payload, set[str], bool], Awaitable[None]]
+ReorderGuard = Callable[[AsyncSession, uuid.UUID, list[uuid.UUID]], Awaitable[None]]
+
+
+async def _guard_definition_reorder(
+    session: AsyncSession, system_id: uuid.UUID, ids: list[uuid.UUID]
+) -> None:
+    """Reject a definition reorder that would silently un-layer a definition.
+
+    Definitions layer by position: a definition may build on the ones before it,
+    so its defining form is parsed against the grammar those extend. Dragging one
+    ahead of a definition whose notation it uses does not error — the dependent
+    definition just stops being recognised (``registered_definition_forms``
+    surfaces which survive). Catch that here so an editor can't quietly break
+    their own system with a reorder; the drop would otherwise only show up later
+    as proofs that no longer parse.
+    """
+    system = await load_system(session, system_id)
+    if system is None:
+        # _owned already ran; a race that removed the system just falls through to
+        # the reorder's own not-found handling.
+        return
+    stored = [row.id for row in system.definitions]
+    if set(ids) != set(stored) or len(ids) != len(stored):
+        # Not a valid permutation — let _apply_order raise the canonical 400.
+        return
+
+    # Against the whole inheritance chain, not this system alone: a child's
+    # definitions are written in its ancestors' notation, so read in isolation
+    # none of them layer, every set below is empty and the guard silently passes
+    # everything.
+    effective = await load_effective(session, system)
+    if effective.spec is None:
+        # The chain describes no system at all (a draft ancestor, a cross-layer
+        # collision). There is no layering to compare orders against, and
+        # `validate` is where that failure is reported.
+        return
+    spec = effective.spec
+
+    # Layering is tracked by position and mapped back to the row id at that
+    # position, so a definition is identified by *which row* it is — not by its
+    # defined form (two definitions can share one) nor by structural identity
+    # (equivalent definitions de-duplicate). This system's definitions are the
+    # tail of the chain's, so index i of `stored` is `inherited + i` of the spec.
+    inherited = len(spec.definitions) - len(stored)
+    layered_before = registered_definition_layering(spec)[inherited:]
+    live_before = {stored[i] for i, ok in enumerate(layered_before) if ok}
+
+    index_of = {row_id: i for i, row_id in enumerate(stored)}
+    # Only this system's own definitions move; an ancestor's stay where the
+    # chain put them. `definition_scope` needs no permuting with them — every
+    # definition of one layer carries the same scope.
+    proposed = replace(
+        spec,
+        definitions=[
+            *spec.definitions[:inherited],
+            *(spec.definitions[inherited + index_of[i]] for i in ids),
+        ],
+    )
+    layered_after = registered_definition_layering(proposed)[inherited:]
+    live_after = {ids[i] for i, ok in enumerate(layered_after) if ok}
+
+    lost = live_before - live_after
+    if not lost:
+        return
+    names = [
+        spec.definitions[inherited + i].name or spec.definitions[inherited + i].higher
+        for i, row_id in enumerate(stored)
+        if row_id in lost
+    ]
+    listed = ", ".join(f"'{name}'" for name in names)
+    raise HTTPException(
+        status.HTTP_400_BAD_REQUEST,
+        f"This order would un-define {listed}: a definition must stay after the "
+        "definitions whose notation it builds on.",
+    )
 
 
 @dataclass(frozen=True)
@@ -512,6 +829,10 @@ class ChildResource:
     serialize: Callable[[Base], BaseModel]
     loads: tuple[Any, ...]
     assign: AssignFn
+    # Optional pre-commit check run before a reorder is applied, to reject an
+    # order that is structurally valid row-by-row but breaks the collection as a
+    # whole (definitions, whose positional layering a reorder can silently break).
+    reorder_guard: ReorderGuard | None = None
 
 
 async def _create_child(
@@ -533,6 +854,12 @@ async def _update_child(
     await _owned(session, system_id, user)
     row = await _get_child_or_404(session, resource.row_cls, system_id, child_id, *resource.loads)
     await resource.assign(session, system_id, row, payload, payload.model_fields_set, False)
+    # Re-add the (persistent) row so any freshly built child subtree an assign
+    # created cascades into the session. A side-condition node sits in both its
+    # owner collection and its parent's `children` (delete-orphan) collection;
+    # on an update that double membership otherwise leaves new nodes unflushed.
+    # This mirrors the `session.add` the create path already does.
+    session.add(row)
     await _commit(session)
     return resource.serialize(await _get_child_or_404(session, resource.row_cls, system_id, child_id, *resource.loads))
 
@@ -550,6 +877,8 @@ async def _reorder_route(
     session: AsyncSession,
 ) -> list[BaseModel]:
     await _owned(session, system_id, user)
+    if resource.reorder_guard is not None:
+        await resource.reorder_guard(session, system_id, ids)
     rows = await _reorder_rows(session, resource.row_cls, system_id, ids, resource.loads)
     return [resource.serialize(row) for row in rows]
 
@@ -596,8 +925,11 @@ RESOURCES: tuple[ChildResource, ...] = (
     ChildResource(
         "definitions", DefinitionRow, DefinitionCreate, DefinitionUpdate, Definition, definition_out,
         (selectinload(DefinitionRow.symbol),
-         selectinload(DefinitionRow.bindings).selectinload(DefinitionBindingRow.symbol)),
+         selectinload(DefinitionRow.bindings).selectinload(DefinitionBindingRow.symbol),
+         selectinload(DefinitionRow.fresh).selectinload(DefinitionFreshRow.symbol),
+         selectinload(DefinitionRow.side_conditions).selectinload(SideConditionRow.sort_symbol)),
         _assign_definition,
+        reorder_guard=_guard_definition_reorder,
     ),
     ChildResource(
         "axioms", AxiomRow, AxiomCreate, AxiomUpdate, Axiom, axiom_out,
@@ -606,7 +938,8 @@ RESOURCES: tuple[ChildResource, ...] = (
     ChildResource(
         "rules", RuleRow, RuleCreate, RuleUpdate, Rule, rule_out,
         (selectinload(RuleRow.antecedents),
-         selectinload(RuleRow.bindings).selectinload(RuleBindingRow.symbol)),
+         selectinload(RuleRow.bindings).selectinload(RuleBindingRow.symbol),
+         selectinload(RuleRow.side_conditions).selectinload(SideConditionRow.sort_symbol)),
         _assign_rule,
     ),
 )

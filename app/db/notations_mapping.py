@@ -1,0 +1,453 @@
+"""Storing and loading a system's named notations.
+
+A :class:`~website.logical.rendering.Projection` is the engine's view — a map from
+constructor name to render steps, plus the :class:`~website.logical.rendering.Rule`
+spellings matched by *shape*. Both are the same thing as rows, so a notation
+persists with its system and every reader of every proof written against that
+system can ask for it.
+
+The direction of travel matters. A notation is *derived* — from a `.mm` file's
+``$t`` block, or from an author's overrides — and then stored, because deriving it
+needs the source the system was built from and a reader has only the database.
+Nothing here re-derives.
+
+Reading is **layered**, as the system is. A system inheriting from another is
+built from its ancestors' parts in front of its own, so their constructors are its
+constructors and their spellings are readings of it; a child's own rows win per
+constructor, and per rule *name*. Storing is not layered — a notation is stored
+against the one system it was derived for.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from sqlalchemy import delete, select
+from sqlalchemy.orm import selectinload
+
+from app.db.models import FormalSystem
+from app.db.systems import (
+    NotationPieceRow,
+    NotationRulePieceRow,
+    NotationRulePinRow,
+    NotationRuleRow,
+)
+from website.logical.rendering import (
+    PATH,
+    Projection,
+    Rule,
+    longest_label,
+    matches,
+    rules_by_constructor,
+)
+
+if TYPE_CHECKING:
+    import uuid
+    from collections.abc import Mapping, Sequence
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.orm import Session
+
+    from app.db.terms_mapping import TermGraph
+    from website.logical.kernel.constructors import Piece
+
+
+def store_notation(
+    session: Session,
+    system_id: uuid.UUID,
+    projection: Projection,
+) -> int:
+    """Replace ``system_id``'s notation named by ``projection``, returning its size.
+
+    Size is the templates, which is what a caller reports: the rules are curated
+    and single figures beside them.
+
+    Synchronous, because the one thing that derives a notation is an import, and
+    an import is synchronous - deriving needs the source a system was built from,
+    which a reader does not have. Reading is async, beside the API that does it.
+
+    Replaces rather than merges: a notation is derived wholesale from a source that
+    knows the whole grammar, so a re-derivation that dropped a constructor should
+    drop its rows too. Merging would leave the old spelling behind and make the
+    stored notation a history of every derivation rather than the current one.
+    """
+    session.execute(
+        delete(NotationPieceRow).where(
+            NotationPieceRow.formal_system_id == system_id,
+            NotationPieceRow.notation == projection.name,
+        )
+    )
+    # The pins and pieces go with it, by cascade — this is the only delete that
+    # names the rules, so the ORM has to see the rows rather than issue a bare
+    # DELETE, which would leave the children behind.
+    for stale in session.scalars(
+        select(NotationRuleRow).where(
+            NotationRuleRow.formal_system_id == system_id,
+            NotationRuleRow.notation == projection.name,
+        )
+    ).all():
+        session.delete(stale)
+    # Flushed before the replacements are added, not left to the next flush:
+    # SQLAlchemy orders INSERTs before DELETEs within a mapper, so re-storing a
+    # notation would insert a rule whose name the row being deleted still holds
+    # and trip `uq_notation_rules_system_notation_name`.
+    session.flush()
+    rows = [
+        NotationPieceRow(
+            formal_system_id=system_id,
+            notation=projection.name,
+            constructor=constructor,
+            position=position,
+            kind=kind,
+            text=text,
+        )
+        for constructor, pieces in projection.templates.items()
+        for position, (kind, text) in enumerate(pieces)
+    ]
+    session.add_all(rows)
+    session.add_all(
+        NotationRuleRow(
+            formal_system_id=system_id,
+            notation=projection.name,
+            # An unnamed rule still needs a key, since a name is what a nearer
+            # layer replaces one by. Its position is stable for a given
+            # derivation, which is the most a rule that declined to name itself
+            # can ask for.
+            name=rule.name or f"rule-{position}",
+            constructor=rule.constructor,
+            position=position,
+            pins=[
+                NotationRulePinRow(slot=slot, constructor=required)
+                for slot, required in rule.pins.items()
+            ],
+            pieces=[
+                NotationRulePieceRow(position=at, kind=kind, text=text)
+                for at, (kind, text) in enumerate(rule.pieces)
+            ],
+        )
+        for position, rule in enumerate(projection.rules)
+    )
+    return len(projection.templates)
+
+
+# The same bound `systems.MAX_INHERITANCE_DEPTH` applies on the spine, restated
+# here rather than imported: this module is the persistence layer and must not
+# depend on a router (as `system_relations_mapping` already records). A cycle is
+# refused when the edge is stored, so the `seen` set below is a backstop against
+# data that predates that check.
+_MAX_DEPTH = 32
+
+
+async def notation_layers(
+    session: AsyncSession, system_id: uuid.UUID
+) -> list[uuid.UUID]:
+    """``system_id`` and its ancestors, **root first**.
+
+    A notation belongs to a grammar, and a system inheriting from another is built
+    from its ancestors' parts concatenated in front of its own (``layered_spec``),
+    so the ancestors' constructors are this system's constructors and their
+    spellings are readings of it. Without this, building on an imported corpus
+    would silently cost you the corpus's own notation — which, since a corpus is
+    where a `$t` block comes from, is every notation there is.
+
+    Ids only. The chain is walked here rather than through
+    ``systems.load_chain`` because that eagerly loads whole systems, and a
+    corpus-sized one is seconds — far more than a *reading* should cost.
+    """
+    layers = [system_id]
+    seen = {system_id}
+    current = system_id
+    while len(layers) < _MAX_DEPTH:
+        parent = await session.scalar(
+            select(FormalSystem.inherits_from_id).where(FormalSystem.id == current)
+        )
+        if parent is None or parent in seen:
+            break
+        seen.add(parent)
+        layers.insert(0, parent)
+        current = parent
+    return layers
+
+
+async def notation_names(session: AsyncSession, system_id: uuid.UUID) -> list[str]:
+    """Every notation this system can be read in, in name order.
+
+    Its own and its ancestors' (:func:`notation_layers`). The source spelling is
+    not among them: it is the grammar, not a notation, and is what a reader gets
+    by asking for none.
+    """
+    layers = await notation_layers(session, system_id)
+    pieces = await session.scalars(
+        select(NotationPieceRow.notation)
+        .where(NotationPieceRow.formal_system_id.in_(layers))
+        .distinct()
+    )
+    # A notation is normally both halves, but nothing requires it: a projection of
+    # rules alone re-spells nothing by name and is still a reading a system offers.
+    rules = await session.scalars(
+        select(NotationRuleRow.notation)
+        .where(NotationRuleRow.formal_system_id.in_(layers))
+        .distinct()
+    )
+    return sorted(set(pieces) | set(rules))
+
+
+async def load_notation(
+    session: AsyncSession, system_id: uuid.UUID, notation: str
+) -> Projection | None:
+    """The notation of that name for ``system_id``, or None if there is none.
+
+    Layered like the system itself: the ancestors' rows first, then this system's
+    over the top, so a child re-spelling a constructor wins and everything it did
+    not mention keeps the parent's reading. That is what makes a notation useful
+    on a child of an imported corpus — the child adds a handful of productions and
+    inherits the spellings of the thousands it did not write.
+
+    None rather than an empty projection, so a caller can tell "no layer has such
+    a notation" from "this notation re-spells nothing" — the first is worth
+    reporting to whoever asked for it, the second renders as the source and is
+    unremarkable.
+    """
+    layers = await notation_layers(session, system_id)
+    rows = (
+        await session.scalars(
+            select(NotationPieceRow)
+            .where(
+                NotationPieceRow.formal_system_id.in_(layers),
+                NotationPieceRow.notation == notation,
+            )
+            .order_by(NotationPieceRow.constructor, NotationPieceRow.position)
+        )
+    ).all()
+    rules = await _load_rules(session, layers, notation)
+    if not rows and not rules:
+        return None
+
+    depth = {layer: index for index, layer in enumerate(layers)}
+    templates: dict[str, list[Piece]] = {}
+    winner: dict[str, int] = {}
+    for row in rows:
+        at = depth[row.formal_system_id]
+        if winner.get(row.constructor, -1) > at:
+            continue
+        if winner.get(row.constructor, -1) < at:
+            # A nearer layer re-spells this constructor, so the ancestor's steps
+            # are replaced rather than appended to.
+            winner[row.constructor] = at
+            templates[row.constructor] = []
+        templates[row.constructor].append((row.kind, row.text))
+    return Projection(
+        templates={name: tuple(pieces) for name, pieces in templates.items()},
+        name=notation,
+        rules=rules,
+    )
+
+
+async def _load_rules(
+    session: AsyncSession, layers: list[uuid.UUID], notation: str
+) -> tuple[Rule, ...]:
+    # Layered by rule *name*, as the templates are by constructor name: a child
+    # naming "sqrt" replaces the ancestor's "sqrt" and leaves its other rules
+    # standing. Replacing per *root constructor* instead would be wrong — several
+    # rules legitimately share a root, since fixing a different operator in the
+    # same applicator is the whole idiom.
+    found = (
+        await session.scalars(
+            select(NotationRuleRow)
+            .where(
+                NotationRuleRow.formal_system_id.in_(layers),
+                NotationRuleRow.notation == notation,
+            )
+            .options(
+                selectinload(NotationRuleRow.pins),
+                selectinload(NotationRuleRow.pieces),
+            )
+            .order_by(NotationRuleRow.position, NotationRuleRow.name)
+        )
+    ).all()
+    depth = {layer: index for index, layer in enumerate(layers)}
+    nearest: dict[str, tuple[int, Rule]] = {}
+    for row in found:
+        at = depth[row.formal_system_id]
+        if row.name in nearest and nearest[row.name][0] > at:
+            continue
+        nearest[row.name] = (
+            at,
+            Rule(
+                constructor=row.constructor,
+                pins={pin.slot: pin.constructor for pin in row.pins},
+                pieces=tuple((piece.kind, piece.text) for piece in row.pieces),
+                name=row.name,
+            ),
+        )
+    return tuple(rule for _at, rule in nearest.values())
+
+
+def render_each(
+    graph: TermGraph,
+    term_ids: Sequence[uuid.UUID],
+    projection: Projection,
+) -> dict[uuid.UUID, str]:
+    """Render many nodes of one graph, folding each subterm once.
+
+    :func:`render_stored` per node re-folds that node's whole subtree, so
+    rendering every node of a term costs the sum of its subtree sizes — fine for
+    one statement, wasteful on an endpoint whose shape invites being called
+    repeatedly (`GET /formal-systems/{id}/terms/{id}`). Sharing one memo across
+    the calls makes it linear, and interning means the sharing is the usual case
+    rather than the exception.
+
+    Sound because a stored term graph is **acyclic** by construction: `store_term`
+    interns bottom-up, so a node can never be its own ancestor and a node's
+    rendering cannot depend on the path taken to it. `_render_row` keeps its
+    path guard for the corrupt-data case regardless; what a memo would change
+    there is which empty string comes back, not whether one does.
+    """
+    templates = projection.templates
+    rules = rules_by_constructor(projection.rules)
+    memo: dict[uuid.UUID, str] = {}
+    return {
+        term_id: _render_row(graph, term_id, templates, rules, set(), memo)
+        for term_id in term_ids
+        if graph.node(term_id) is not None
+    }
+
+
+def render_stored(
+    graph: TermGraph, term_id: uuid.UUID | None, projection: Projection
+) -> str | None:
+    """Render a stored term through a stored notation, from rows alone.
+
+    The storage-side twin of :func:`website.logical.rendering.render`, and the
+    same fold — but over the row graph rather than over rebuilt
+    :class:`~website.logical.kernel.terms.Term`s, because a display should not
+    cost a system rebuild. Rebuilding is what a *check* is for, and it is seconds
+    on a corpus-sized grammar.
+
+    That is why a stored notation is completed to name every constructor
+    (:func:`~website.logical.rendering.total_projection`): with no grammar to hand,
+    a constructor the notation does not name has nothing to fall back to. A name
+    still missing renders as its literal or as nothing, which is a gap in the
+    notation rather than a reason to fail a page.
+
+    ``tests/test_notations_store.py`` pins this against the engine's own fold on a
+    real system, which is what keeps the two from drifting apart.
+    """
+    if term_id is None:
+        return None
+    return _render_row(
+        graph,
+        term_id,
+        projection.templates,
+        rules_by_constructor(projection.rules),
+        set(),
+    )
+
+
+def _descend_row(graph: TermGraph, term_id: uuid.UUID, path: str) -> uuid.UUID | None:
+    # `rendering._descend` over rows, and deliberately the same shape: the empty
+    # path is a miss rather than this node, so a template cannot recurse on itself.
+    if not path:
+        return None
+    found = term_id
+    remaining = path.split(PATH)
+    while remaining:
+        children = dict(graph.children_of(found))
+        span = longest_label(remaining, children.__contains__)
+        if not span:
+            return None
+        found = children[PATH.join(remaining[:span])]
+        remaining = remaining[span:]
+    return found
+
+
+def _matching_rule(
+    graph: TermGraph,
+    term_id: uuid.UUID,
+    constructor: str,
+    rules: Mapping[str, tuple[Rule, ...]],
+) -> Rule | None:
+    def constructor_at(path: str) -> str | None:
+        found = _descend_row(graph, term_id, path)
+        if found is None:
+            return None
+        row = graph.node(found)
+        return None if row is None else row.constructor
+
+    for rule in rules.get(constructor, ()):
+        if matches(rule, constructor_at):
+            return rule
+    return None
+
+
+def _render_row(
+    graph: TermGraph,
+    term_id: uuid.UUID,
+    templates: Mapping[str, tuple[Piece, ...]],
+    rules: Mapping[str, tuple[Rule, ...]],
+    seen: set[uuid.UUID],
+    memo: dict[uuid.UUID, str] | None = None,
+) -> str:
+    if memo is not None and term_id in memo:
+        return memo[term_id]
+    row = graph.node(term_id)
+    if row is None or term_id in seen:
+        # A term graph is a DAG, so a repeat is sharing rather than a cycle - but
+        # rendering shared structure twice is right, and only a *cycle* would not
+        # terminate. Guard the path, not the visit.
+        return ""
+    children = dict(graph.children_of(term_id))
+    # Tried before the per-constructor template and winning outright, as the
+    # engine's own fold does — the two are one operation over two shapes.
+    rule = (
+        _matching_rule(graph, term_id, row.constructor or "", rules) if rules else None
+    )
+    pieces = rule.pieces if rule is not None else templates.get(row.constructor or "")
+    if pieces is None:
+        if row.literal is not None:
+            return row.literal
+        if row.var_name is not None:
+            return row.var_name
+        if row.bound_index is not None:
+            # `Bound.to_string`'s placeholder, spelled again because there is no
+            # kernel term here to ask. Debugging only either way: an unfold
+            # instantiates every bound variable before anyone reads the result.
+            return f"⟨{row.bound_index}⟩"
+        if len(children) == 1:
+            return _remember(
+                memo,
+                term_id,
+                _render_row(
+                    graph,
+                    next(iter(children.values())),
+                    templates,
+                    rules,
+                    seen | {term_id},
+                    memo,
+                ),
+            )
+        return ""
+    out: list[str] = []
+    for kind, text in pieces:
+        if kind == "lit":
+            out.append(text)
+            continue
+        # Only a *rule*'s steps are paths. A template's are slot labels, and a
+        # label may itself contain a dot — set.mm names class variables `.+` and
+        # `.0.` — so reading one as a path would descend into nothing and print
+        # the label where the operand belongs.
+        child = (
+            _descend_row(graph, term_id, text) if rule is not None else children.get(text)
+        )
+        out.append(
+            _render_row(graph, child, templates, rules, seen | {term_id}, memo)
+            if child is not None
+            else text
+        )
+    return _remember(memo, term_id, "".join(out))
+
+
+def _remember(memo: dict[uuid.UUID, str] | None, term_id: uuid.UUID, shown: str) -> str:
+    if memo is not None:
+        memo[term_id] = shown
+    return shown

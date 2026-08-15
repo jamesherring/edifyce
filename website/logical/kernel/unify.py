@@ -8,11 +8,11 @@ schema equal the term - or prove none exists.
 
 Why "unify"
 -----------
-The engine today hosts a whole family of near-duplicate tree-walks -
-``Match.equivalent``, ``maps_to``, ``maps_to_up_to_definition``,
-``equivalent_under_definitions``, ``equivalent_with_some_replacements``,
-``Definition.check_application`` - each "compare two match trees, with a knob".
-On the term representation they are all the same operation with two settings:
+The engine grew a family of near-duplicate tree-walks - ``Match.equivalent``,
+``maps_to``, ``equivalent_with_some_replacements``, ``maps_to_up_to_definition``,
+``equivalent_under_definitions`` and ``Definition.check_application`` - each
+"compare two match trees, with a knob". All are now deleted, because on the term
+representation they are the same operation with two settings:
 
 * do variables bind?  no  -> structural equality (:meth:`Term.equal`)
                       yes -> :func:`match` (this module)
@@ -22,8 +22,8 @@ On the term representation they are all the same operation with two settings:
 So :func:`match` is the second corner of that table, and structural equality is
 the first: with no variables, ``match(a, b, ctx) is not None`` iff
 ``a.equal(b, ctx)``. Both share the *same* constructor identity
-(``terms._signature``) and positional child alignment, so matching and equality
-can never disagree about what "the same shape" means.
+(``Constructor.signature``) and positional child alignment, so matching and
+equality can never disagree about what "the same shape" means.
 
 This is *first-order matching* - variables occur only on the schema side and
 bind to whole subterms; it is the one-directional specialisation of unification
@@ -51,16 +51,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..matching.patterns import UnionPattern
-# Reuse the *same* constructor identity and slot alignment that Term.equal
-# uses, so matching and equality stay defined against one source of truth.
-from .terms import Var, _locations, _signature
+from .terms import Var
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from ..matching.context import Context
-    from ..matching.patterns import Pattern
+    # Reuse the *same* constructor identity and slot alignment that Term.equal
+    # uses, so matching and equality stay defined against one source of truth.
+    from .constructors import Constructor
     from .terms import Term
 
     # A substitution produced by matching: variable name -> the Term it binds to.
@@ -92,7 +91,7 @@ def match(
         if bound is not None:
             # Already bound: the subject must agree with the earlier binding.
             return binding if bound.equal(subject, context) else None
-        if not _sort_admits(schema.sort, subject, context):
+        if not sort_admits(schema.sort, subject):
             # Keep a variable from capturing a term of the wrong sort.
             return None
         # Extend with a copy; never mutate the caller's binding.
@@ -104,7 +103,7 @@ def match(
 
     # Both are Nodes. Constructors must agree name-insensitively (a schema's
     # "(p -> q)" and a production's "(lhs -> rhs)" are the same constructor).
-    if _signature(schema.pattern) != _signature(subject.pattern):
+    if schema.constructor.signature != subject.constructor.signature:
         return None
 
     # Ground leaves (atoms, constants) compare by their surface string.
@@ -115,8 +114,8 @@ def match(
     # constructors may spell their slots differently, and a schema may repeat a
     # variable (e.g. "(p -> p)"). Threading one binding makes a repeated - or
     # cross-antecedent - variable bind consistently.
-    schema_locations = _locations(schema.pattern)
-    subject_locations = _locations(subject.pattern)
+    schema_locations = schema.constructor.slots
+    subject_locations = subject.constructor.slots
     if len(schema_locations) != len(subject_locations):
         return None
 
@@ -154,28 +153,26 @@ def match_all(
     return current
 
 
-def _sort_admits(sort: Pattern, term: Term, context: Context) -> bool:
+def sort_admits(sort: Constructor, term: Term) -> bool:
     """Whether ``term`` is an instance of ``sort`` - a purely structural check,
     no string re-parsing. Keeps a variable from binding to a term of the wrong
     sort (an ``atom``-sorted variable must not capture an ``implication``).
+
+    One set lookup, because the sorts a production admits are a property of the
+    grammar and do not change once the system is built. Deriving them used to
+    mean walking the pattern lattice - structural equivalence, then nested union
+    membership - on every variable binding; ``Constructor.admits`` derives the
+    whole set once instead, which is also what lets this module hold no reference
+    to the matching layer.
     """
-    term_sort = _term_sort(term)
-    if sort.equivalent(term_sort, context, allow_mapping_to=True):
-        return True
-    if isinstance(sort, UnionPattern) and sort.contains_pattern(
-        term_sort, context, allow_nested=True
-    ):
-        # `term_sort` is one of the union's (possibly nested) branches, e.g. an
-        # `implication` is admitted where a `formula` is expected.
-        return True
-    return False
+    return _term_sort(term) in sort.admits
 
 
-def _term_sort(term: Term) -> Pattern:
-    """The sort (a ``Pattern``) that ``term`` inhabits - a variable's declared
-    sort, a node's recorded ``sort`` when it has one (a definition shorthand,
-    whose constructor is not itself a member of its sort), or otherwise the
-    node's own constructor (already a member of whatever union it belongs to)."""
+def _term_sort(term: Term) -> Constructor:
+    """The sort that ``term`` inhabits - a variable's declared sort, a node's
+    recorded ``sort`` when it has one (a definition shorthand, whose constructor
+    is not itself a member of its sort), or otherwise the node's own constructor
+    (already a member of whatever union it belongs to)."""
     if isinstance(term, Var):
         return term.sort
-    return term.sort if term.sort is not None else term.pattern
+    return term.sort if term.sort is not None else term.constructor

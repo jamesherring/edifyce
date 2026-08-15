@@ -5,24 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ..kernel import (
-    And,
-    DisjointLeaves,
-    Equal,
-    IsAtom,
-    Not,
-    Occurs,
-    Or,
-    Var,
-    from_match,
-    from_pattern,
-    match_all,
-)
+from ..kernel import Var, from_pattern, match_all
 from ..matching import StringPattern
+from ..matching.rewriting import joint_binding, joint_binding_exists
+from .diagnostics import SlotReport, numbers
 from .proof import ProofLine, Subproof
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from ..kernel import SideCondition, Term
     from ..matching.context import Context
@@ -30,6 +20,37 @@ if TYPE_CHECKING:
 
     # A rule match's substitution: schematic variable name -> the Term it binds to.
     Binding = dict[str, Term]
+    # A *rewriting* rule's, which binds surface strings rather than terms.
+    StringBinding = dict[str, str]
+
+
+# What marks a metavariable the *rule* never named: a bare-sort slot renamed apart
+# per occurrence by `InferenceRule._schema_term`. NUL because no grammar can
+# produce it, so the renamed name cannot collide with an author's own.
+#
+# Named here because two things need to agree about it. The rename makes two
+# `formula` slots independent premises rather than one shared binding, which is
+# the point; and anything *showing* a binding to a reader has to leave those out,
+# since `formula\x000` names nothing the reader can find in the schemas beside it
+# (`formal_system.justification`).
+ANONYMOUS = "\x00"
+
+
+def statement_term(pattern: Pattern) -> Term:
+    """The kernel term a schema pattern is unified as, metavariables shared.
+
+    A compound template (a Hilbert axiom, an imported ``$p``) carries a
+    precomputed *nested* term from the build; anything else projects flat, which
+    is one production. Either way its named metavariables keep their names, so a
+    repeated one binds consistently.
+
+    This is the projection for a schema read *as a statement* - one occurrence,
+    so nothing is renamed apart. :meth:`InferenceRule._schema_term` adds that
+    renaming for a bare-sort slot appearing in several antecedents.
+    """
+    if isinstance(pattern, StringPattern) and pattern.schema_term is not None:
+        return pattern.schema_term
+    return from_pattern(pattern)
 
 
 @dataclass(eq=False)
@@ -61,109 +82,166 @@ class SubproofSchema:
         return "variable" if self.fresh is not None else "assumption"
 
 
-def _normalise_side_condition(condition: SideCondition) -> tuple:
-    """A structural normal form for comparing side-conditions across rules.
-
-    Sorts compare by name (not object identity) so two systems that re-parse the
-    same proviso agree, and boolean combinators fold to their parts. Used only
-    by :meth:`InferenceRule.equivalent`.
-    """
-    if isinstance(condition, (And, Or)):
-        return (
-            type(condition).__name__,
-            tuple(sorted(_normalise_side_condition(part) for part in condition.parts)),
-        )
-    if isinstance(condition, Not):
-        return ("Not", _normalise_side_condition(condition.inner))
-    if isinstance(condition, Occurs):
-        return ("Occurs", condition.needle, condition.haystack)
-    if isinstance(condition, Equal):
-        return ("Equal", condition.left, condition.right)
-    if isinstance(condition, DisjointLeaves):
-        sort = None if condition.sort is None else condition.sort.name
-        return ("DisjointLeaves", condition.left, condition.right, sort)
-    if isinstance(condition, IsAtom):
-        sort = None if condition.sort is None else condition.sort.name
-        return ("IsAtom", condition.name, sort)
-    return (type(condition).__name__,)
-
-
 class InferenceRule:
     """Inference rules for deduction."""
 
-    def __init__(self, name, label=None, antecedents=None, deduction=None, side_conditions=None,
-                 allow_extra_antecedents=False, variables=None, subproof_schema=None):
+    def __init__(
+        self,
+        name: str,
+        label: str | None = None,
+        antecedents: list[Pattern] | None = None,
+        deduction: Pattern | None = None,
+        side_conditions: list[SideCondition] | None = None,
+        allow_extra_antecedents: bool = False,
+        variables: dict[str, Pattern] | None = None,
+        subproof_schema: SubproofSchema | None = None,
+        matching: str = "structural",
+    ) -> None:
 
         # The inference rule name
-        self.name = name.replace("_", " ")
+        self.name: str = name.replace("_", " ")
 
         # The inference rule label
-        self.label = label if label is not None else ""
+        self.label: str = label if label is not None else ""
 
         # List of antecedent patterns
-        self.antecedents = antecedents if antecedents is not None else []
+        self.antecedents: list[Pattern] = antecedents if antecedents is not None else []
 
-        # Deduction pattern
-        self.deduction = deduction
+        # Deduction pattern (set during compilation; None until then)
+        self.deduction: Pattern | None = deduction
 
         # Kernel side-conditions (provisos) that must hold for the rule to apply,
         # checked structurally against the term binding. See side_condition_syntax.
-        self.side_conditions = side_conditions if side_conditions is not None else []
+        self.side_conditions: list[SideCondition] = (
+            side_conditions if side_conditions is not None else []
+        )
+
+        # Raw proviso lines awaiting a parse. The build defers parsing to its
+        # finalisation pass — once the system's definitions have resolved, so a
+        # proviso argument may use defined notation — then fills `side_conditions`
+        # and clears this. Empty except transiently mid-build.
+        self.pending_side_conditions: list[str] = []
+
+        # Each parsed proviso's own source line, index-aligned to
+        # `side_conditions`. Kept only so a *failure* can quote the author's own
+        # words: a reader wants `x not free in phi`, not the repr of a frozen
+        # dataclass. Nothing checks against it, and a rule built without it (a
+        # caller passing `side_conditions=` directly) simply reports the parsed
+        # form instead — see `failing_proviso`.
+        self.side_condition_sources: list[str] = []
 
         # Optionally allow extra antecedents
-        self.allow_extra_antecedents = allow_extra_antecedents
+        self.allow_extra_antecedents: bool = allow_extra_antecedents
 
         # Keep a set of variables handy
-        self.variables = variables
+        self.variables: dict[str, Pattern] | None = variables
 
         # The subproof this rule discharges (SubproofSchema), if it is a
         # discharge rule. None for an ordinary line-antecedent rule.
-        self.subproof_schema = subproof_schema
+        self.subproof_schema: SubproofSchema | None = subproof_schema
+
+        # How a step is justified against this rule's schemas:
+        #   "structural" - first-order term unification (the default; logical
+        #                  systems, where a variable binds a whole subterm), or
+        #   "string"     - associative matching on the surface strings, for a
+        #                  string-rewriting (semi-Thue) system like MIU, whose
+        #                  rules split and concatenate flat strings in ways the
+        #                  term unifier structurally cannot. See
+        #                  ``website.logical.matching.rewriting``.
+        self.matching: str = matching
 
     @property
     def is_discharge(self) -> bool:
         # Whether this rule discharges a subproof rather than citing lines.
         return self.subproof_schema is not None
 
-    def check(self, antecedents, extra_antecedents, deduction, context):
-        # Check to see if the proposed proof lines are valid under this inference rule
+    def applies(
+        self,
+        antecedents: Sequence[ProofLine],
+        extra_antecedents: Sequence[ProofLine],
+        deduction: ProofLine,
+        context: Context,
+    ) -> Inference | None:
+        """The inference this citation makes, or ``None`` if it makes none.
 
+        The whole verdict :meth:`check` reaches, and **nothing recorded**: no
+        line is marked valid, no dependency edge is added. Split out because a
+        search *probes* — retrieval tries many rules against one line to find the
+        ones that could justify it (`website/logical/retrieval.py`) — and a probe
+        that marked its subject valid would leave the losers' bookkeeping behind
+        on the line it rejected.
+        """
         # Check the number of antecedents matches
         if not len(antecedents) == len(self.antecedents):
-            return False
+            return None
 
         if type(deduction) is not ProofLine:
             # Deduction doesn't point to a valid proof line
-            return False
+            return None
 
         # Deduction must be after the antecedents
-        for ant in antecedents + extra_antecedents:
+        for ant in (*antecedents, *extra_antecedents):
             if type(ant) is not ProofLine:
                 # antecedent isn't a proof line
-                return False
+                return None
 
             # Deduction in the same proof must come after the antecedents
             if deduction.proof is ant.proof and deduction.index() <= ant.index():
-                return False
+                return None
 
         # Create an inference instance
         inference = Inference(self, antecedents, extra_antecedents, deduction)
 
-        # Structural check over terms (the graph representation): the deduction
-        # and every logical antecedent must match their schemas under one shared
-        # binding, derived by unification. The formulae are already parsed, so we
-        # project them straight to terms and never re-run the string matcher.
-        binding = self._term_binding(antecedents, deduction, context)
-        if binding is None:
-            # No consistent match
+        if self.matching == "string":
+            # String-rewriting step: the deduction and every antecedent must
+            # match their schemas as *strings* under one shared substitution,
+            # found by associative matching (splitting/concatenation the term
+            # unifier cannot do). No kernel side-conditions on this path.
+            strings = self._string_binding(antecedents, deduction, context)
+            if strings is None:
+                return None
+            # Kept for the same reason the term binding is: it is what the step
+            # *did*, and a reader asking why a rewriting step follows is asking
+            # exactly what `x` matched. Held apart from `binding` because these
+            # are surface strings, and everything reading that one (schematic
+            # promotion, `restate`) means terms.
+            inference.string_binding = strings
+        else:
+            # Structural check over terms (the graph representation): the
+            # deduction and every logical antecedent must match their schemas
+            # under one shared binding, derived by unification. The formulae are
+            # already parsed, so we project them straight to terms and never
+            # re-run the string matcher.
+            binding = self._term_binding(antecedents, deduction, context)
+            if binding is None:
+                # No consistent match
+                return None
+
+            # Kernel side-conditions: soundness-critical provisos (freshness,
+            # $d, atomicity, equality) checked structurally against that binding.
+            if not self._side_conditions_hold(binding, context):
+                return None
+
+            # Kept for schematic promotion, which restates these very conditions
+            # over it; see `Inference.binding`.
+            inference.binding = binding
+
+        return inference
+
+    def check(
+        self,
+        antecedents: Sequence[ProofLine],
+        extra_antecedents: Sequence[ProofLine],
+        deduction: ProofLine,
+        context: Context,
+    ) -> bool:
+        # Check to see if the proposed proof lines are valid under this inference
+        # rule, and record it on the line when it is: the verdict is
+        # `applies`, and this is the half that commits to it.
+        inference = self.applies(antecedents, extra_antecedents, deduction, context)
+        if inference is None:
             return False
 
-        # Kernel side-conditions: soundness-critical provisos (freshness, $d,
-        # atomicity, equality) checked structurally against that same binding.
-        if not self._side_conditions_hold(binding, context):
-            return False
-
-        # Otherwise ok
         deduction.inference_rule = self
         deduction.inference = inference
         deduction.valid = True
@@ -174,14 +252,22 @@ class InferenceRule:
 
         return True
 
-    def check_discharge(self, subproof: Subproof, deduction: ProofLine, context: Context) -> bool:
-        # Check that `deduction` follows by discharging `subproof` under this
-        # rule. Discharge rules consume a whole subproof as a unit (conditional
+    def discharges(
+        self, subproof: Subproof, deduction: ProofLine, context: Context
+    ) -> bool:
+        """Whether ``deduction`` follows by discharging ``subproof``, recorded nowhere.
+
+        :meth:`check_discharge` without the bookkeeping, for the same reason
+        :meth:`applies` exists: a retrieval search probes every discharge rule
+        against every completed subproof in scope, and all but the winner are
+        rejections that must leave no trace on the line.
+        """
+        # Discharge rules consume a whole subproof as a unit (conditional
         # proof, reductio, universal generalisation) rather than citing lines.
 
         schema = self.subproof_schema
 
-        if schema is None or deduction.formula is None:
+        if schema is None or deduction.formula_term is None:
             return False
 
         # The subproof must be opened the way the schema expects (a hypothesis
@@ -190,18 +276,19 @@ class InferenceRule:
             return False
 
         conclusion = subproof.conclusion
-        if conclusion is None or conclusion.formula is None:
+        if conclusion is None or conclusion.formula_term is None:
             # An empty subproof discharges nothing.
             return False
 
         # Derive one consistent binding across the deduction and the subproof's
         # conclusion (and assumption, for hypothesis discharge) on the term
         # representation, the same way an ordinary rule binds its antecedents
-        # (see _term_binding): schemas via _schema_term, proof-line formulae via
-        # from_match, unified under one substitution. Shared metavariables - the
-        # `p` in both a subproof's assumption and the deduction - are forced to
-        # agree by that one binding; atoms unify by what they denote, so a
-        # literal conclusion such as a falsum `⊥` matches its declared atom.
+        # (see _term_binding): schemas via _schema_term, proof-line formulae
+        # already projected at parse time, unified under one substitution. Shared
+        # metavariables - the `p` in both a subproof's assumption and the
+        # deduction - are forced to agree by that one binding; atoms unify by what
+        # they denote, so a literal conclusion such as a falsum `⊥` matches its
+        # declared atom.
         schema_pairs: list[tuple[Pattern, ProofLine]] = [
             (self.deduction, deduction),
             (schema.conclusion, conclusion),
@@ -220,10 +307,10 @@ class InferenceRule:
 
         term_pairs: list[tuple[Term, Term]] = []
         for occurrence, (pattern, line) in enumerate(schema_pairs):
-            if line is None or line.formula is None:
+            if line is None or line.formula_term is None:
                 return False
             term_pairs.append(
-                (self._schema_term(pattern, occurrence, context), from_match(line.formula, context))
+                (self._schema_term(pattern, occurrence, context), line.formula_term)
             )
 
         if match_all(term_pairs, context) is None:
@@ -236,6 +323,17 @@ class InferenceRule:
         if schema.fresh is not None and not subproof.eigenvariable_is_fresh(context):
             return False
 
+        return True
+
+    def check_discharge(
+        self, subproof: Subproof, deduction: ProofLine, context: Context
+    ) -> bool:
+        # Check that `deduction` follows by discharging `subproof` under this
+        # rule, and record it on the line when it does. The verdict is
+        # `discharges`; this is the half that commits to it.
+        if not self.discharges(subproof, deduction, context):
+            return False
+
         deduction.inference_rule = self
         deduction.valid = True
         return True
@@ -246,17 +344,17 @@ class InferenceRule:
         """Derive the substitution under which the deduction and every logical
         antecedent match their schemas, or ``None`` if none is consistent.
 
-        Each ``(schema, subject)`` pair is projected into the term space -
-        schemas via :func:`from_pattern` (variable slots become ``Var`` leaves),
-        already-parsed formulae via :func:`from_match` - and unified together, so
-        a metavariable shared across antecedents and the conclusion is forced to
-        one value by a single binding rather than reconciled after the fact.
+        Both sides are already terms: a schema via :func:`from_pattern` (variable
+        slots become ``Var`` leaves), a proof line via the projection done when it
+        was parsed. They are unified together, so a metavariable shared across
+        antecedents and the conclusion is forced to one value by a single binding
+        rather than reconciled after the fact.
         """
-        if deduction.formula is None:
+        if deduction.formula_term is None:
             return None
 
         pairs = [
-            (self._schema_term(self.deduction, 0, context), from_match(deduction.formula, context))
+            (self._schema_term(self.deduction, 0, context), deduction.formula_term)
         ]
 
         for occurrence, (pattern, ant) in enumerate(zip(self.antecedents, antecedents), start=1):
@@ -270,14 +368,105 @@ class InferenceRule:
                 # type, it carries no formula variables, so it binds nothing.
                 continue
 
-            if ant.formula is None:
+            if ant.formula_term is None:
                 return None
 
             pairs.append(
-                (self._schema_term(pattern, occurrence, context), from_match(ant.formula, context))
+                (self._schema_term(pattern, occurrence, context), ant.formula_term)
             )
 
         return match_all(pairs, context)
+
+    def _string_pairs(
+        self, antecedents: Sequence[ProofLine], deduction: ProofLine
+    ) -> list[tuple[StringPattern, str]] | None:
+        """The ``(schema, subject-string)`` pairs for a string-rewriting step.
+
+        One pair for the deduction and one per aligned antecedent, read off the
+        parsed formulae' surface strings. ``antecedents`` may be a *prefix* of
+        the rule's slots (the assignment search prunes on prefixes); ``zip``
+        aligns to whatever is supplied. Returns ``None`` — the step cannot hold —
+        if a needed formula is absent or a schema is not a string template.
+        """
+        if deduction.formula_string is None or not isinstance(self.deduction, StringPattern):
+            return None
+
+        pairs: list[tuple[StringPattern, str]] = [(self.deduction, deduction.formula_string)]
+        for pattern, ant in zip(self.antecedents, antecedents):
+            if ant.formula_string is None or not isinstance(pattern, StringPattern):
+                return None
+            pairs.append((pattern, ant.formula_string))
+        return pairs
+
+    def _string_binding(
+        self, antecedents: Sequence[ProofLine], deduction: ProofLine, context: Context
+    ) -> StringBinding | None:
+        """The substitution making every schema instantiate to its line, as
+        strings — the string-rewriting analogue of :meth:`_term_binding`."""
+        pairs = self._string_pairs(antecedents, deduction)
+        return None if pairs is None else joint_binding(pairs, context)
+
+    def _string_binding_exists(
+        self, antecedents: Sequence[ProofLine], deduction: ProofLine, context: Context
+    ) -> bool:
+        """Whether such a substitution exists — the predicate the search asks.
+
+        Separate from :meth:`_string_binding` because the search asks it far more
+        often than anything wants the binding: `concludes`, `slot_admits` and
+        `prefix_binding_exists` are rejections.
+        """
+        pairs = self._string_pairs(antecedents, deduction)
+        return pairs is not None and joint_binding_exists(pairs, context)
+
+    def concludes(self, line: ProofLine, context: Context) -> bool:
+        """Whether this rule's *conclusion* could be ``line``, ignoring its premises.
+
+        The conclusion-side twin of :meth:`slot_admits`, and the filter retrieval
+        runs first: a rule whose conclusion cannot be the goal cannot justify it
+        however its slots are filled, so this rejects the overwhelming majority of
+        a library before any antecedent search is attempted. Necessary and not
+        sufficient — the premises still have to be found, and a proviso can still
+        block — so a caller confirms with :meth:`applies`.
+
+        For a rule with no antecedents it is *nearly* the whole verdict, missing
+        only the side conditions, which is why the search confirms even those.
+        """
+        if self.matching == "string":
+            # No antecedents: `_string_pairs` reduces to the conclusion alone.
+            return self._string_binding_exists((), line, context)
+
+        if line.formula_term is None:
+            return False
+
+        return (
+            match_all(
+                [(self._schema_term(self.deduction, 0, context), line.formula_term)],
+                context,
+            )
+            is not None
+        )
+
+    def concludes_anything(self, context: Context) -> bool:
+        """Whether this rule justifies *every* goal, so finding it says nothing.
+
+        A hypothesis rule has no antecedents and a bare metavariable for a
+        conclusion, so it applies to any line in the system — `[HYP]` is how one
+        states an assumption. A search that surfaces it has found a true answer
+        and an uninformative one: it is a fact about the system, not about the
+        goal, and it would otherwise sort ahead of every real justification on
+        having no premises to find.
+
+        Both halves are required. A rule with a bare-metavariable conclusion but
+        real antecedents is perfectly informative — modus ponens concludes `q`,
+        which matches anything, and everything it tells you is in its premises.
+        """
+        if self.antecedents or self.is_discharge:
+            return False
+        if self.matching == "string":
+            # A string schema constrains by its literal parts; "anything" is not a
+            # shape this projection can see, so it is left to the search.
+            return False
+        return isinstance(self._schema_term(self.deduction, 0, context), Var)
 
     def slot_admits(self, slot: int, line: ProofLine, context: Context) -> bool:
         """Whether ``line`` could fill antecedent ``slot`` on its own.
@@ -296,16 +485,24 @@ class InferenceRule:
 
         pattern = self.antecedents[slot]
 
+        if self.matching == "string":
+            # String rules bind by associative matching, not term unification;
+            # a line is admissible for the slot if its surface string can match
+            # the slot schema on its own (cross-slot sharing is settled later).
+            if line.formula_string is None or not isinstance(pattern, StringPattern):
+                return False
+            return joint_binding_exists([(pattern, line.formula_string)], context)
+
         if line.line_type.behaviour != "logical" and pattern.equivalent(
             line.line_type.pattern, context
         ):
             # An instance of a non-logical line: matched by type, binds nothing.
             return True
 
-        if line.formula is None:
+        if line.formula_term is None:
             return False
 
-        pair = (self._schema_term(pattern, slot + 1, context), from_match(line.formula, context))
+        pair = (self._schema_term(pattern, slot + 1, context), line.formula_term)
         return match_all([pair], context) is not None
 
     def prefix_binding_exists(
@@ -322,6 +519,11 @@ class InferenceRule:
         which already includes the deduction pair (so a shared metavariable is
         forced to agree from the first slot on).
         """
+        if self.matching == "string":
+            # The string-rewriting analogue: a prefix that admits no joint
+            # substring binding across the deduction and the chosen slots cannot
+            # be completed, so the search can prune it here too.
+            return self._string_binding_exists(antecedents, deduction, context)
         return self._term_binding(antecedents, deduction, context) is not None
 
     def _schema_term(self, pattern: Pattern, occurrence: int, context: Context) -> Term:
@@ -336,26 +538,141 @@ class InferenceRule:
         variable is renamed apart rather than collapsed into one binding.
 
         A compound template (e.g. a Hilbert axiom ``(p -> (q -> p))``) carries a
-        precomputed *nested* term from the compiler (``schema_term``), because a
+        precomputed *nested* term from the build (``schema_term``), because a
         flat ``from_pattern`` projection would be one production while the proof
         formula it must match is a nested tree of the system's productions. Its
         named metavariables are shared, so it needs no per-occurrence renaming.
         """
         if isinstance(pattern, StringPattern):
             # A compound template carries a precomputed *nested* term from the
-            # compiler; a flat from_pattern projection would be one production
+            # build; a flat from_pattern projection would be one production
             # while the proof formula it must match is a nested tree. Either way
             # its named metavariables are shared, so no per-occurrence renaming.
-            if pattern.schema_term is not None:
-                return pattern.schema_term
-            return from_pattern(pattern, context)
+            return statement_term(pattern)
 
-        term = from_pattern(pattern, context)
+        term = from_pattern(pattern)
         renames = {
-            name: Var(f"{name}\x00{occurrence}", sort)
+            name: Var(f"{name}{ANONYMOUS}{occurrence}", sort)
             for name, sort in term.free_vars().items()
         }
         return term.substitute(renames, context) if renames else term
+
+    @staticmethod
+    def schema_text(pattern: Pattern | None) -> str:
+        """A slot's schema as a reader would write it.
+
+        `str(pattern)` is the class-prefixed repr (`StringPattern: antecedent`),
+        which names the machinery and not the schema. A compound rule schema keeps
+        its own surface form in `display_pattern` — `( p -> q )`, which is the
+        thing a caller has to go and prove — and anything else is named by the
+        sort it draws from.
+
+        Public because it is the rule's *native* form, which is what a reader
+        being shown why a step follows has to be given
+        (:mod:`~.justification`); `""` for the pattern a rule has not been
+        compiled with yet, since a schema nobody has parsed reads as nothing.
+        """
+        if pattern is None:
+            return ""
+        if isinstance(pattern, StringPattern):
+            return pattern.display_pattern
+        return pattern.name
+
+    def admissibility(
+        self, lines: Sequence[ProofLine], context: Context
+    ) -> dict[int, list[int]]:
+        """The slot/line bipartite graph: slot index -> indices of ``lines``.
+
+        An edge means the line is *individually* admissible for that slot
+        (:meth:`slot_admits`), which is the necessary condition any globally
+        consistent assignment satisfies pairwise. Both the checking search
+        (`Proof._first_valid_assignment`) and the diagnosis build their answers
+        from this, and it is the expensive part of either — one unification per
+        edge — so it is built once and passed around rather than recomputed.
+        """
+        return {
+            slot: [
+                j
+                for j, line in enumerate(lines)
+                if self.slot_admits(slot, line, context)
+            ]
+            for slot in range(len(self.antecedents))
+        }
+
+    def unsatisfied_slots(
+        self, adjacency: Mapping[int, Sequence[int]]
+    ) -> tuple[SlotReport, ...]:
+        """Antecedent slots that **no** cited line could fill on its own.
+
+        The most useful thing a failed citation can say: a slot with no candidate
+        is a premise the proof does not yet have, which is exactly the next goal a
+        goal-directed caller wants.
+
+        Empty when every slot has *some* candidate — which does not mean the rule
+        applies, only that the failure is about the slots holding together rather
+        than about one being unreachable.
+        """
+        return tuple(
+            SlotReport(index=slot, schema=self.schema_text(self.antecedents[slot]))
+            for slot in range(len(self.antecedents))
+            if not adjacency.get(slot)
+        )
+
+    def slot_reports(
+        self, lines: Sequence[ProofLine], adjacency: Mapping[int, Sequence[int]]
+    ) -> tuple[SlotReport, ...]:
+        """Every slot, with the cited lines individually admissible for it.
+
+        What :meth:`unsatisfied_slots` cannot say: when each slot has candidates
+        but they cannot be assigned to distinct lines, or cannot bind together,
+        the useful record is the whole bipartite graph rather than one slot.
+        """
+        return tuple(
+            SlotReport(
+                index=slot,
+                schema=self.schema_text(self.antecedents[slot]),
+                candidates=numbers([lines[j] for j in adjacency.get(slot, ())]),
+            )
+            for slot in range(len(self.antecedents))
+        )
+
+    def failing_proviso(
+        self,
+        antecedents: Sequence[ProofLine],
+        deduction: ProofLine,
+        context: Context,
+    ) -> str | None:
+        """The first proviso that does not hold for this assignment, or None.
+
+        Reported in the author's own words where the build kept them
+        (`side_condition_sources`), because `x not free in phi` is what a reader
+        — and a caller trying to repair the step — can act on, where the repr of a
+        frozen dataclass is not.
+
+        None means the provisos are not what stopped this assignment: either they
+        all hold, or no binding exists for them to be checked against, which is a
+        different failure and is reported as one.
+        """
+        if self.matching == "string":
+            # A string-rewriting step binds surface strings and carries no kernel
+            # proviso, so there is never one to blame.
+            return None
+        binding = self._term_binding(antecedents, deduction, context)
+        if binding is None:
+            return None
+        for index, condition in enumerate(self.side_conditions):
+            try:
+                if condition.check(binding, context):
+                    continue
+            except Exception:
+                # A *malformed* proviso fails closed in `_side_conditions_hold`,
+                # so it is genuinely why the rule did not apply and naming it is
+                # the whole point of being here.
+                pass
+            if index < len(self.side_condition_sources):
+                return self.side_condition_sources[index]
+            return str(condition)
+        return None
 
     def _side_conditions_hold(self, binding: Binding, context: Context) -> bool:
         """Whether every side-condition holds against the rule's term binding.
@@ -375,68 +692,33 @@ class InferenceRule:
         except Exception:
             return False
 
-    def equivalent(self, other, context, memo=None):
-        # Check equivalent
-
-        if memo is None:
-            memo = {}
-
-        if (self, other) in memo:
-            return memo[(self, other)]
-
-        # Assume false
-        memo[(self, other)] = False
-
-        if type(other) is not InferenceRule:
-            return False
-
-        if not self.name == other.name:
-            return False
-
-        if not self.label == other.label:
-            return False
-
-        if not len(self.antecedents) == len(other.antecedents):
-            return False
-
-        if not self.allow_extra_antecedents == other.allow_extra_antecedents:
-            return False
-
-        # Assume true
-        memo[(self, other)] = True
-
-        for ant, other_ant in zip(self.antecedents, other.antecedents):
-            if not ant.equivalent(other_ant, context, memo):
-                memo[(self, other)] = False
-                return False
-
-        if not self.deduction.equivalent(other.deduction, context, memo):
-            memo[(self, other)] = False
-            return False
-
-        if [_normalise_side_condition(c) for c in self.side_conditions] != [
-            _normalise_side_condition(c) for c in other.side_conditions
-        ]:
-            memo[(self, other)] = False
-            return False
-
-        # Otherwise ok
-        return True
-
 
 @dataclass(eq=False)
 class Inference:
     """A successful application of an inference rule, recorded on the deduction.
 
-    Holds the rule and the proof lines it related. The structural match is now a
-    term binding derived in :meth:`InferenceRule.check` (via unification) and is
-    not retained here - the old Match-tree fields and variable-reconciliation
-    walk went away with the string-based condition path.
+    Holds the rule and the proof lines it related, plus the term ``binding`` the
+    match derived - what each of the rule's metavariables stood for on this step.
+
+    The binding is kept because a *schematic promotion* needs it: nominating a
+    leaf of the proof as a metavariable claims the proof goes through for every
+    instance, and that is only true if the provisos the steps relied on travel
+    with the theorem. Restating one out of the step's binding is exactly
+    :func:`~website.logical.kernel.side_conditions.restate`, and this is where
+    the binding to restate over comes from. ``None`` for a string-rewriting step,
+    which binds surface strings rather than terms and carries no kernel proviso —
+    that step's substitution is ``string_binding``, kept apart precisely so
+    nothing meaning *terms* can read it by accident.
     """
 
-    inference_rule: "InferenceRule"
+    inference_rule: InferenceRule
 
     # Antecedents and extra antecedents are proof lines; deduction is a proof line.
-    antecedents: list
-    extra_antecedents: list
-    deduction: "ProofLine"
+    antecedents: Sequence[ProofLine]
+    extra_antecedents: Sequence[ProofLine]
+    deduction: ProofLine
+    binding: Binding | None = None
+    # The surface-string substitution of a semi-Thue step (MIU and friends), where
+    # `binding` is None. What a reader asking why the step follows needs, and the
+    # one thing a rewriting rule's citation cannot say.
+    string_binding: StringBinding | None = None

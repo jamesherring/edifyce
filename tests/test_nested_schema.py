@@ -17,74 +17,34 @@ pytest.importorskip("regex")
 
 from copy import copy
 
-from website.logical.compiler import compile as compile_formal_system
-from website.logical.kernel import from_match
-from website.logical.kernel.terms import _signature
+from website.logical.declarative import SystemSpec, build_system
+from tests.spec_helpers import brackets, regex_prod, rule as rule_spec, statement_line, template_prod
 
 
 # A minimal Hilbert-style implication system: axiom schemas as zero-premise
 # rules (K, S), plus modus ponens. Deeply nested axiom templates are the point.
-HILBERT = r"""FormalSystem Hilbert:
-
-    Regex atom:
-        ^[a-z][a-z0-9]*$
-
-    UnionPattern formula:
-        atom
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p → q)
-
-    formula:
-        implication
-
-    Regex reference:
-        ^[A-Za-z0-9, ]+$
-
-    Pattern statement:
-        with f as formula, r as reference:
-            f [r]
-
-    statement.formula():
-        return self.f
-    statement.reference():
-        return self.r
-
-    LineType claim:
-        pattern: statement
-        behaviour: logical
-
-    with p as formula, q as formula, r as formula:
-
-        InferenceRule axiom_k:
-            label:
-                K
-            deduction:
-                (p → (q → p))
-
-        InferenceRule axiom_s:
-            label:
-                S
-            deduction:
-                ((p → (q → r)) → ((p → q) → (p → r)))
-
-        InferenceRule modus_ponens:
-            label:
-                MP
-            antecedents:
-                p
-                (p → q)
-            deduction:
-                q
-"""
+_HILBERT_BINDINGS = [("p", "formula"), ("q", "formula"), ("r", "formula")]
+HILBERT = SystemSpec(
+    name="Hilbert",
+    brackets=brackets(),
+    productions=[
+        regex_prod("formula", "atom", "[a-z][a-z0-9]*"),
+        template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
+    ],
+    lines=[statement_line()],
+    rules=[
+        rule_spec("K", "axiom_k", [], "(p → (q → p))", _HILBERT_BINDINGS),
+        rule_spec(
+            "S", "axiom_s", [], "((p → (q → r)) → ((p → q) → (p → r)))", _HILBERT_BINDINGS
+        ),
+        rule_spec("MP", "modus_ponens", ["p", "(p → q)"], "q", _HILBERT_BINDINGS),
+    ],
+)
 
 
 @pytest.fixture(scope="module")
 def hilbert():
-    result = compile_formal_system(HILBERT)
-    assert "errors" not in result, result.get("errors")
-    return result["system"]
+    return build_system(HILBERT)
 
 
 def rule(system, label):
@@ -105,11 +65,13 @@ def test_nested_axiom_schema_projects_to_a_nested_term(hilbert):
 
     # Top constructor is a single implication (two holes), NOT the flat
     # three-hole "( _ -> ( _ -> _ ) )".
-    assert _signature(term.pattern) == ("string", "(\x00 → \x00)")
+    assert term.constructor.signature == ("string", "(\x00 → \x00)")
     # One child is itself an implication (the nesting survived), the other a
     # bare variable leaf.
     child_sigs = {
-        _signature(child.pattern) for child in term.children.values() if hasattr(child, "pattern")
+        child.constructor.signature
+        for child in term.children.values()
+        if hasattr(child, "constructor")
     }
     assert ("string", "(\x00 → \x00)") in child_sigs
     # And it round-trips to the original surface template.
@@ -121,11 +83,8 @@ def test_schema_term_matches_a_parsed_formula_of_the_same_shape(hilbert):
     # unification can even begin (the old flat projection differed here).
     k = rule(hilbert, "K")
     schema = k._schema_term(k.deduction, 0, copy(hilbert.context))
-    instance = from_match(
-        hilbert.parse("(a → ((a → a) → a)) [K]").proof_lines[0].formula,
-        copy(hilbert.context),
-    )
-    assert _signature(schema.pattern) == _signature(instance.pattern)
+    instance = hilbert.parse("(a → ((a → a) → a)) [K]").proof_lines[0].formula_term
+    assert schema.constructor.signature == instance.constructor.signature
 
 
 # ---------------------------------------------------------------------------
@@ -162,52 +121,6 @@ def test_full_self_implication_derivation(hilbert):
 # ---------------------------------------------------------------------------
 
 
-def test_schema_using_defined_notation_compiles():
-    # Regression (PR #27 review): composing a schema term must not consult the
-    # system's *staged* definitions. During compilation `context.definitions`
-    # holds unresolved PendingDefinition records, so a schema recognisable only
-    # via a definition (`x is a member of y`, defined from `x in y`) used to
-    # crash the compositional parse with
-    # "'PendingDefinition' object has no attribute 'match'". It must compile.
-    code = r"""FormalSystem Defined:
-
-    Regex setvar:
-        ^[a-z]$
-
-    Pattern member:
-        with x as setvar, y as setvar:
-            x in y
-        Define x is a member of y as x in y
-
-    UnionPattern formula:
-        member
-
-    Regex reference:
-        ^[A-Za-z0-9, ]+$
-
-    Pattern statement:
-        with f as formula, r as reference:
-            f [r]
-    statement.formula():
-        return self.f
-    statement.reference():
-        return self.r
-
-    LineType claim:
-        pattern: statement
-        behaviour: logical
-
-    with x as setvar, y as setvar:
-        InferenceRule r1:
-            label:
-                R
-            deduction:
-                x is a member of y
-"""
-    result = compile_formal_system(code)
-    assert "errors" not in result, result.get("errors")
-
-
 def test_non_instance_of_axiom_is_rejected(hilbert):
     # (a → (b → c)) is NOT an instance of K = (p → (q → p)): the third slot
     # must repeat the first. The shared binding across the nested term must
@@ -230,9 +143,9 @@ def test_regex_sorted_metavariable_is_kept_schematic():
     # leaf and must be re-marked as a Var - otherwise the ∀I deduction `∀x p`
     # would fix its bound variable to the literal token "x", silently breaking
     # the eigenvariable/quantifier tie. Pin that the `x` stays schematic.
-    from zfc_systems import SCOPED_ZFC
+    from zfc_systems import scoped_zfc_spec
 
-    system = compile_formal_system(SCOPED_ZFC)["system"]
+    system = build_system(scoped_zfc_spec())
     ug = rule(system, "UG")  # deduction: ∀x p, with x a setvar
     term = ug._schema_term(ug.deduction, 0, copy(system.context))
     assert set(term.free_vars()) == {"x", "p"}

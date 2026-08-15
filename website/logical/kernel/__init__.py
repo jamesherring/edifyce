@@ -23,18 +23,41 @@ near-English surface syntax are all representable without the kernel knowing
 about any of them.
 """
 
-from .definitions import Definition, check_definitional_step, unfold
-from .side_conditions import And, DisjointLeaves, Equal, IsAtom, Not, Occurs, Or, SideCondition
+from .definitions import (
+    Definition,
+    FreshBinder,
+    check_definitional_step,
+    introduced_leaves,
+    unbound_parameters,
+    unfold,
+)
+from .side_conditions import (
+    And,
+    DisjointLeaves,
+    Equal,
+    IsAtom,
+    IsMember,
+    Not,
+    Occurs,
+    Or,
+    SideCondition,
+    references,
+    restate,
+)
+from .constructors import Constructor, constructor_for
 from .terms import Bound, Node, Term, Var, abstract, bind, from_match, from_pattern, intern
 from .unify import match, match_all
 
 __all__ = [
     "And",
     "Bound",
+    "Constructor",
     "Definition",
+    "FreshBinder",
     "DisjointLeaves",
     "Equal",
     "IsAtom",
+    "IsMember",
     "Node",
     "Not",
     "Occurs",
@@ -45,10 +68,15 @@ __all__ = [
     "abstract",
     "bind",
     "check_definitional_step",
+    "constructor_for",
     "from_match",
     "from_pattern",
     "intern",
+    "introduced_leaves",
     "match",
     "match_all",
+    "references",
+    "restate",
+    "unbound_parameters",
     "unfold",
 ]

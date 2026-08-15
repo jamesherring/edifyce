@@ -1,0 +1,728 @@
+# Ingesting an informal proof
+
+A companion to [authoring-and-ingestion-roadmap.md](authoring-and-ingestion-roadmap.md).
+That document ends with the **inner loop** built and measured: a goal is a hole, a
+hole is fillable, a failure names the next goal, and retrieval says what to cite
+(§7–§9e). Everything it exercises assumes a proof object that already exists, in a
+system that already spells the mathematics, aimed at a statement someone has
+already decided is the right one.
+
+This document is about the **outer loop** — what happens between an arXiv paper
+and that starting point — and about the one thing the outer loop must not be
+allowed to do, which is to launder an unverified judgement into a green tick.
+
+---
+
+## 1. What the checker can and cannot certify
+
+The kernel certifies exactly one sentence:
+
+> this sequence of steps establishes **this term** in **this system**.
+
+An informal source adds three claims that sit entirely outside it:
+
+1. **Fidelity.** That the term *is* the paper's theorem. Nothing mechanical
+   decides this. A mis-formalised statement that checks is a green proof of
+   something else — the worst failure class in autoformalisation precisely
+   because it is invisible (§4 of the authoring roadmap made the same point about
+   ambiguous notation, one level down).
+2. **Alignment.** That the paper's `∫`, `⊆`, "measurable" are the system's
+   `citg1`, `wss`, and whichever of the corpus's several notions the author meant.
+   Partly mechanical (a term either parses or it does not), mostly not (which
+   production the author *meant* is a reading).
+3. **Standing prerequisites.** That the results the paper cites — "by Lemma 2.1
+   of [7]", "by compactness" — are in the library, are the same results, and are
+   proved rather than assumed.
+
+None of the three is checkable, and all three are unavoidable. So the design
+principle for everything below:
+
+> **Do not try to verify the unverifiable. Make it explicit, attributed,
+> queryable, and impossible to lose.**
+
+That is the same instinct the codebase already has in two places. `Provenance`
+answers "which axioms does this theorem rest on" from rows rather than trusting
+where a proof was filed. Retrieval reports `unindexed` rather than silently
+returning a short list, "because a short list must not read as a complete one". An
+ingestion pipeline needs the same discipline applied to fidelity and to
+assumptions.
+
+## 2. The split of responsibility
+
+| | owns | why it is there and not elsewhere |
+|---|---|---|
+| **Engine** | what a proof *is* — terms, rules, scopes, checking, the closed failure vocabulary, unification-confirmed retrieval | it is the only thing trusted; every new concept below is asked whether the kernel must learn it, and the answer is almost always no |
+| **API** | small, deterministic, authenticated, idempotent moves over stored rows: CRUD, search, propose-and-check, the honesty ledger | it is the only thing that can be *called a thousand times by a retrying agent*, so everything it does must be cheap, replayable, and safe to abandon halfway |
+| **Consumer (LLM)** | reading, segmenting, deciding what a symbol means, judging whether a retrieved theorem is the lemma the paper cited, choosing to stub or to prove, and the prose→structure translation | every one of these is a *reading of mathematics*, which is the one thing a model is better at than a query |
+
+The line to hold: **the API never guesses and never accepts prose as evidence.**
+A model's judgement enters as a recorded attestation with an author, not as a
+fact. The consumer never emits surface syntax — it emits constructor proposals
+and rule/antecedent citations, both from closed enumerable vocabularies, which is
+already the shape `/proofs/{id}/lines` and `/proofs/{id}/cite` take.
+
+## 3. What is already built and needs nothing
+
+Worth stating, because it is most of the mechanism and it changes what remains
+to be done into a much smaller list.
+
+- **A partial proof is a first-class object.** `[?]` is an open goal; `holes` and
+  `only_holes` distinguish "unfinished" from "wrong"; a hole is `valid = False`
+  so nothing downstream can publish or promote through it (§8).
+- **Failures are structured**, from a closed vocabulary, stored on the row
+  (§7). `slot-unsatisfied` *is* the next goal.
+- **Writes are structural.** `/cite` for a justification, `/lines` for a stated
+  formula, `/lines/remove` to undo one — all dry-run by default, all round-trip
+  checked by digest rather than trusted (§9b, §9c).
+- **The vocabulary is enumerable.** `GET /formal-systems/{id}` returns the
+  productions, so a constrained emission is a query, not an aspiration.
+- **Retrieval works and is honest about being a filter** (§9d).
+- **The term DAG is readable**, every node with its id *and* its rendering, which
+  is what lets a model point at a subterm instead of restating it (§9a).
+- **Cross-system citation exists** — relations, `Translation`, `StatementTemplate`
+  — so a paper's theorem need not be formalised in the same system its
+  prerequisites live in.
+
+## 4. What is missing
+
+Six gaps, in dependency order. The first two are the honesty machinery and
+everything else produces artifacts that would otherwise quietly lie.
+
+### 4.1 Assumptions, as first-class citable entries — *done*
+
+A translation cannot proceed top-down without citing results it has not proved.
+Today the only two ways to do that are both wrong: promote something unproved
+(refused, correctly — promotion requires a published, verifying proof), or leave
+a hole (which blocks every dependent step, so nothing downstream can be
+translated until everything upstream is finished).
+
+What is needed is a third move: an entry with a statement, no proof, and an
+explicit reason. This section first proposed it as a third value beside
+`promoted_theorems.primitive`; it is not, and why not is under "what it turned
+out to be" below.
+
+*Engine:* almost nothing. An assumed entry is cited exactly as any other
+(`PromotedTheorem.as_rule`), and the kernel must not learn the distinction — a
+proof citing one is a perfectly good proof *of a conditional*. The difference is
+entirely bookkeeping.
+
+*API:* `POST /formal-systems/{id}/assumptions`, with the statement written as
+source text in the system's own grammar — the form
+`promotion.promote_from_source` already reads, so an imported theorem and an
+assumed one arrive the same way. A structured (constructor-vocabulary)
+alternative waits on §4.4 rather than being guessed at now. `reason` is required;
+`source` is free text, because structuring a citation is §4.3's job.
+
+*Consumer:* decides what to assume, and what the assumption's informal source is.
+
+**What it turned out to be.** Almost nothing, which is the sign the modelling was
+right. The entry is a promoted theorem with `primitive` set and `proved_by_id`
+NULL — exactly what it is to a citation — and the debt is a side table beside it
+(`app/db/assumptions.py`). `primitive` answers "does this system assert this
+without proving it", a question about *checking*; "foundation or debt" is a
+question about the *development*, and only the second is ever paid down. The
+kernel, unification and `promoted_theorems_mapping` learn nothing.
+
+Adding one changes what a label resolves to, which is the same event as promoting
+a theorem — so it takes the system lock and runs the same `invalidate_citations`.
+Withdrawing one is the mirror. What withdrawal deliberately does **not** do is
+retire the promotions of the proofs that cited it: those proofs are unchecked
+rather than disproved, and that is the shape retiring any entry already has
+rather than a new cascade invented here.
+
+One limit worth recording: a *ground* statement the grammar cannot read is
+refused, and a *schematic* one is not. That is the engine's settled position — a
+schema that parses nothing yields a theorem that never applies, exactly as an
+authored rule's does — and this route does not overrule it.
+
+#### Discharge — *done*
+
+Paying a debt off, which is the only way to retire an assumption anything
+depends on: withdrawal is refused while anything does, so without this a
+well-used assumption could be neither withdrawn nor settled. **It is not a new
+endpoint.** Promoting a proof under a label that names an assumption of the same
+system *is* the discharge — the entry that lands is an ordinary proved theorem,
+and everything after the guards is the promotion path unchanged.
+
+What is special is the bookkeeping the assumption leaves behind. An entry that
+rested on it no longer rests on it — the row cascade takes that edge — but it
+*does* now rest on whatever the warrant rests on, one hop further down. So the
+rewrite is `(closure \ {discharged}) ∪ closure(warrant)`: the cascade is the
+first half and `inherit_closure` the second, and the dependents have to be read
+*before* the row goes, since those edges are the record being re-pointed. A
+warrant that itself rests on nothing therefore leaves its dependents clean, and
+one that rests on two further assumptions passes both on — both pinned.
+
+Three guards, all refusals rather than repairs.
+
+**It must state the same theorem**, conclusion and every premise. Not a
+soundness requirement — promoting under a label invalidates everything that
+cited it, so a citation is re-checked either way — but the distinction a caller
+most needs told, because *paying a debt off* and *replacing an entry with a
+different claim* look identical from here and are opposite things. A schematic
+assumption is therefore not discharged by a proof of one ground instance, which
+is right: every schematic citation of it would stop resolving.
+
+The comparison is **α up to metavariables only**, and the policy is the load-
+bearing part. The stored `terms.alpha_digest` is not it: its default renames
+every regex leaf, so a grammar whose numerals are a `matches` production reads
+`2 = 5` and `7 = 9` as one statement (`tests/test_alpha_digest.py` has pinned
+that since the column existed), and a proof of either would have discharged an
+assumption of the other. It also renames an object-language variable the theorem
+never nominated — but an un-nominated leaf is literal, since a promoted theorem
+justifies exactly its own statement. So `metavariables_only` renames a `Var` and
+nothing else: a metavariable is the one leaf a citation instantiates, and the
+only one whose name carries no information. Found in review.
+
+**It must carry no proviso the assumption did not.** A distinct-variable
+condition the debt never had makes the warrant *narrower* — it refuses instances
+the assumption allowed — so what lands is not the theorem the dependents were
+written against, and after they inherit its closure they would read as
+unconditional besides. The other direction stays allowed: an assumption with a
+proviso discharged by a proof needing none is a stronger result, and nothing
+that cited it can notice. Also found in review.
+
+**It must not rest on the assumption it discharges.** Left alone, a circular
+proof would resolve its own citation to the entry replacing it and record an
+empty closure — laundering "I assumed it" into an unconditional theorem.
+
+And the delete carries `_retire_promotion`'s companion: an edge's obligation may
+be discharged by a theorem, the FK is `ON DELETE SET NULL`, and the proofs that
+resolved *across* that edge cited the source's labels rather than this one — so
+the label walk never reaches them and `invalidate_warranted_edges` has to. The
+obligation is not re-pointed at the warrant: it named this entry, and whether
+the warrant discharges it is the edge author's judgement rather than this
+route's.
+
+An **ancestor's** assumption is shadowed rather than discharged, as promoting any
+shadowing label already is: the ancestor still asserts it, and every other
+descendant still rests on it.
+
+What this does not attempt is re-verifying the dependents. Their verdicts are
+cleared by the same `invalidate_citations` any promotion under a taken label
+runs, so they are unchecked rather than believed — which is the existing
+contract and the right one, since a statement match is not a promise that every
+proof above still goes through.
+
+### 4.2 Provenance extended to assumptions, and exposed — *done*
+
+`app/db/provenance.py` already walks the citation graph transitively and reports
+the deepest layer and the axioms reached. It is not on any route — it is a
+script. Two changes:
+
+- **`assumes: tuple[str, ...]`** beside `axioms`, computed by the same closure.
+  "What does this rest on that nobody has proved" is exactly the question the
+  existing walk answers, one predicate away.
+- **`GET /proofs/{id}/provenance`**, and the same summary inline on `ProofDetail`
+  and `PromotedTheoremOut`.
+
+Then the gate. A proof resting on an assumption may be **published** — a
+conditional result is a legitimate object and hiding it helps nobody — but it is
+marked, its promoted entry is marked, and the mark is transitive. Promotion of a
+proof with a non-empty `assumes` is allowed and the entry inherits it; what is
+refused is a *silent* one. The rule to enforce: **an entry's `assumes` closure is
+never smaller than the union of its citations'.**
+
+This is the single highest-value item here, and it is worth having even if no
+ingestion pipeline is ever built.
+
+**The closure is stored per library entry, not walked.** `theorem_assumptions`
+holds what each entry transitively rests on, written when the entry is promoted
+as the union of its citations' closures — so each promotion does *one hop*, and
+reading a proof's debts is one hop as well, at any citation depth, in either
+direction. An assumption carries a self-edge, so unioning the closures of the
+entries a proof cites needs no special case for citing one directly. Ids and not
+labels throughout, since a relation edge may rename a label across systems.
+
+Two properties this buys that a walk would not. The **reverse** direction is a
+single indexed count, which is what makes the public register below rank
+anything. And an entry promoted before the table existed reads as an empty
+closure, which is the *right* answer rather than a missing one — nothing can rest
+on an assumption that did not exist when it was promoted.
+
+**A proof reaches the library through two doors**, and the second has no label on
+it. The first is a rule label its lines resolve (`proof_lines.rule`); the second
+is a *lemma proof* whose lines it cites as `[alias.line]`, where the rule
+recorded is whatever justified the step and the lemma's own citations are rows on
+the lemma. Reading only the first calls a proof unconditional when every debt it
+has came through a lemma — caught in review, with a test that reproduced exactly
+that: `assumes: []`, `complete: true`, and an empty closure stored at promotion,
+which would have made the loss permanent for everything built on top.
+
+So `reference_closure` follows the **antecedent edges** first — what the checker
+cited, not what `proof_references` declares, the same choice `provenance.py`
+makes one level down — and the labels are read across the whole closure. That is
+the one walk left, and it is over *proofs*: per-development and acyclic by
+construction, not the corpus-scale library graph the stored closure exists to
+avoid walking.
+
+`GET /proofs/{id}/provenance` reads it, and reports what it could not account for
+— one field per door. `unresolved`: a cited label that names no library entry, no
+rule of the chain and no hypothesis of a theorem being proved. `unread_lemmas`: a
+cited lemma proof holding no stored structure, whose own debts could therefore
+not be read. A report that dropped either would say "rests on nothing" when the
+truth is "rests on something I could not follow" — the same reasoning
+`retrieval.py`'s `unindexed` already applies. A proof that has never been
+verified has no resolved citations to read and is told to verify, rather than
+told it assumes nothing.
+
+The batch `app/db/provenance.py` report gained `assumes` beside `axioms`, and the
+two **partition** the primitives reached: a corpus that adopts no assumptions
+reports `axioms` exactly as it did before.
+
+**The register is public.** `GET /assumptions/public` lists every assumption in a
+published system, ordered by how many library entries rest on it — **transitively**,
+which is the whole reason the closure is stored rather than the direct edges: an
+entry three hops away that names the assumption nowhere still counts, and a count
+of direct citers would rank a debt by how visible it is rather than by how much
+has been built on it. That ordering
+is the point rather than a nicety: a theorem everyone knows is true and Edifyce
+cannot yet justify is the most useful thing this database can say about its own
+gaps, and the count says which gap closing pays for most. Ordered in the database
+rather than per page, since a ranking that only held within twenty arbitrary rows
+would mean nothing.
+
+### 4.3 The formalization record: source, claim, glossary — *done*
+
+The object that does not exist at all. An ingestion run produces a proof, and a
+proof has `title`, `description` and a system — nowhere to put *which paper*,
+*which theorem in it*, *what the informal statement said*, or *what the model
+decided `μ` meant*.
+
+Three tables, all beside the engine and invisible to it:
+
+| | holds | keyed by |
+|---|---|---|
+| `source_documents` | arXiv id / DOI / URL, version, retrieval date, content hash, licence | id |
+| `formalizations` | one claim: the informal statement verbatim, the target `terms.id`, the proof attempting it, status, and the **attestation** (who or what asserted the correspondence, when, with what reasoning) | (document, claim) |
+| `glossary_entries` | the paper's notion → the system's label or production, with the reasoning and the attestor | (formalization, notion) |
+
+The content hash matters: a v2 of a paper may restate the theorem, and a
+formalization pinned to v1 must not silently claim to be about v2.
+
+The attestation is the part to get right. It is **not** a boolean "reviewed". It
+is an author (a user id, or a model identifier and its prompt/version), a
+timestamp, the informal text as it stood, and the prose reasoning. Fidelity is
+reviewed by people; the API's job is to make sure the review has something
+stable to point at and that its absence is visible.
+
+*Engine:* nothing. This layer never reaches `website/logical/`. The one thing it
+borrows from the formal side is a `terms.id`, which is what §4.4's statements
+route hands out — and the reason that one came first.
+
+**Why this is not a closure, unlike §4.1's.** An assumption's debt propagates:
+cite something unproved and your result is conditional, at any depth. A fidelity
+claim does not, and being precise about the difference is what settles the shape.
+A proof citing a term inherits *the term* — not anyone's claim about what the
+term corresponds to. Proving a corollary from a formalized theorem gives you a
+formal corollary; whether it is the paper's Corollary 3.3 is a separate claim,
+attested separately by whoever read the paper. So a formalization is a leaf
+annotation and there is deliberately nothing to close over. Withdrawing one is a
+plain delete for the same reason, where withdrawing an assumption is gated.
+
+**A version is a row.** `source_documents` is unique on (kind, identifier,
+version), so a revision is a different row and an existing claim keeps pointing
+at the one its author read — structural rather than a check somebody has to
+remember. Registering an identity that exists returns it rather than a second
+row, which also makes the write idempotent for a retrying agent. The informal
+statement is copied onto the claim besides, so not even editing a document can
+rewrite what was attested.
+
+**A review is somebody else's.** The attestation carries an author, the agent
+where a model was driving (beside the account, never instead of it — an account
+is accountable and a model is not), and required prose. A review is a second
+person's verdict on it, and the attestor is refused: the entire value of the word
+is independence, and a self-review that reads as reviewed is the silent
+overstatement this whole document is about. Editing the glossary clears any
+review, since a reviewer agreed with a reading of the paper's words and those are
+the words.
+
+**What is not served is a rendering** of the claimed term. `GET
+/formal-systems/{id}/terms/{term_id}` is the route that renders a stored term,
+through a chosen notation and with every subterm's id; a term row carries no
+display, so duplicating a source-spelling rendering here would cost a system
+build per system per listing to serve something lossier than the route that
+already exists.
+
+### 4.4 Goal-first: state a theorem before proving it — *done*
+
+Every structured write today is *inside* a proof — `POST /proofs/{id}/lines`
+needs a proof, and a template line within it to inherit shape from. An ingestion
+run needs the opposite order: state the target first, ask whether it is already
+proved, and only then open a proof aimed at it.
+
+- `POST /formal-systems/{id}/statements` — resolve a `Proposal` against the
+  system's grammar, intern the term, return its id, its rendering, and *whether
+  the library already concludes it* (α-digest exact hit, then the existing
+  head-symbol candidates). This is "is this already proven?", which is the first
+  question of any translation and currently has no answer that does not involve
+  writing a proof first.
+- The same call is what the glossary and the assumption endpoints take their
+  statements through, so there is one path from a constructor vocabulary to a
+  stored term and it is round-trip checked exactly once.
+
+*Engine:* nothing, as it turned out. `proposals.resolve` already composed a term
+against a built system and needed only a caller that is not a proof line; the
+round-trip check was the part entangled with `restate`/`recite`, and lifting it
+out is `app/routers/_proposals.py` — shared now by the line route and this one,
+since the only difference between them is *where* the round trip is checked.
+
+**A bare statement has no line to splice into**, so it is read back at the
+system's **logical sorts** — the sorts a proof line is read at, and how a
+promoted theorem's ground statement is already composed. Same guarantee, same
+refusal: the statement is rejected unless the term that comes back is the term
+that went in.
+
+**A dry run unless `store`.** Asking whether something is proved is a question
+and a question should not write rows; storing is what hands back the usable
+`term_id` and is therefore the owner's. That split is load-bearing rather than
+tidy — it is what lets *anyone* ask the question of an imported corpus, which is
+ownerless by construction and where the question is worth most.
+
+The search is the same head-symbol filter §9d built, and is a filter here too —
+including its `exact` flag.
+
+**Nothing in the response says "proved", and that is a correction.** This section
+originally specified an "α-digest exact hit" as the answer to "is this already
+proved?", and the first cut shipped it as a `proved` property. Review caught it,
+and the reason is sharper than the bug: **no digest settles the question at
+all**. The search policy renames regex leaves, so it over-reports in a grammar
+whose numerals are a `matches` production; the identity policy a discharge
+compares by would *under*-report, because a schematic theorem instantiates rather
+than renames, and instantiation is unification. What settles it is
+`InferenceRule.concludes`, which takes a `ProofLine` — a proof's context, and
+exactly why §9d put the confirm on the proof route and the filter on the system's.
+
+So the two α policies stay right for their own questions — the coarser bucket for
+"which theorems could conclude this", the identity one for "is this the same
+theorem" — and *neither* is promoted to a verdict. `exact_is_approximate` reports
+when this system's grammar is one the search policy over-reports on, since a
+caller that cannot tell which case it is in has to distrust the ranking
+everywhere.
+
+### 4.5 Alignment tools: prose search, and the notation direction — *done*
+
+Two lookups an aligning model needs and cannot make.
+
+**Prose search.** `label_descriptions` holds `set.mm`'s 50,550 documented
+assertions and is readable **one label at a time**. A model that has just read
+"by the Cantor–Schröder–Bernstein theorem" has a name and needs a label.
+
+`GET /formal-systems/{id}/labels?q=` is that lookup — on a corpus that names
+things `cbvald` the *title* is what a model can recognise, and a title is prose.
+
+This section originally called for a second endpoint beside it: `?similar=`, over
+embeddings in the provisioned-and-unused `theorems.embedding` column, "because the
+alignment problem needs aboutness and structural search cannot supply it". **That
+half is now refused, and the aboutness comes from the consumer instead.** The
+reasoning is under "why not embeddings" below, since it is the more interesting
+half of this section.
+
+The lexical one is built (`app/db/label_search.py`). Every word must appear
+somewhere in one label's record; hits are ranked by **the tightest single field
+holding all of them** — label, then title, then prose — and the response says
+which. A ranking a caller cannot account for is one it has to trust blindly or
+ignore, and this one has a knowable weakness (a common word deep in a long
+comment ranks like the same word in the title of the thing being looked for).
+
+There is a fourth answer, `record`, and it is a correction: the first cut had
+three and an `else_`, so a query whose words are split across two fields — `wi`
+the label, "wff" in the title — fell through and reported a *prose* match, which
+is a claim about a body containing neither word. It also paired `matched: "text"`
+with no excerpt, which the schema said could not happen. No single field holds
+those words, and that is its own category rather than the bottom of the list.
+
+Two more the same review found, both of the same kind — an answer true of the
+wrong thing. A hit **is** a row on a known layer, so resolving its proof link or
+its discouragement markers *nearest-first* answers about a different one: two
+systems in a chain may declare one name, and the ancestor's hit carried the
+descendant's proof id. The per-layer map is now the primitive, and the collapse
+to nearest-first lives at the one caller that has a name and no layer — a
+cross-reference target. And the `MAX_TOKENS` cap was silent, so a nine-word query
+was answered more broadly than it was asked with every extra row a false positive
+nobody could identify; `searched` now reports the words that ran.
+
+**Two haystacks, which the section did not say.** A corpus label's prose is a
+`label_descriptions` row; a proof authored through the API carries its own
+`title`/`description` and gets no such row. Searching only the first answers "what
+does this system have about compactness" with the *imported* half of the system
+and omits everything anyone wrote here — an absence a caller cannot distinguish
+from a real one. Both are searched, results are one list deduplicated by label,
+and the proof half is scoped by the published-or-yours predicate a proof read
+applies, so a draft's title does not become searchable prose.
+
+**Across the spine**, not the one system id, for the reason `app/db/lineage.py`
+gives: a layered corpus files each statement against the layer its section falls
+in, and the recognisable names are on the foundations. A hit names the layer it
+lives on, since that is where a follow-up read has to be addressed.
+
+**`documented` rides along** — how many labels carry any prose at all. It is what
+makes an empty answer readable: "the words are not in this corpus" and "this
+corpus is undocumented" are otherwise the same empty list, and only one of them
+means the search is finished. The same distinction `TheoremMatches.unindexed`
+draws.
+
+**It is indexed, and that was not optional.** An unanchored `%word%` is not a
+btree lookup, so without help this is a sequential scan of the largest text table
+in the schema on every call, by any anonymous caller — 419 ms on a 50,550-row
+corpus, where every other public listing here is bounded by an index. `pg_trgm`
+GIN indexes on the six searched columns bring it to 10 ms. Two things measured on
+the way, both recorded because neither is guessable: wrapping a nullable column in
+`COALESCE` makes the predicate an expression no index covers and costs the whole
+40× (a null comparison never matches, which is what the `COALESCE` was for, so it
+was doing nothing but blocking the index); and the indexes only bite once the
+table has statistics, so the first searches after a bulk import run at the
+unindexed cost until autovacuum analyses.
+
+#### Why not embeddings
+
+The ceiling on a lexical search is real and worth stating exactly. Measured
+against Postgres full-text search on this corpus's own vocabulary:
+
+| | lexical (today) | stemming / BM25 |
+|---|---|---|
+| `compactness` finds `compact` | no | **yes** |
+| `Schröder` finds `Schroeder` | no | no |
+| a query sharing **no word** with the prose | no | **no** |
+
+That last row is the alignment problem, and nothing lexical touches it: *"every
+infinite subset of a compact space has a limit point"* shares no stem with
+*"Bolzano-Weierstrass theorem"*, and term-frequency weighting can only reweight
+terms that are present. Embeddings are the only thing in that table that crosses
+vocabulary mismatch.
+
+**And the consumer crosses it better.** The caller here is a language model, and
+what it is good at is proposing what a corpus might have called something — given
+"by compactness of X" it can offer "Bolzano-Weierstrass", "finite subcover",
+"Heine-Borel". It does that with knowledge an embedding of the corpus does not
+have, because it knows the theorem's *name*. So the API ranks documents against
+terms and the consumer decides what the terms are, which is §2's split applied
+honestly — where caller-supplied vectors arguably break it, by putting a model
+artifact into API storage.
+
+What refusing embeddings avoids is not small. A vector is only comparable to
+vectors from the same model, and nothing about two vectors says they disagree —
+so a stored-vector design has to carry model identity, model *versioning* (a
+vendor silently revising a model is undetectable by name alone), the query/document
+asymmetry that Voyage and Cohere embeddings have, a pinned model per system so a
+later reader knows which to ask for, a retirement path for superseded generations
+(~300 MB per model per corpus), and a pgvector floor of 0.8 for correct recall
+under a filter. Every one of those is a way to be quietly wrong, and none of them
+exists without stored vectors.
+
+The cost is honest and worth naming: recall now depends on the model guessing a
+name the corpus uses, with no fallback when it does not. That is a worse floor
+than embeddings and a better ceiling, and it is a trade taken deliberately rather
+than by omission.
+
+**What the API contributes** is the deterministic half. `q` repeats, so several
+alternatives search as one ranked page rather than N pages the caller merges;
+within an alternative every word must appear, between alternatives it is an `OR`,
+and the rank is the best any alternative achieved rather than the first that hit.
+Each result says **which** alternative found it, which is the feedback half — a
+model that proposed five phrasings learns which one the corpus actually uses, and
+carries that into the next lookup.
+
+Review found the attribution was the hard part, and in the same way three times:
+the *rank* is the best tier any alternative achieved, so crediting the first
+alternative that matched anywhere let a broad guess steal the specific one's
+credit — inverting the signal the field exists to give — and let the excerpt come
+from an alternative the hit is not attributed to. Dropping alternatives that
+tokenise to nothing shifted every index after them besides, so `matched_query`
+stopped indexing what the caller sent. The tier is now computed per alternative in
+Python beside the SQL `CASE` that decides the same thing, and the index is aligned
+with the caller's own list. The count of alternatives is capped too — words within
+one were bounded from the start and the alternatives were not, which left the
+expensive axis open on an anonymously-readable route (500 of them measured at
+1.59 s in plan time alone).
+
+Stemming and BM25-style ranking stay open as an *independent* improvement to this
+route, not as a strategy: true BM25 needs `pg_search`, which managed Postgres does
+not offer, and native `ts_rank` has no corpus-wide IDF — which is the valuable
+part. It would also need care, since `19.21t` tokenises to `19.21` under the
+`english` configuration and two Metamath labels would collide.
+
+**The notation direction.** §3's option B — notation as a second input grammar —
+stays refused, for the reason §4 gives: a LaTeX-shaped input would shorten the
+translation distance and would also make `+` ambiguous between a constant and a
+variable in eleven measured cases, and the resulting term may still check. Take
+the fluency at the translation boundary. What *is* worth having is the read
+direction — rendering a system's terms in a LaTeX-ish notation so a model
+recognises what it is looking at, which is already what `notation` does on the
+term-graph route.
+
+### 4.6 Scopes, which the corpus never exercised — *done*
+
+A paper's proof is full of case splits, inductions and "assume for contradiction"
+— all of which are **subproofs**. The structured write path cannot make one:
+`/lines` refuses a scope opener as a template and composes every new line from an
+existing logical line's shape (§9c), and §9e records plainly that a Metamath
+corpus is flat, so nothing in the measured run touched scope openers, discharge
+lines or indentation.
+
+This is the gap most likely to bite first on a real paper, and the synthetic
+fixtures already cover the ground the corpus does not — so the work is to extend
+the structured path, not to discover the semantics:
+
+- a line proposal that **opens a scope** (a hypothesis, a fresh variable),
+- a line proposal that **discharges** one, and
+- the renumbering guard extended over scope boundaries, with the same
+  after-the-fact invariant that already governs insertion: *no line that was
+  valid before may be invalid after*.
+
+`dischargeable_openers` and the discharge half of the citation search already
+exist on the read side, which is the half that is usually harder.
+
+**It came to two fields, because a subproof is two facts.** `LineProposal` gains
+`line_type` and `scope`, and both default to the anchor line's, so a proposal
+written before subproofs were reachable is unaffected. Which line type a line is
+written as decides whether it *opens* a scope — the system declares that per type,
+not per line — and where it is indented decides which one it is *in*. The three
+things the section asks for fall out of those two: an opener is a proposal naming
+a scope-declaring type, a discharge is an ordinary line placed `outside` the
+opener it cites, and the guard is below.
+
+**A placement is named by the opener's citation number, never by a column.** That
+is the handle a caller already has — a discharge cites it and `/structure` reports
+it — and it means nothing has to learn a proof's indent convention. `outside` is
+not a special case: a line at the opener's *own* indent dedents past it, which is
+exactly what closes the subproof, so the discharge position is the opener's
+indent. `inside` is one step deeper, or whatever the subproof's existing lines
+already use, so a proof that indents by two stays indented by two.
+
+**Three things this turned up that the section did not anticipate.**
+
+*A line type's shape is composed from, once.* `restate` splices a new line out of
+an existing one and deliberately never reconstructs a type's syntax from its
+pattern. But a proof has no `assume` line to copy until it has an `assume` line,
+so under that rule no proof could ever open its first subproof. The type's
+declared shape is used when — and only when — there is nothing to copy, and the
+round trip already in place checks the result against the grammar exactly as it
+checks a spliced line. Only a shape whose sole placeholder is the formula is
+composed; anything else would be guessing at values (a `<reference>` cannot be
+filled before the line parses, and it does not parse with a placeholder in it),
+and the refusal says so rather than failing as if the statement were at fault.
+
+*The line type and the scope are round-tripped too, and neither follows from the
+term.* A digest says nothing about which type a line is — two types stating one
+formula produce the same term — so a proposal asking for `assume` could come back
+as an ordinary step, pass the existing check, and silently open no subproof at
+all. And since indentation is what places a line, *where it landed* is a fact
+about the checked proof rather than about the request: a caller told its discharge
+is at the root when it is still inside the block it meant to discharge has been
+told the opposite of what happened. Both are read back off the checked proof.
+
+*A subproof cannot be rejoined once it has closed.* Dedenting past an opener ends
+it and indenting does not reopen it, so `inside` is not a place a line can be
+appended to after the block has ended — it has to be written within it. This is
+the engine's mechanic rather than a limit of the route, it is the thing a caller
+will hit first, and it is caught by the scope round trip above with a message that
+says so.
+
+**Whether an opener is justified and whether it has room to write something are
+two questions**, and both rounds of review landed on that one line. A scope opener
+is never justified — the checker grants it by fiat and never resolves its
+reference — but a line type is free to declare a reference field anyway, and some
+do. Skipping the citation for every opener meant a new opener spliced out of an
+old one silently kept **the old one's**: a phantom dependency this layer does
+treat as real, blocking a removal and shifting under a renumber, and invisible to
+every round trip because the term, the type and the scope all come back exactly as
+asked.
+
+The first fix was to let the caller write one where the field exists, and the
+second round showed that was a step too far: nothing resolves an opener's
+reference, so an accepted citation would be reported `accepted` on the strength of
+the opener's own validity — which is no evidence about it — and a line number in
+it would become a dependency that justified nothing. `/cite` already refuses
+exactly this on exactly these rows. So no citation is *accepted* for an opener,
+and where the field exists it is still *written*, as the hole keyword, which names
+no line. That is both halves: nothing is inherited, and nothing is invented.
+
+**The guard needed the other invariant, not a wider version of the same one.** The
+section asks for the renumbering guard extended over scope boundaries under *no
+line that was valid before may be invalid after* — but that invariant is exactly
+what does not catch this. A line's scope comes from the indents around it, so
+inserting a dedented line closes a subproof early and the lines below land in the
+parent, where they can go on checking perfectly well while meaning something else.
+The sharp case is a line whose citation reaches the *root*: dedenting it out of
+its subproof leaves the citation in scope and its verdict untouched, and all that
+moves is which block it is a step of — so a discharge would then consume a
+subproof that no longer contains it. `_rescoped_by_insert` is the companion to
+`_broken_by_insert`, comparing each surviving line's opener before and after, and
+it is pinned by a test checked to fail without it.
+
+**And `/lines/remove` needed the same companion**, which review caught missing.
+It became reachable the moment the structured path could author a subproof at all:
+the line that *dedents* is what closes one, so removing an uncited dedent leaves
+everything after it inside the block it used to end — still checking, still citing
+what it cited, and a step of something else. Both edits move scopes, so both
+guard it; `_rescoped_by_insert` and `_rescoped_by_removal` are one function with
+the shift as its argument.
+
+**A removed opener has no number to shift to**, which is the one place that shared
+arithmetic does not work and took a second round to see. Shifting the removed
+line's number like any other lands it on the line before it — and for the ordinary
+nesting shape, where a subproof opens immediately inside its parent, that *is* the
+parent. So a line reparented out of the removed subproof and into its parent
+compared equal to itself and passed, in precisely the case the guard exists for. A
+scope whose opener is gone corresponds to nothing afterwards, and is compared as
+such.
+
+## 5. What stays out
+
+**Elaboration (option D) is not on this critical path**, and saying so is the
+point. It is the biggest single lever — the gap between a paper's step and a
+formal one is mostly the closure and typing obligations no paper states — but it
+is a search over *sequences* of steps, and everything above is needed whether or
+not it exists. Depth-one retrieval plus a model willing to state intermediate
+lines gets a long way, and it gets there without a search budget.
+
+When it does arrive, it arrives behind the interface that is already there:
+candidates in, unification confirms, and `formal_system/retrieval.py` grows a
+depth parameter. Nothing above needs to change to accommodate it.
+
+**A second parser** stays out, permanently. Nothing in this pipeline reads
+surface syntax; the model emits productions, the API renders them, and the round
+trip is checked by digest. That is the guarantee that makes machine authorship
+safe at all (§9c), and it is the first thing a shortcut would spend.
+
+## 6. Ergonomics of being called by a machine
+
+The consumer is an agent that retries, runs concurrently, and abandons work
+halfway. Three properties the current surface does not have and will need:
+
+- **Idempotency.** `POST /proofs/{id}/lines` applied twice inserts twice. An
+  `Idempotency-Key` header, stored per (user, key) with the response, makes a
+  retry safe. Without it a network timeout is indistinguishable from a failure
+  and the recovery is a diff.
+- **Optimistic concurrency.** A proof edited between a caller's read and its
+  write silently wins. `If-Match` on the proof's `updated_at`/version turns that
+  into a 412 the caller can re-plan against.
+- **Batching.** §9e measured 45–93 ms per call, dominated by *loading* the system
+  (13 queries per build, latency not work) — and `_Built` already fixed the
+  duplicate build within a request. A translation run makes thousands of calls
+  against one system, so a batch endpoint that takes a list of proposals and
+  builds once amortises the whole cost. The deliberate non-goal remains a
+  cross-request system cache, for the reason §9e gives: its invalidation is
+  exactly the cascade `schema_terms.py` was written to avoid.
+
+## 7. Sequencing
+
+| | why here |
+|---|---|
+| 1. **Assumptions + provenance closure + `GET /proofs/{id}/provenance`** (§4.1, §4.2) — *done* | the honesty machinery; everything after it produces artifacts that would otherwise misreport what they rest on |
+| 2. **Goal-first statements** (§4.4) — *done* | the first call any translation makes, and the single path from vocabulary to stored term |
+| 3. **Formalization record** (§4.3) — *done* | pure storage, no engine reach; makes fidelity reviewable rather than assumed |
+| 4. **Lexical prose search** (§4.5) — *done* | cheap, and it is what alignment actually runs on |
+| 5. **Scopes in the structured path** (§4.6) — *done* | the first thing a real paper needs that a Metamath corpus never asked for |
+| 6. **Idempotency / batching** (§6) | when call volume proves it, not before |
+| 7. ~~**Embeddings**~~, then **elaboration** | embeddings are **refused** (§4.5): a vector is only comparable within its own model, and carrying that identity, its versioning, the query/document asymmetry and a retirement path is a lot of ways to be quietly wrong — where the consumer, being a language model, supplies the aboutness better by proposing what the corpus might have called something. Elaboration remains, behind an interface that already exists |
+
+### Foreclosure check
+
+The test the previous two roadmaps both applied. Does starting at (1) foreclose
+anything? No — and the reverse is not true. Every artifact produced before the
+provenance closure exists is an artifact whose dependence on unproved assumptions
+has to be reconstructed later, from rows that were never asked to record it. The
+insurance is the same one §6 of the authoring roadmap took out and costs as
+little: **no new path may create a citable entry whose warrant is not recorded.**

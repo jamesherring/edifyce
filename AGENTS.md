@@ -6,8 +6,9 @@ this repository. For end-user setup and API usage, see [README.md](README.md).
 ## What Edifyce is
 
 Edifyce is a **formal proof assistant**. Users define a *formal system* — its
-line types, notation, and inference rules — in Edifyce source code, then write
-*proofs* in that system and have them mechanically verified, line by line.
+grammar, notation, and inference rules — as structured, individually-editable
+parts, then write *proofs* in that system and have them mechanically verified,
+line by line.
 
 The project began as a server-rendered Django site and has been rebuilt as:
 
@@ -24,18 +25,143 @@ adapter over it, and the frontend is a thin client over the API.
 |---|---|
 | `app/` | FastAPI application. `main.py` = routes (and static-SPA serving); `schemas.py` = Pydantic request/response models. Thin — it delegates to the engine. |
 | `app/auth/` | Authentication (fastapi-users): httponly-cookie + JWT backend, user manager, register/login/logout/`users` routers, and GitHub/Google social login (`oauth.py`, enabled per provider by env). Mounted in `main.py`; needs `DATABASE_URL`. |
-| `app/db/` | Persistence layer: SQLAlchemy 2.0 (async) models + session wiring. Beside the engine, not inside it. The `users` table is wired into `app/auth/`; the rest is not yet used by routes. See `app/db/README.md`. |
+| `app/db/` | Persistence layer: SQLAlchemy 2.0 (async) models + session wiring. Beside the engine, not inside it. A system is normalised rows (`systems.py`), and a verified proof's lines are rows too — each formula interned into the shared term graph (`proof_lines.py` + `terms.py`). Only `theorems` is unused by routes. See `app/db/README.md`. |
 | `migrations/` | Atlas versioned SQL migrations (`atlas.sum`). Config in `atlas.hcl`; models loaded via `tools/atlas/schema.py`. |
 | `website/logical/` | The proof engine. This is where the real logic is. |
-| `website/logical/compiler.py` | Parses Edifyce source into a `FormalSystem` (AST → system). |
-| `website/logical/formal_system/` | `FormalSystem`, `Proof`, `ProofLine`, line types, inference rules — the compiled system and proof-checking. |
-| `website/logical/matching/` | Pattern-matching engine (patterns, conditions, contexts, matches) that inference rules are checked against. |
+| `website/logical/declarative.py` | The `SystemSpec` dataclasses (grammar productions, lines, definitions, axioms, rules) and `build_spec`/`build_system`, which construct a `FormalSystem` straight from one. **This is how systems are built in production.** Also `layered_spec`: a system that inherits from another is built from its ancestors' parts concatenated in front of its own, so the builder and the kernel learn nothing about inheritance. |
+| `website/logical/kernel/` | The trusted checking core: `constructors` (a production projected to kernel data), `terms` (interned, shared-DAG formula trees), `unify` (first-order matching), `side_conditions` (the closed proviso vocabulary), `definitions` (a definitional unfold as a cited step, and the capture half of a definition's admissibility). Hard-codes no logic. |
+| `website/logical/formal_system/` | `FormalSystem`, `Proof`, `ProofLine`, line types, inference rules — the built system and proof-checking. |
+| `website/logical/matching/` | Pattern-matching engine (patterns, contexts, matches). Now **only** the parser: it turns proof-line text into a `Match`, which `kernel.from_match` projects into a term for checking. A `Definition` here makes defined notation grammatical; *applying* one is the kernel's job. Also `rewriting`, the associative matcher for string-rewriting (semi-Thue) rules. |
+| `website/logical/build_context.py` | The build context (`FormalSystemContext`) and the constructions needing it — `build_schema_pattern`, `combine_side_conditions`. Driven from `SystemSpec` fields by `declarative`; the sole way a system is assembled. |
+| `website/logical/promotion.py` | `promote_from_source`: builds a citable `PromotedTheorem` from a proved or imported theorem's statement, written in *the system's own* grammar (a Metamath `$p` maps here directly). |
+| `website/logical/translation.py` | `Translation`: how one system's names are read as another's, and `translation_errors`, which refuses a map that narrows — asked of `Constructor.admits` rather than of the two names. What lets a theorem cross an edge between systems that disagree about what to call things. |
+| `website/logical/wrapping.py` | `StatementTemplate`: how a transferred theorem is *restated* when the two systems disagree about what a **judgement** is — `Γ ⊢ φ` where the source proved `φ`. Applied by substituting the source's own term into a hole in the template's, so the wrap composes a term and never renders a string. Composed against the system it will be checked in, never against another build of the same grammar. |
+| `website/logical/graphs.py` | Leaf graph utilities: bipartite matching for antecedent-slot assignment, topological order for proof dependencies. |
 | `frontend/` | SvelteKit (Svelte 5) SPA styled with Tailwind CSS v4 + shadcn-svelte. Static build talks to the API. `src/routes/` = pages, `src/lib/api.ts` = the API client. See `frontend/README.md`. |
-| `tests/` | pytest suite covering the API, compiler, engine, and matching. |
-| `deprecated/` | Legacy Django frontend, kept **only** as reference. Superseded by `frontend/`. Not imported or served. Don't wire it back in. |
+| `tests/` | pytest suite covering the API, engine, kernel, and matching. |
+| `benchmarks/` | What a parse costs. Checking a proof *from text* is parsing, so the matching layer is where a slow system is slow; take a baseline with `uv run python -m benchmarks.bench_matching --save base.json` before touching it and `--compare base.json` after. A *stored* proof no longer reparses — its lines, rule schemas, citations and promoted theorems are all rebuilt from terms — so the parse cost this measures is the authoring path, not re-verification. See `benchmarks/README.md`. |
 
-The two public entry points into the engine are `compiler.compile(code)` and
-`FormalSystem.parse(text)` — start there when tracing behaviour.
+The two public entry points into the engine are `declarative.build_spec(spec)` —
+which the API reaches via `app.db.system_to_spec`, so the relational rows are the
+source of truth, not any source blob — and `FormalSystem.parse(text)` for a
+proof. Start there when tracing behaviour.
+
+### Where text still becomes structure
+
+Everything a *verification* needs now has a row/term representation: proof
+formulas, rule schemas, citations, promoted theorems, scopes, provisos, and — as
+of `app/db/definition_terms.py` — a definition's two surface forms are all
+rebuilt from stored terms rather than reparsed
+([docs/verification-from-rows.md](docs/verification-from-rows.md)). The kernel
+definition an unfold is checked against no longer derives from text on the read
+path.
+
+What a rebuild still reads the two form *strings* for is **grammar**, not
+structure: whether the defining form parses at all given the definitions before
+it (layering), whether the definition is circular, and the notation template that
+makes the defined form grammatical in the first place. Those are the parser
+answering questions about the grammar, and a `Match` is the right answer to them
+— none produces a term the checker uses.
+
+Text-to-structure that is *supposed* to stay: `matching/patterns.py`, `Match`, and
+explicit string rewriting. They are the parser and the semi-Thue semantics, not a
+second proof checker.
+
+One of the two smaller derivations that used to sit beside them is stored too: a
+declared `fresh` binder's `default` — the leaf its name denotes, which an unfold
+falls back to when it chooses none — is a term on `definition_fresh`, under the
+same digest as the forms, and stored before binding on the same rule the forms
+follow (**store what the parse produced, not what the build did with it**).
+
+The other stays a parse, and the reason is worth recording so it is not
+re-attempted the obvious way. A proviso argument that is not a declared
+metavariable is a term expression parsed against the grammar (`equal(t, ∅)`) —
+but **the matcher resolves the owner's metavariables itself**, so the same text
+parses to different terms for different owners: `¬q` is `negation(Var(q))` for a
+rule that declares `q` and `negation(atomic(prop(q)))` for one that does not.
+Both are correct, for their owner. So a cache keyed by the argument's text is
+unsound, and one keyed by owner *and* text needs a per-owner key reconstructed
+identically at both ends — a lot of index coupling for a derivation no `$d` ever
+produces (the whole `set.mm` corpus stores none). Left as a parse deliberately.
+
+What is left besides it is grammar, not structure — layering, non-circularity,
+and the notation template — plus `matching/patterns.py` and explicit string
+rewriting, which are meant to stay.
+
+### Constants vs variables of the object language
+
+A production declares `denotes_constant`: whether its tokens name one fixed thing
+(`⊥`, `∅`) or stand for variables a binder can bind. This is Metamath's `$c` vs
+`$v`, and like Metamath's it is **declared, not inferred** — nothing about a
+production's shape settles it, since a one-token atom is a constant in
+`formula ::= ⊥` and a variable in `setvar ::= a | b | c`. The engine once guessed
+from the constructor's shape and had holes.
+
+It gates exactly one thing: whether a definition's defining form may mention a
+leaf the defined form does not supply (`formal_system/definitions.py`). It reaches
+nothing else — not unification, equality, side-conditions, or rule checking. The
+default is `False`, variable-like, so a forgotten declaration costs a refused
+definition rather than a capturing one; the unsafe direction takes a positive act.
+
+Two declarations the engine refuses outright. An **indexed atom family** (`p_#`)
+is a supply of interchangeable tokens — `AtomPattern.fresh` mints new ones — so no
+grammar makes it a constant and no author could mean it. And a production in a
+sort some **binder ranges over** is bindable, so it names a variable of the object
+language whatever the author ticked (`declarative._validate_constant_declarations`);
+that needs binding slots to see, so it is silent for a grammar that declares none.
+What is still trusted is a sort no binder mentions — a genuine judgement about the
+grammar, now the only one left.
+
+Two follow-ups this leaves open:
+
+- **Binding slots on productions.** A production may now declare which of its slots
+  *binds* and over what — `Production.scopes_over`, `{"x": ["phi"]}` for `∀x.phi`.
+  It is optional and empty by default, so a grammar that declares nothing behaves
+  exactly as it did before it existed. Two things read it: a definition's `fresh`
+  clause is **inferred** from the parsed defining form rather than written by
+  hand (`formal_system/definitions.py`), which is what a Metamath `$a`/`$p` carries
+  no trace of; and a `denotes_constant` declaration the grammar contradicts is
+  refused, as above. They also drive **scope-aware binding**: a defining form's
+  binders are placed per *occurrence* rather than per name, so an occurrence
+  outside a binder's scope stays free and two binders sharing a spelling stay two
+  ([docs/scope-aware-binding.md](docs/scope-aware-binding.md), which carries the
+  soundness argument). One use remains — scope-aware definitional *steps*, which
+  is what admitting an open abbreviation like `S ≝ (a ∈ b)` would need, and the
+  only one that widens what a *proof* may do. Analysed and **blocked**: deciding
+  capture at the redex turns out to be the easy half, and the hard half is that a
+  defined form is a leaf, so `Occurs` answers differently either side of a
+  definitional equality — which wants separate semantic-leaf metadata rather than
+  anything to do with `free_vars`
+  ([docs/scope-aware-definitional-steps.md](docs/scope-aware-definitional-steps.md)).
+- **Conservativity.** A definition must add notation, not assumptions, and both
+  halves are now settled. **Non-circularity** holds by construction *where the
+  defined form is new notation*: a defining form is matched against the grammar as
+  extended by the definitions before it, so a definition stated in terms of its own
+  notation matches nothing and is dropped. That argument stops at a form the
+  grammar already spells — a declared production, or an earlier definition's
+  notation — where the defining form matches and the definition registers, so a
+  cycle is expressible and is checked
+  (`declarative._require_a_non_circular_definition`). It refuses a cycle in the
+  "is defined using" relation, not the sharing of a defined form, which stays legal
+  and is Metamath's. **Freshness** is checked
+  (`declarative._require_a_fresh_defined_form`): a definition may not give meaning
+  to a symbol an axiom or rule is already stated over, since equating such a
+  symbol to something else is an axiom rather than a definition. Declaring the
+  defined form as a *production* is deliberately not disqualifying — that is how
+  `⊆` becomes grammatical before `df-subset` gives it meaning; what is refused is
+  defining a symbol the theory already reasons about. It runs *after* the defined
+  form's notation is registered, because the sharpest case is a rule stated over a
+  form **no production spells**: that schema parses against no sort, is stored as
+  flat text, and looks like a rule about nothing until the definition makes its
+  conclusion grammatical and rewritable. Both checks run on the late path too
+  (`register_definition`, which a corpus import takes), where the rules are read
+  again so one added after the build still counts. Pinned in
+  `tests/test_conservativity.py`.
+
+The bespoke `.edi` source language and its compiler are **gone**. A system is a
+`SystemSpec` and nothing else; there is no text form to round-trip through, and
+`LineType` behaviours the compiler alone could author (`indent`, a logical line
+with no formula field) are refused at construction.
 
 ## Working in this repo
 
@@ -44,8 +170,16 @@ The **backend** requires **Python 3.13+** and [uv](https://docs.astral.sh/uv/).
 ```bash
 uv sync                                      # install deps (incl. dev group)
 uv run pytest                                # run the test suite
+uv run pytest -n auto --dist loadfile        # …in parallel, as CI runs it
 uv run uvicorn app.main:app --reload         # run the dev server (docs at /docs)
 ```
+
+The suite is a long tail — ~2,100 tests at a fifth of a second each, with no
+single test worth optimising — so what makes it quick is running it on every
+core. `--dist loadfile` keeps a file's tests together, which matters because the
+module-scoped fixtures that build formal systems would otherwise be built once
+per worker. A run against real Postgres (`EDIFYCE_TEST_DATABASE_URL`) shares one
+database and is refused under `-n`; run those serially.
 
 The **frontend** requires **Node 20+** and lives in `frontend/`.
 
@@ -63,9 +197,49 @@ extra config is needed. Alternatively, after `npm run build` the FastAPI app
 serves the static bundle from `/`, so a single `uvicorn` process serves both the
 API and the UI (see the static-frontend block at the bottom of `app/main.py`).
 
+### Database migrations
+
+The database schema is **model-driven**: the SQLAlchemy models in `app/db/` are
+the source of truth, and Atlas diffs them against `migrations/` to plan new SQL.
+After changing a model, generate and commit the migration — don't hand-write it:
+
+```bash
+atlas migrate diff <name> --env local    # plan a migration from the models
+atlas migrate validate --env local       # read-only: verify atlas.sum integrity
+```
+
+`atlas migrate diff` writes a new `migrations/*.sql` **only when the models have
+drifted** from the recorded migrations; on a clean tree it prints "synced" and
+writes nothing. It is *not* a read-only probe — don't run it with a throwaway
+name to "check" for drift, because a real drift leaves a stray migration (and a
+bumped `atlas.sum`) behind. That file-writing behavior is exactly how CI detects
+drift: it runs `atlas migrate diff drift_check` and fails if `migrations/` is
+then dirty (`.github/workflows/migrations.yml`). For a genuinely read-only check
+use `atlas migrate validate`. When you do generate a migration, commit **both**
+the new `migrations/*.sql` file and the updated `migrations/atlas.sum`.
+
+Atlas needs a throwaway **dev database** (with pgvector) to diff against; how you
+supply it depends on where you're working — see `atlas.hcl` for the `ATLAS_DEV_URL`
+override (its default spins up `docker://pgvector/pg16/dev`). Two gotchas
+wherever you run it:
+
+- **`psql` rejects a `search_path` query param** in `ATLAS_DEV_URL` — it's
+  Atlas-specific. Strip it (`sed -E 's/[?&]search_path=[^&]*//'`) for raw `psql`;
+  Atlas itself consumes the full URL fine.
+- **Never hand-merge `atlas.sum`.** It's a hash chain Atlas maintains; a manual
+  edit produces a checksum Atlas rejects. If a migration conflicts with `develop`
+  (usually only `atlas.sum` collides, since migration files have distinct
+  timestamps), roll back your migration commit, merge `develop`, then re-run
+  `atlas migrate diff` to regenerate the file and sum on the new base.
+
 - **Run the tests before and after any change to the engine.** The engine is
   large, largely untyped in its internals, and interconnected — tests are the
-  safety net. CI runs `uv run pytest -v` on every PR.
+  safety net. CI runs `uv run pytest -n auto --dist loadfile` on every PR that
+  touches the backend — `tests.yml` is path-filtered, and its list is *what
+  pytest reads*, which is wider than `app/` + `website/`: five test modules
+  import from `scripts/`. Add to that list when you add a directory the suite
+  reads, or the suite silently stops running for changes to it. The frontend's
+  checks are `frontend.yml`, filtered the same way on `frontend/**`.
 - **Keep the API layer thin.** New behaviour belongs in `website/logical/`;
   `app/` should stay a translation layer between HTTP/Pydantic and the engine.
 - **Keep the frontend a thin client.** It renders and calls the API; proof and
@@ -91,15 +265,24 @@ API and the UI (see the static-frontend block at the bottom of `app/main.py`).
   or may not carry a field, that field belongs in the class as a declared
   attribute with a default (so every instance has it and callers stay typed), not
   as something attached ad hoc and probed with `getattr`. Reserve `getattr`/
-  `setattr` for genuinely dynamic keys not known until runtime (e.g. the
-  `add_context` edits in `ProofLine.edit_context`).
+  `setattr` for genuinely dynamic keys not known until runtime — a lookup keyed
+  by user-authored strings, say — never for a field your own code declares.
 - **Import at module top.** Put imports at the top of the module, not inside
   functions. A function-local import is only justified to break a real import
   cycle or to defer a heavy/optional dependency — and when you use one, say why in
-  a comment (see `matching/paths.py`, which imports its siblings function-locally
-  on purpose). The kernel depends on `matching`, and `formal_system`/`compiler`
+  a comment. The kernel depends on `matching`, and `formal_system`/`compiler`
   depend on the kernel, so those directions import freely at the top; `matching`
   must never import the kernel or `formal_system`.
+- **Keep the kernel's dependency on `matching` inside `kernel/constructors.py`.**
+  It is the only module there that reads a `Pattern`, and nothing it returns
+  contains one: a production is projected once to a `Constructor`, and a term,
+  its constructor, that constructor's slot sorts and a sort union's branches are
+  all kernel data. That is what lets `terms`, `unify`, `side_conditions` and
+  `definitions` be written against the kernel alone — so resolve a production at
+  the projection rather than importing `matching` into another kernel module.
+  The kernel also reads no *strings*: turning surface syntax into terms is
+  `formal_system`'s job (`parse_definition`), so nothing in the trusted core
+  re-parses at check time.
 
 ## On comments
 
@@ -110,6 +293,38 @@ and reshaped, why an edge case is handled the way it is. See `app/main.py`'s not
 on the proof-checker raising for the tone to aim for. If a comment merely
 restates the line below it, delete it.
 
+## Writing a pull request
+
+`.github/pull_request_template.md` is the layout to fill in. GitHub only
+pre-fills it for PRs opened in the web UI, so a PR opened through the API or a
+CLI has to reproduce its headings deliberately — read the file before writing a
+body.
+
+It splits the body in two, and the split is the whole point. Above the `---` is
+a **summary a reviewer reads first**: plain-language motivation, where the change
+sits relative to the roadmaps and other PRs, the smallest example that shows it,
+and a table of what changed in which area. Below it, **`## Design decisions` and
+`## Implementation details` have no length budget** — rationale, rejected
+alternatives, measurements and edge cases belong there in as much depth as they
+deserve. Depth is not the problem; depth *ahead of the summary* is.
+
+Four rules the template can't enforce on its own:
+
+- **Aim for under ~400 words above `## Changes by area`.** Advisory, not a limit
+  to game. If the summary can't be short, that is usually a sign the PR is doing
+  two things.
+- **Write the opening paragraph in plain language.** Concrete over abstract: what
+  someone could not do before and can now. The strongest recent bodies (#206,
+  #207) opened with a worked before/after, and that instinct is what the
+  `## Simplest example` heading is preserving.
+- **Review rounds go in the collapsed block at the bottom**, or in a follow-up
+  comment. Findings-and-fixes narration is how the PR reached its current state,
+  not a description of the change, and it has been running to roughly half the
+  body.
+- **The Kernel row is never deleted.** Say `none` when `website/logical/kernel/`
+  is untouched. Whether the trusted core changed is a reviewer's first question,
+  and an omitted row answers it ambiguously.
+
 ## For Claude Code on the web
 
 **Do not set up scheduled check-ins, cron triggers, or self-scheduled wake-ups**
@@ -117,3 +332,20 @@ in Claude Code web sessions for this repo. Web sessions run in ephemeral
 containers and recurring triggers are not wanted here — do the work in the
 session and finish. If a task seems to call for polling or a delayed follow-up,
 surface it to the user instead of scheduling it.
+
+**The Atlas dev database is pre-provisioned in web sessions only.** The session
+setup script installs Atlas, logs it in via `ATLAS_TOKEN`, and starts a Postgres
++ pgvector cluster on `127.0.0.1:5433` that `ATLAS_DEV_URL` already points at — so
+`atlas migrate diff --env local` works out of the box (this is not present in
+local checkouts, which supply their own dev DB per `atlas.hcl`). The setup runs
+**once at container init**, so after a worker/container restart the server is gone
+while its data dir at `/var/lib/postgresql/pgdev` persists. If `atlas` reports
+`connect: connection refused` on `:5433`, restart it:
+
+```bash
+runuser -u postgres -- /usr/lib/postgresql/16/bin/pg_ctl \
+  -D /var/lib/postgresql/pgdev -o "-p 5433 -k /tmp" \
+  -l /var/lib/postgresql/pgdev/server.log -w start
+```
+
+(`pg_ctl -D /var/lib/postgresql/pgdev status` tells you if it's already up.)

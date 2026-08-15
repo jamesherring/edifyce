@@ -12,8 +12,9 @@
 
 	const nav = [
 		{ href: '/', label: 'Home' },
-		{ href: '/compile', label: 'Compile' },
-		{ href: '/verify', label: 'Verify' }
+		{ href: '/systems', label: 'Systems' },
+		{ href: '/proofs', label: 'Proofs' },
+		{ href: '/assumptions', label: 'Assumptions' }
 	];
 
 	function isActive(href: string) {
@@ -29,20 +30,24 @@
 <header
 	class="bg-background/80 sticky top-0 z-40 w-full border-b backdrop-blur supports-[backdrop-filter]:bg-background/60"
 >
-	<div class="mx-auto flex h-14 max-w-5xl items-center gap-4 px-4">
-		<a href="/" class="flex items-center gap-2 font-semibold">
+	<div class="mx-auto flex h-14 max-w-5xl items-center gap-2 px-4 sm:gap-4">
+		<a href="/" class="flex shrink-0 items-center gap-2 py-2 font-semibold">
 			<span class="bg-primary text-primary-foreground grid size-7 place-items-center rounded-md">
 				<Turnstile class="size-4" />
 			</span>
-			<span class="tracking-tight">Edifyce</span>
+			<!-- The mark alone carries the branding on a phone; the wordmark is the
+			     first thing to go when the row can't fit. -->
+			<span class="hidden tracking-tight sm:inline">Edifyce</span>
 		</a>
 
-		<nav class="ml-2 flex items-center gap-1">
+		<!-- flex-1 + min-w-0 so the nav, not the page, absorbs a narrow viewport:
+		     it scrolls itself rather than pushing the controls off-screen. -->
+		<nav class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto sm:ml-2">
 			{#each nav as item (item.href)}
 				<a
 					href={item.href}
 					class={[
-						'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+						'shrink-0 rounded-md px-2 py-2 text-sm font-medium transition-colors sm:px-3',
 						isActive(item.href)
 							? 'bg-accent text-accent-foreground'
 							: 'text-muted-foreground hover:text-foreground hover:bg-accent/50'
@@ -53,13 +58,13 @@
 			{/each}
 		</nav>
 
-		<div class="ml-auto flex items-center gap-1 sm:gap-2">
+		<div class="flex shrink-0 items-center gap-1 sm:gap-2">
 			{#if auth.ready}
 				{#if auth.user}
 					<a
 						href="/account"
 						class={[
-							'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors sm:px-3',
+							'flex items-center gap-1.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors sm:px-3',
 							isActive('/account')
 								? 'bg-accent text-accent-foreground'
 								: 'text-muted-foreground hover:text-foreground hover:bg-accent/50'

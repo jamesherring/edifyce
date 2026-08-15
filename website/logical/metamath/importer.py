@@ -1,0 +1,885 @@
+"""Turning a parsed Metamath database into an Edifyce system and proofs.
+
+Three jobs, in the order an import performs them:
+
+1. :func:`build_spec` - the **grammar**. Metamath has no parser: its syntax
+   ``$a`` statements (typecode ``wff``/``class``/…) *are* the productions of the
+   language, proved into place step by step. Edifyce has a grammar, so those
+   become ``Production``s and the syntax steps of a proof then vanish - they are
+   parsing, not reasoning, which is a large part of why an imported proof is
+   shorter than the stored one.
+
+2. :func:`promote_assertions` - the **library**. Each logical ``$a``/``$p``
+   becomes a :class:`PromotedTheorem`: its statement is the conclusion, its ``$e``
+   hypotheses the premises, its ``$f`` hypotheses the metavariables (so citations
+   re-instantiate it), and its ``$d`` constraints ``disjoint`` provisos. Metamath
+   applies axioms and proved theorems identically, and so does this.
+
+3. :func:`import_proof` - the **proof**. Runs the compressed proof's stack machine
+   and emits Edifyce proof text: one line per *logical* step, citing the theorem
+   applied and the lines filling its premises. The result is checked by Edifyce's
+   own kernel - nothing here re-verifies, which is the point.
+
+What is deliberately not attempted: definition classification (every logical
+``$a`` imports as an axiom, never a ``Define``), and any grammar beyond what the
+syntax axioms state.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass
+from ..promotion import TheoremSpec, promote_from_source, promote_spec
+from ..declarative import LinePart, LineSpec, Production, SystemSpec, build_system
+from ..formal_system import FormalSystem, PromotedTheorem
+from . import compressed
+from .parser import Assertion, Database, Hypothesis, MetamathError
+
+
+# Metamath labels admit letters, digits, and `-_.`; a citation adds the line
+# numbers and separators Edifyce's reference syntax uses, plus `?` for an open
+# goal (`proof.HOLE_KEY`). `?` is not a Metamath label character, so admitting it
+# cannot make a citation ambiguous — and without it a proof written against an
+# imported corpus is the one place a hole could not be written.
+_REFERENCE_REGEX = r"[A-Za-z0-9_.\-,? ]+"
+
+
+@dataclass
+class _Entry:
+    """One stack cell: an expression, and where it was emitted if it is logical."""
+
+    typecode: str
+    tokens: tuple[str, ...]
+    line: int | None = None
+
+
+def build_spec(
+    database: Database,
+    name: str = "Metamath",
+    before: str | None = None,
+    variable_scope: str | None = None,
+    binders: Mapping[str, Mapping[str, Sequence[str]]] | None = None,
+) -> SystemSpec:
+    """Build the Edifyce grammar declared by ``database``'s syntax axioms.
+
+    ``before`` stops at that label, exclusive. Rejecting forward *citations* is
+    not enough on its own: a syntax step never reaches the kernel, so if the
+    grammar carries notation declared later, a proof's lines can be *parsed*
+    using it even though nothing cites it - and what the kernel then checks
+    depends on notation that did not exist yet. set.mm makes this concrete: the
+    mathbox theorem `bj-0` overlaps the nesting of `wi`, and without this limit
+    it captures the parse of formulas in theorems 600k lines earlier.
+
+    ``variable_scope`` moves that limit for the *variable* leaves alone,
+    defaulting to ``before``. An ordered walk (:mod:`.corpus`) rebuilds the
+    grammar only when notation is declared, so between rebuilds the leaves would
+    lag behind the theorem being checked and a statement mentioning a
+    newly-declared variable would fail to parse.
+
+    It no longer weakens the scope the walk checks under. A variable is declared
+    as its own leaf, so the walk *declares* them to the far end and then admits
+    each into its sort as the theorem that may mention it is reached
+    (:func:`.corpus.variable_schedule`) - the same discipline notation gets, on a
+    grammar that can grow rather than one that has to be rebuilt.
+
+    ``binders`` declares which slots of a syntax axiom **bind**, and over which
+    others: ``{"wal": {"x": ["ph"]}}`` for ``A. x ph``. A ``.mm`` file says
+    nothing about this - a binder and a two-argument connective are the same
+    shape - so it is supplied per database rather than read, and defaults to
+    none, which is how every import behaved before it existed. See
+    :mod:`~.setmm` for `set.mm`'s, and ``docs/binding-slots-design.md`` for what
+    declaring it buys.
+    """
+    declared = binders or {}
+    productions: list[Production] = []
+
+    for assertion in _syntax_before(database, before):
+        floatings = [(h.variable, h.typecode) for h in assertion.floatings]
+        tokens, bindings = _uncollide(assertion.tokens, floatings)
+        text = " ".join(tokens)
+        scopes_over = _declared_scopes(
+            declared.get(assertion.label), floatings, bindings, assertion.label
+        )
+
+        if bindings:
+            productions.append(
+                Production(
+                    sort=assertion.typecode,
+                    name=assertion.label,
+                    template=text,
+                    bindings=bindings,
+                    scopes_over=scopes_over,
+                )
+            )
+        else:
+            # No variables: a constant of its sort (`c2 $a class 2`). Metamath
+            # declares the object-language role Edifyce asks for rather than
+            # leaving it to be guessed - the token comes from a `$c`, never a
+            # `$v`, and the two are disjoint - so say so. Nothing reads it until
+            # a definition is built over the token (see Production), which is
+            # what an imported `df-` will be.
+            productions.append(
+                Production(
+                    sort=assertion.typecode,
+                    name=assertion.label,
+                    atom_value=text,
+                    denotes_constant=True,
+                )
+            )
+
+    variables = _variable_productions(
+        database, before if variable_scope is None else variable_scope
+    )
+    productions.extend(variables)
+    logical_sort = _logical_sort(productions, variables)
+
+    return SystemSpec(
+        name=name,
+        brackets=[("(", ")")],
+        # Metamath's file format *is* token-separated - every statement is a list
+        # of space-delimited tokens - so the promise costs nothing to make and is
+        # what lets a `$c` spelled with a parenthesis (`[,)`, `((`, `O(1)`) be
+        # read as the constant it is (see declarative.SystemSpec).
+        token_separated=True,
+        productions=productions,
+        lines=[
+            LineSpec(
+                name="statement",
+                shape=f"<{logical_sort}> [<reference>]",
+                parts=[LinePart(name="reference", regex=_REFERENCE_REGEX)],
+                logical_sort=logical_sort,
+            )
+        ],
+    )
+
+
+def _declared_scopes(
+    declared: Mapping[str, Sequence[str]] | None,
+    floatings: list[tuple[str, str]],
+    bindings: list[tuple[str, str]],
+    label: str,
+) -> dict[str, list[str]]:
+    # A syntax axiom's declared binding slots, keyed by the slot names the
+    # production actually ends up with.
+    #
+    # `_uncollide` may have renamed a slot whose name occurs inside one of the
+    # template's constants (`wral`'s class `A`, found inside the quantifier `A.`),
+    # and a declaration is written against the `$f` names an author reads in the
+    # `.mm` file. Both lists are in floating order, so the rename is recoverable
+    # positionally - which is the only place the two namings meet.
+    #
+    # A name the axiom does not declare is an author's error about *this* axiom
+    # and is refused: silently dropping it would leave a binder undeclared, and an
+    # undeclared binder is exactly what this exists to fix.
+    #
+    # An entry for a *label* the database does not declare is ignored rather than
+    # refused, and the asymmetry is deliberate: one table may be offered to several
+    # `.mm` files, and a variant lacking `cesum` should import rather than fail
+    # over a production it never had. The cost is that a misspelled label is
+    # silently inert, so a table is worth checking against its own database once
+    # (see the roadmap's A4 measurement) rather than trusted.
+    if not declared:
+        return {}
+    rename = {old: new for (old, _), (new, _) in zip(floatings, bindings)}
+    scopes: dict[str, list[str]] = {}
+    for binder, scoped in declared.items():
+        if binder not in rename:
+            raise MetamathError(
+                f"Binding slots for '{label}' name '{binder}', which is not one of "
+                f"its variables ({', '.join(sorted(rename)) or 'none'})."
+            )
+        for name in scoped:
+            if name not in rename:
+                raise MetamathError(
+                    f"Binding slots for '{label}' say '{binder}' scopes over "
+                    f"'{name}', which is not one of its variables."
+                )
+        scopes[rename[binder]] = [rename[name] for name in scoped]
+    return scopes
+
+
+def _uncollide(
+    tokens: tuple[str, ...], bindings: list[tuple[str, str]]
+) -> tuple[tuple[str, ...], list[tuple[str, str]]]:
+    # Rename a production's variable when its name also occurs *inside* one of the
+    # template's constants, and give back the rewritten tokens and bindings.
+    #
+    # A production template is a string, and its variables are located by scanning
+    # for their names at every character offset - so a variable whose name is a
+    # prefix of a constant is found inside that constant too. Metamath's set.mm
+    # does this the moment it quantifies: `wral` is `A. x e. A ph`, where `A.` is
+    # the universal quantifier and `A` a class variable. Scanned as text, `A` is
+    # found at offset 0 as well, and the production then demands the *same* class
+    # in both places - so `A. x e. A ph` parses and `A. y e. B ph` does not. On a
+    # set.mm import that silently invalidates every restricted quantification.
+    #
+    # Metamath is tokenised on whitespace, so the two readings are tellable apart
+    # here even though the string matcher cannot tell them apart later: a variable
+    # occurring more often as a substring than as a token is colliding. The
+    # variable's *name* is private to the production - a formula binds it by
+    # position, not by name - so renaming it changes no surface syntax. This is
+    # the same remedy `Match.create_pattern` applies to a definition's defined
+    # form, which reaches it by comparing string against tree occurrences.
+    renamed: dict[str, str] = {}
+    for variable, _sort in bindings:
+        occurrences = sum(1 for token in tokens if token == variable)
+        if sum(token.count(variable) for token in tokens) == occurrences:
+            continue
+
+        index = 0
+        while True:
+            candidate = f"{variable}_{index}"
+            taken = any(candidate in token for token in tokens) or any(
+                candidate == name for name, _ in bindings
+            )
+            if not taken and candidate not in renamed.values():
+                renamed[variable] = candidate
+                break
+            index += 1
+
+    if not renamed:
+        return tokens, bindings
+
+    return (
+        tuple(renamed.get(token, token) for token in tokens),
+        [(renamed.get(name, name), sort) for name, sort in bindings],
+    )
+
+
+def _syntax_before(database: Database, before: str | None) -> list[Assertion]:
+    # The notation-declaring statements available to `before`, in file order.
+    syntax = database.syntax_assertions()
+    if before is None:
+        return list(syntax)
+    limit = database.position(before)
+    return [a for a in syntax if database.position(a.label) < limit]
+
+
+def _declared_variables(
+    database: Database, before: str | None = None
+) -> dict[str, list[str]]:
+    # Every `$f`-declared typecode, mapped to the variables inhabiting it where
+    # `before` sits. A variable is a member of its sort in its own right - `wph $f
+    # wff ph` makes a bare `ph` a wff - so this holds for sorts that *also* have
+    # syntax axioms, not only for variable-only ones.
+    #
+    # Keyed on the (typecode, variable) *pair*, because a `$f` is scoped: the same
+    # `x` may be a class in one block and a wff in a later one, and typing it as
+    # both from its earliest use would make an unambiguous grammar ambiguous. It
+    # also keeps the grammar proportionate - set.mm declares 355 variables, and a
+    # theorem can reach only the handful its scope types.
+    limit = len(database.order) if before is None else database.position(before) + 1
+    sorts: dict[str, list[str]] = {}
+    for (typecode, variable), position in database.typed_from().items():
+        if position < limit:
+            sorts.setdefault(typecode, []).append(variable)
+    return sorts
+
+
+def _binder_sorts(database: Database) -> list[str]:
+    # `$f` typecodes built by no syntax axiom at all - set.mm's `setvar`, whose
+    # only members *are* the declared variables. These are the individual-variable
+    # sorts, which is what a `$d` constrains (see _distinct_provisos).
+    built = database.syntax_typecodes()
+    return [t for t in database.floating_typecodes() if t not in built]
+
+
+def variable_production_name(database: Database, typecode: str, variable: str) -> str:
+    """The production name carrying `variable` as a leaf of sort `typecode`.
+
+    Metamath keeps labels and variable names in separate namespaces; Edifyce
+    resolves productions out of one, so a name that collides with an assertion
+    label would silently rebind it. Salt until free rather than trusting that no
+    `set.mm`-alike ever labels a theorem `wff_var_ph`.
+    """
+    name = f"{typecode}_var_{variable}"
+    while name in database.assertions:
+        name += "_"
+    return name
+
+
+def _variable_productions(
+    database: Database, before: str | None = None
+) -> list[Production]:
+    # A sub-sort `<typecode>_var` per typecode, holding one atom leaf per declared
+    # variable, and included into the typecode's own sort. Without these a bare
+    # variable does not parse as its sort, and any statement mentioning one - every
+    # `$e` hypothesis, most schemas - fails to read.
+    #
+    # One leaf *each*, rather than a single regex leaf alternating over all of
+    # them, because a sort's variables have to be able to grow. The corpus pass
+    # adds notation as the walk reaches it and must add variables the same way
+    # (see `walk`), and an alternation cannot be extended in place: a regex leaf's
+    # kernel constructor is identified by its regex *text* (`kernel.constructors`),
+    # so rewriting it would split one variable into two non-interchangeable terms
+    # either side of the rewrite. An atom is identified by its own token, and joins
+    # a sort through `add_pattern` - the mechanism notation already grows through.
+    #
+    # The sub-sort is what keeps `$d` expressible. A proviso restricts to the
+    # leaves that *are* variables (`_distinct_provisos`), and with the variables
+    # spread over the typecode's own sort there would be no name for just those -
+    # `disjoint(A, B, class)` would wrongly separate constants like `RR` too.
+    #
+    # `denotes_constant` is left False: these are `$v` variables, the things a
+    # binder binds, as opposed to the `$c`-derived nullary constants above.
+    productions: list[Production] = []
+    for typecode, members in _declared_variables(database, before).items():
+        sort = f"{typecode}_var"
+        productions.extend(
+            Production(
+                sort=sort,
+                name=variable_production_name(database, typecode, variable),
+                atom_value=variable,
+            )
+            for variable in members
+        )
+        # Shapeless: a production naming another sort *includes* that sort, so a
+        # variable reads as its typecode as well as as a variable.
+        productions.append(Production(sort=typecode, name=sort))
+    return productions
+
+
+def _logical_sort(productions: list[Production], variables: list[Production]) -> str:
+    # The sort a `|-` statement is written in. Metamath does not say so directly:
+    # the assertion typecode `|-` is not itself a grammar sort, so infer it from
+    # the productions the grammar has - conventionally `wff`, but read rather
+    # than assumed.
+    #
+    # The conventional names are looked for across *every* production, the
+    # variable leaves included: a `$f`-declared typecode is a sort in its own
+    # right (`wph $f wff ph` makes a bare `ph` a wff), so a statement can be
+    # written in one before any syntax axiom builds it. set.mm opens with two
+    # such theorems - `idi` and `a1ii`, both `|- ph` - which are otherwise
+    # unreadable, and an ordered walk reaches them before anything else.
+    #
+    # The fallback stays narrow, though: with no conventional name to go on, only
+    # a *notation* sort is a defensible guess. Choosing among variable-only sorts
+    # would as happily pick a binder sort (`setvar`) as the logical one.
+    named = {p.sort for p in productions}
+    for candidate in ("wff", "formula"):
+        if candidate in named:
+            return candidate
+
+    leaves = {p.name for p in variables}
+    notation = [p.sort for p in productions if p.name not in leaves]
+    if not notation:
+        raise MetamathError(
+            "Database declares no syntax axioms and no sort named 'wff' or "
+            "'formula', so which sort a '|-' statement is written in cannot be told."
+        )
+    return notation[0]
+
+
+@dataclass(frozen=True)
+class LibraryEntry:
+    """One logical assertion as it joined a system's library.
+
+    What a caller needs to *store* it: the strings it was promoted from, the
+    engine object those composed to (whose terms are worth caching), and whether
+    it is a primitive. See ``app/db/promoted_theorems_mapping.py``.
+    """
+
+    spec: TheoremSpec
+    theorem: PromotedTheorem
+    primitive: bool
+    # The label the theorem's own proof cites each premise by, positionally — a
+    # Metamath `$e` label. Only its own proof may, which is why they travel with
+    # the theorem rather than becoming library entries (see `corpus._givens`).
+    premise_labels: tuple[str, ...] = ()
+
+
+def register(
+    assertion: Assertion, database: Database, system: FormalSystem
+) -> LibraryEntry:
+    """Register one logical assertion on ``system``, as what it is.
+
+    A logical ``$a`` is a **primitive** of the system - `ax-mp` is literally an
+    inference rule - so it joins ``inference_rules``. A ``$p`` is *derived*, and
+    joins ``promoted_theorems``, the namespace that exists to keep tens of
+    thousands of derived results out of the system's primitives.
+
+    Both are the same shape to the checker (premises, conclusion, provisos over
+    metavariables), which is why one construction serves both: the difference is
+    which namespace answers a citation, and therefore what the system can say
+    about itself. Until this split an imported system could not answer "what are
+    your axioms?" - everything was derived.
+
+    Returns what it registered, so a caller can persist the library it is
+    building. (Storage keeps both kinds in one table and marks the primitives -
+    an imported system has 1,559 of them, far too many to rebuild eagerly as
+    `inference_rules` on every verify. The namespace split above is what the
+    *engine* does with a library it has in memory; the flag is how that survives
+    a round trip.)
+    """
+    spec = theorem_spec(assertion, database, system)
+    theorem = promote_spec(system, spec)
+    primitive = not assertion.proof
+    if primitive:
+        system.add_inference_rule(theorem.as_rule())
+    else:
+        system.promote(theorem)
+    return LibraryEntry(
+        spec=spec,
+        theorem=theorem,
+        primitive=primitive,
+        premise_labels=tuple(h.label for h in assertion.essentials),
+    )
+
+
+def promote_assertions(
+    database: Database, system: FormalSystem, before: str | None = None
+) -> None:
+    """Register ``database``'s logical assertions on ``system``.
+
+    ``before`` stops at that label, exclusive. A proof may only cite what
+    *precedes* it, so checking one theorem must not have that theorem - nor
+    anything later - already registered, or it could justify itself.
+    """
+    for assertion in database.logical_assertions():
+        if assertion.label == before:
+            return
+        register(assertion, database, system)
+
+
+def theorem_spec(
+    assertion: Assertion, database: Database, system: FormalSystem
+) -> TheoremSpec:
+    """One logical ``$a``/``$p`` as the strings a promotion is written from.
+
+    Split out from :func:`promoted_theorem` because two callers want it: promotion
+    itself, and the persistence layer, which stores exactly these strings so the
+    theorem can be promoted again without the ``.mm`` file (see
+    ``app/db/theorems_mapping.py``). ``system`` is read only for the sorts a ``$d``
+    proviso may name.
+    """
+    rename = _proviso_safe_names(assertion)
+    substitute = (lambda tokens: tuple(rename.get(t, t) for t in tokens)) if rename else tuple
+
+    return TheoremSpec(
+        label=assertion.label,
+        statement=" ".join(substitute(assertion.tokens)),
+        metavariables={
+            rename.get(h.variable, h.variable): h.typecode for h in assertion.floatings
+        },
+        premises=tuple(" ".join(substitute(h.tokens)) for h in assertion.essentials),
+        distinct=_distinct_provisos(assertion, database, system, rename),
+    )
+
+
+def promoted_theorem(
+    assertion: Assertion, database: Database, system: FormalSystem
+) -> PromotedTheorem:
+    """Promote one logical ``$a``/``$p`` to a citable schematic theorem."""
+    return promote_spec(system, theorem_spec(assertion, database, system))
+
+
+def _proviso_safe_names(assertion: Assertion) -> dict[str, str]:
+    # Rename a metavariable whose name contains the character a proviso uses to
+    # separate its arguments, and give back the mapping.
+    #
+    # `disjoint(left, right, sort)` is read by splitting on top-level commas, so
+    # a metavariable with a comma *in its name* cannot be named in one. set.mm
+    # spells its inner product `.,`, and `$d ., x` came out as
+    # `disjoint(.,, x, setvar)` - four arguments where three were meant, refused
+    # by the proviso parser, so the theorem never promoted and everything citing
+    # it failed with it. 17 statements and the 52 that cite them.
+    #
+    # A metavariable's name is private to the promoted theorem: it names a slot,
+    # and a citation fills that slot by unification, not by name. So renaming it
+    # in the statement, the premises and the provisos together changes nothing
+    # about what the theorem says or what it applies to - the same argument that
+    # licenses `_uncollide` renaming a production's variable.
+    # Every token the theorem already spells, not just its statement's. A
+    # replacement colliding with a *constant* in a premise would leave that
+    # constant's spelling alone while registering it as the metavariable, so the
+    # premise would parse as depending on the metavariable and the theorem would
+    # accept premises its Metamath assertion does not. Reported by Codex review.
+    used = {h.variable for h in assertion.floatings}
+    used.update(assertion.tokens)
+    for hypothesis in assertion.mandatory:
+        used.update(hypothesis.tokens)
+    rename: dict[str, str] = {}
+    for hypothesis in assertion.floatings:
+        if "," not in hypothesis.variable:
+            continue
+
+        stem = hypothesis.variable.replace(",", "")
+        index = 0
+        while True:
+            candidate = f"{stem}_{index}"
+            if candidate not in used and candidate not in rename.values():
+                rename[hypothesis.variable] = candidate
+                break
+            index += 1
+    return rename
+
+
+def _distinct_provisos(
+    assertion: Assertion,
+    database: Database,
+    system: FormalSystem,
+    rename: dict[str, str] | None = None,
+    only: Collection[str] | None = None,
+) -> tuple[str, ...]:
+    # A `$d x y z` constrains every *pair* among its variables, and Edifyce's
+    # algebra takes one pair per proviso, so expand. Only variables the assertion
+    # actually binds are kept: a $d naming something outside its metavariables
+    # would fail to resolve, and constrains nothing here anyway.
+    #
+    # ``only`` narrows that further, to the names the *reader* of these provisos
+    # can resolve, dropping the pairs that would mention anything else. A theorem
+    # passes none, its metavariables being exactly its `$f` variables; a definition
+    # passes what its defined form supplies plus the binders it names unambiguously,
+    # because the rest of a `$d` constrains something the definition does not have
+    # (`definitions.classify` argues why dropping such a pair loses nothing). Named
+    # before the rename, which renames a production's private slot and is not what
+    # a caller reads.
+    #
+    # `$d` forbids the two substitutions sharing a **variable** - of any typecode,
+    # not only the binder one - while leaving them free to share a *constant*:
+    # `RR = RR` is permitted under `$d A B`, `C = C` is not. So the proviso is
+    # restricted to the leaves that *are* the variables, which is exactly what the
+    # `<typecode>_var` productions enumerate (see _variable_sort_productions);
+    # a constant like `RR` is built by its own production and is not among them.
+    #
+    # One proviso per variable sort, conjoined. Restricting instead to the single
+    # binder sort - which is what this did - silently dropped every `$d` over
+    # class or wff variables, since none of their leaves are `setvar`.
+    # `floating_typecodes` is a cached view; `_declared_variables` would rescan
+    # the whole database, and this runs once per theorem promoted.
+    variable_leaves = [
+        name
+        for name in (f"{typecode}_var" for typecode in database.floating_typecodes())
+        if name in system.build_context.variables
+    ]
+
+    rename = rename or {}
+    bound = {h.variable for h in assertion.floatings}
+    if only is not None:
+        bound &= set(only)
+    provisos: list[str] = []
+    for group in assertion.distinct:
+        members = sorted(rename.get(v, v) for v in group if v in bound)
+        for i, left in enumerate(members):
+            for right in members[i + 1:]:
+                for sort in variable_leaves or [None]:
+                    # No variable production at all: fall back to a sortless
+                    # proviso, which also separates constants. Over-strict - it
+                    # can refuse a legitimate proof, never admit an illegitimate
+                    # one - and unreachable for any database declaring a `$v`.
+                    arguments = f"{left}, {right}" + (f", {sort}" if sort else "")
+                    proviso = f"disjoint({arguments})"
+                    if proviso not in provisos:
+                        provisos.append(proviso)
+    return tuple(provisos)
+
+
+def import_proof(database: Database, label: str) -> str:
+    """Render the Edifyce proof text for ``label``'s compressed Metamath proof.
+
+    One line per *logical* step; syntax steps build expressions and emit nothing,
+    since Edifyce parses well-formedness rather than proving it.
+    """
+    assertion = database.assertions.get(label)
+    if assertion is None:
+        raise MetamathError(f"No assertion labelled {label!r}.")
+    if not assertion.proof:
+        raise MetamathError(f"{label} has no proof (is it a $a?).")
+
+    labels, letters = compressed.split_proof(assertion.proof)
+    _reject_forward_citations(assertion, labels, database)
+    steps = compressed.decode(letters, labels, assertion.mandatory)
+
+    stack: list[_Entry] = []
+    saved: list[_Entry] = []
+    lines: list[str] = []
+    premises: dict[str, _Entry] = {}
+
+    for step in steps:
+        if step.backreference is not None:
+            if step.backreference >= len(saved):
+                raise MetamathError(f"{label}: backreference to an unsaved step.")
+            entry = saved[step.backreference]
+
+        elif step.hypothesis is not None:
+            entry = _push_hypothesis(step.hypothesis, lines, premises)
+
+        else:
+            entry = _apply(step.label, database, stack, lines, premises, label)
+
+        stack.append(entry)
+        if step.saved:
+            saved.append(entry)
+
+    if len(stack) != 1:
+        raise MetamathError(
+            f"{label}: proof ends with {len(stack)} stack entries, expected exactly 1."
+        )
+
+    # The proof must actually reach what the theorem claims. Without this a proof
+    # that terminates on *some* well-formed result imports cleanly and its lines
+    # check - but they establish a different statement, while the theorem is still
+    # promoted under its declared one. A green import has to mean the declared
+    # statement was derived.
+    concluded = stack[0]
+    if concluded.tokens != assertion.tokens or concluded.typecode != assertion.typecode:
+        raise MetamathError(
+            f"{label}: proof concludes "
+            f"{concluded.typecode} {' '.join(concluded.tokens)!r}, "
+            f"but the statement is {assertion.typecode} {' '.join(assertion.tokens)!r}."
+        )
+
+    return "\n".join(lines)
+
+
+def _reject_forward_citations(
+    assertion: Assertion, labels: list[str], database: Database
+) -> None:
+    # A Metamath proof may cite only what is *active and earlier*. Promoting just
+    # the preceding logical assertions is not enough to enforce that, because a
+    # syntax step never reaches the kernel: `_apply` folds it into the expression
+    # it builds, so a proof citing notation introduced *after* the theorem would
+    # translate to a line the kernel happily checks against a grammar that was
+    # built from the whole database. Enforce the ordering on the proof table
+    # itself, where it covers syntax and logic alike.
+    limit = database.position(assertion.label)
+
+    for label in labels:
+        if label in database.hypotheses:
+            if label not in assertion.active_hypotheses:
+                raise MetamathError(
+                    f"{assertion.label}: proof cites hypothesis {label!r}, "
+                    "which is not in scope for it."
+                )
+            continue
+
+        if label not in database.assertions:
+            raise MetamathError(
+                f"{assertion.label}: proof cites unknown label {label!r}."
+            )
+        if database.position(label) >= limit:
+            raise MetamathError(
+                f"{assertion.label}: proof cites {label!r}, which is declared later "
+                "- a proof may only use what precedes it."
+            )
+
+
+def _push_hypothesis(
+    hypothesis: Hypothesis, lines: list[str], premises: dict[str, _Entry]
+) -> _Entry:
+    # A mandatory hypothesis of the theorem being proved. A floating one stands
+    # for its variable; an essential one is a premise of the proof, stated once as
+    # a line justified by the hypothesis label (which import_theorem registers as
+    # a given). Compressed proofs re-select band-1 hypotheses by letter rather
+    # than Z-saving them, so the same premise is pushed repeatedly - emit it once
+    # and cite that line again.
+    if hypothesis.floating:
+        return _Entry(typecode=hypothesis.typecode, tokens=(hypothesis.variable,))
+
+    existing = premises.get(hypothesis.label)
+    if existing is not None:
+        return existing
+
+    lines.append(f"{' '.join(hypothesis.tokens)} [{hypothesis.label}]")
+    entry = _Entry(
+        typecode=hypothesis.typecode, tokens=hypothesis.tokens, line=len(lines)
+    )
+    premises[hypothesis.label] = entry
+    return entry
+
+
+def _apply(
+    step_label: str | None,
+    database: Database,
+    stack: list[_Entry],
+    lines: list[str],
+    premises: dict[str, _Entry],
+    proving: str,
+) -> _Entry:
+    # Apply a label from the proof's table: pop its mandatory hypotheses, read the
+    # substitution off the floating ones and the cited lines off the essential
+    # ones, then push its statement under that substitution.
+    if step_label is None:
+        raise MetamathError(f"{proving}: proof step selects nothing.")
+
+    hypothesis = database.hypotheses.get(step_label)
+    if hypothesis is not None:
+        return _push_hypothesis(hypothesis, lines, premises)
+
+    assertion = database.assertions.get(step_label)
+    if assertion is None:
+        raise MetamathError(f"{proving}: proof cites unknown label {step_label!r}.")
+
+    arity = len(assertion.mandatory)
+    if arity > len(stack):
+        raise MetamathError(
+            f"{proving}: applying {step_label} needs {arity} stack entries, "
+            f"found {len(stack)}."
+        )
+
+    popped = stack[len(stack) - arity:] if arity else []
+    del stack[len(stack) - arity:]
+
+    substitution: dict[str, tuple[str, ...]] = {}
+    cited: list[int] = []
+    for hypothesis_slot, entry in zip(assertion.mandatory, popped):
+        if hypothesis_slot.floating:
+            substitution[hypothesis_slot.variable] = entry.tokens
+        elif entry.line is not None:
+            cited.append(entry.line)
+
+    tokens = _substitute(assertion.tokens, substitution)
+
+    if not assertion.is_logical:
+        # A syntax step: it built an expression, not a claim. No proof line.
+        return _Entry(typecode=assertion.typecode, tokens=tokens)
+
+    reference = ", ".join([step_label, *(str(n) for n in cited)])
+    lines.append(f"{' '.join(tokens)} [{reference}]")
+    return _Entry(typecode=assertion.typecode, tokens=tokens, line=len(lines))
+
+
+def _substitute(
+    tokens: tuple[str, ...], substitution: dict[str, tuple[str, ...]]
+) -> tuple[str, ...]:
+    out: list[str] = []
+    for token in tokens:
+        out.extend(substitution.get(token, (token,)))
+    return tuple(out)
+
+
+def import_database(database: Database, name: str = "Metamath") -> FormalSystem:
+    """Build a system from ``database`` with every logical assertion promoted."""
+    system = build_system(build_spec(database, name))
+    promote_assertions(database, system)
+    return system
+
+
+def import_theorem(
+    database: Database, label: str, name: str = "Metamath"
+) -> tuple[FormalSystem, str]:
+    """A system for checking ``label``'s proof, and that proof's Edifyce text.
+
+    Scoped exactly as Metamath scopes a ``${ … $}`` block, which is what makes the
+    check meaningful:
+
+    * only assertions *preceding* ``label`` are promoted, so the theorem cannot
+      justify itself and cannot reach forward;
+    * ``label``'s own ``$e`` hypotheses are registered as givens, so the premise
+      lines the proof states resolve. They are assumptions of *this* proof, which
+      is why the system is built per theorem rather than shared.
+    """
+    assertion = database.assertions.get(label)
+    if assertion is None:
+        raise MetamathError(f"No assertion labelled {label!r}.")
+
+    system = build_system(build_spec(database, name, before=label))
+    promote_assertions(database, system, before=label)
+    _givens(assertion, system)
+
+    return system, import_proof(database, label)
+
+
+def _givens(assertion: Assertion, system: FormalSystem) -> list[str]:
+    # Register `assertion`'s own `$e` hypotheses as premises of the proof about to
+    # be checked, and report their labels so a caller can withdraw them again.
+    metavariables = {h.variable: h.typecode for h in assertion.floatings}
+    for hypothesis in assertion.essentials:
+        system.promote(
+            promote_from_source(
+                system,
+                label=hypothesis.label,
+                statement=" ".join(hypothesis.tokens),
+                metavariables=metavariables,
+            )
+        )
+    return [h.label for h in assertion.essentials]
+
+
+@dataclass(frozen=True)
+class GrammarSchedule:
+    """Which productions join which sort, and when.
+
+    ``entries`` maps a position to the ``(sort, production)`` pairs that become
+    admissible there - notation at the syntax axiom that declares it, a variable
+    at its first mention. ``sorts`` names every union a replaying caller must
+    empty first: :func:`build_spec` built to the walk's far end declares the whole
+    grammar and fills each sort with all of it, which is the state a replay starts
+    from.
+
+    ``logical_from`` is the earliest position at which :func:`_logical_sort` could
+    name a sort for a ``|-`` statement - the first conventional name to appear, or
+    failing that the first syntax axiom. Before it the walk's line type would
+    borrow a sort nothing has declared, which is the forward leak the ordering
+    exists to prevent. None when no prefix ever determines one.
+    """
+
+    sorts: tuple[str, ...]
+    entries: dict[int, list[tuple[str, str]]]
+    logical_from: int | None
+
+
+def grammar_schedule(
+    database: Database, before: str | None = None
+) -> GrammarSchedule:
+    """When each production may join its sort, for a walk that grows one system.
+
+    Notation joins at the syntax axiom that declares it - the limit that has to
+    hold, since a constructor declared later can capture an earlier theorem's
+    parse. A variable joins where its ``$f`` first types it
+    (:meth:`~.parser.Database.typed_from`), and its ``<typecode>_var`` sub-sort
+    joins the typecode at the *earliest* of them: held back until then so an empty
+    sub-sort is never a branch of a live sort, but no later, or a variable whose
+    leaf is already live would not read as its typecode. Neither order follows
+    declaration order once a ``$f`` is scoped.
+
+    ``before`` bounds the schedule exactly as it bounds :func:`build_spec`, and a
+    caller replaying against a system must pass the *same* label. A database may
+    declare a sort after the last theorem a walk checks - a `limit` short of the
+    end, or notation trailing the final ``$p`` - and scheduling it would name a
+    sort the horizon-scoped system never built.
+
+    Read by :func:`.corpus.walk`, which builds one system covering the whole walk
+    and then admits each production as it is reached, rather than rebuilding when
+    notation is declared. Rebuilding costs the library: a ``PromotedTheorem`` holds
+    patterns of the system it was built against, so none survive one, and
+    re-promoting 47,000 of them at each of set.mm's 1,441 syntax axioms is
+    quadratic in the corpus.
+    """
+    entries: dict[int, list[tuple[str, str]]] = {}
+    sorts: list[str] = []
+
+    def at(position: int, sort: str, name: str) -> None:
+        entries.setdefault(position, []).append((sort, name))
+        if sort not in sorts:
+            sorts.append(sort)
+
+    notation = _syntax_before(database, before)
+    for assertion in notation:
+        at(database.position(assertion.label), assertion.typecode, assertion.label)
+
+    typed = database.typed_from()
+    for typecode, members in _declared_variables(database, before).items():
+        sub_sort = f"{typecode}_var"
+        at(min(typed[typecode, variable] for variable in members), typecode, sub_sort)
+        for variable in members:
+            leaf = variable_production_name(database, typecode, variable)
+            at(typed[typecode, variable], sub_sort, leaf)
+
+    # Mirrors `_logical_sort`'s two branches over a prefix: a conventional name
+    # counts however it was introduced - a `$f`-declared typecode is a sort in its
+    # own right, which is what makes set.mm's opening `idi`/`a1ii` readable before
+    # any syntax axiom - and otherwise only notation will do.
+    candidates = [
+        position
+        for position, added in entries.items()
+        if any(sort in ("wff", "formula") for sort, _name in added)
+    ]
+    if notation:
+        candidates.append(database.position(notation[0].label))
+
+    return GrammarSchedule(
+        sorts=tuple(sorts),
+        entries=entries,
+        logical_from=min(candidates) if candidates else None,
+    )

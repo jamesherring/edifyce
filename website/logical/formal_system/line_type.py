@@ -1,12 +1,13 @@
 """The :class:`LineType` describing a category of proof line."""
 
-from ..matching import PatternFunction
-
 
 class LineType:
     """Class for types of lines in formal proofs."""
 
-    def __init__(self, name, pattern=None, behaviour="none", add_context=None, scope=None):
+    # `behaviour` has no default: there is no value that is right to assume, and
+    # every construction site knows which kind of line it is building.
+    def __init__(self, name, pattern=None, *, behaviour, scope=None,
+                 formula_field: str | None = None, reference_field: str | None = None):
 
         # The name of this line type
         self.name = name
@@ -14,99 +15,65 @@ class LineType:
         # The pattern for these lines to match (Pattern instance)
         self.pattern = pattern
 
-        # The behaviour of these lines
+        # Which matched sub-field carries the logical formula, and which the
+        # citation reference: `FormalSystem.parse` projects these off the line
+        # match directly. The reserved value "self" means the whole match (an
+        # axiom asserting its entire formula). None means the line declares no
+        # such field (e.g. a non-logical or scope-only line).
+        self.formula_field = formula_field
+        self.reference_field = reference_field
+
+        # The behaviour of these lines. The set is deliberately closed to what a
+        # SystemSpec can build - `logical` and `comment` from a LineSpec, `axiom`
+        # from a declared axiom - so a value here can never name a line type
+        # nothing constructs. Two things that look missing are handled elsewhere,
+        # not by a behaviour: a definitional *step* is a `logical` line citing a
+        # definition (see `proof.DEFINITION_KEY`), and a lemma from another proof
+        # arrives through the `reference_context` its caller pre-seeds (see
+        # app/routers/proofs.py).
         self.behaviour = behaviour
-        if self.behaviour not in ("none", "import", "logical", "axiom", "indent", "definition", "comment"):
+        if self.behaviour not in ("logical", "axiom", "comment"):
             raise ValueError(f"'{self.behaviour}' is not a valid LineType behaviour.")
+
+        # A logical line is checked against its formula, so one it cannot project
+        # is inert: every instance would be rejected with "No formula defined for
+        # logical line." Refuse it at construction instead, where the author can
+        # still act on it.
+        if self.behaviour == "logical" and self.formula_field is None:
+            raise ValueError(
+                f"Logical line type '{self.name}' declares no formula field, so no "
+                f"line of it could ever be checked; give it one, or make it a "
+                f"comment."
+            )
 
         # The scope this line opens, orthogonal to behaviour. A scope opener
         # starts a subproof that a discharge rule can later consume as a unit:
         #   "assumption" - opens a subproof under a hypothesis (for e.g. ->I),
         #   "variable"   - opens a subproof under a fresh variable (for e.g. VI).
-        # None means the line opens no scope. Keeping this separate from
-        # `behaviour` lets one line be *both* a formula-bearing logical line and
-        # a scope opener - the thing the old `indent` behaviour could not be.
+        # None means the line opens no scope. It is separate from `behaviour` so
+        # one line can be *both* a formula-bearing logical line and a scope opener.
         self.scope = scope
         if self.scope not in (None, "assumption", "variable"):
             raise ValueError(f"'{self.scope}' is not a valid LineType scope.")
 
-        # The data paths (and their values) to add to context, if any
-        self.add_context = add_context if add_context is not None else {}
-
-        # Custom functions
-        self.functions = {}
-
     def parse_line(self, line, context):
-        # Check if the given line string is of this type
-        return self.pattern.match(line, context)
-
-    def inherited_functions(self, context):
-        # Get all functions associated with this line type. This is to cover functions from formal system inheritance
-        return context.variables[self.name].functions
-
-    def add_function(self, name, tree, params=None):
-        # Add an function to this pattern. tree is an AbstractSyntaxTree instance
-
-        # Optionally specify a list of (variable, pattern) tuples of parameters
-        self.functions[name] = PatternFunction(tree=tree, params=() if params is None else params)
-
-    def get_function(self, name, context):
-        # Get the given attribute function
-
-        fns = self.inherited_functions(context)
-        if name in fns:
-            return fns[name]
-
-        return None
-
-    def equivalent(self, other, context, memo=None):
-        # Check equivalence
-
-        if memo is None:
-            memo = {}
-
-        if (self, other) in memo:
-            return memo[(self, other)]
-
-        memo[(self, other)] = False
-
-        if type(other) is not LineType:
-            return False
-
-        if not self.name == other.name:
-            return False
-
-        if not self.behaviour == other.behaviour:
-            return False
-
-        if not self.scope == other.scope:
-            return False
-
-        if not self.add_context == other.add_context:
-            return False
-
-        # Assume true for recursive checks
-        memo[(self, other)] = True
-
-        if not self.pattern.equivalent(other.pattern, context, memo):
-            memo[(self, other)] = False
-            return False
-
-        if not len(self.functions) == len(other.functions):
-            memo[(self, other)] = False
-            return False
-
-        for key in self.functions:
-            if key not in other.functions:
-                memo[(self, other)] = False
-                return False
-
-            # print("TODO check functions are equivalent")
-            # TODO check functions are equivalent
-
-        # Otherwise ok
-        memo[(self, other)] = True
-        return True
+        # Check if the given line string is of this type.
+        #
+        # Reading one line is a closed question - the grammar, definitions and
+        # string variables it is answered against are whatever they are when the
+        # line is read, and none of them move while it is being read - so the
+        # substring parses can be memoised. Without that, a line whose formula
+        # nests deeply costs exponentially (see UnionPattern.match). Scoped to the
+        # one line rather than the proof: a line is the largest stretch over which
+        # the context is known not to move, and nothing is gained by assuming more.
+        # Set and restore rather than copy the context: copying one is not cheap,
+        # and this runs per line per candidate line type.
+        previous = context.parse_memo
+        context.parse_memo = {}
+        try:
+            return self.pattern.match(line, context)
+        finally:
+            context.parse_memo = previous
 
     def __str__(self):
         return self.name

@@ -1,0 +1,299 @@
+"""Programmatic ``SystemSpec`` builders for tests.
+
+Formal systems in the test suite are assembled directly as
+:class:`~website.logical.declarative.SystemSpec` objects — the "scripted
+assembly" path — rather than parsed from a bespoke text syntax. These are the
+shared building blocks; each test module composes the pieces its scenarios need
+and, where it exercises a whole system, defines a small local factory.
+
+Every helper returns a *fresh* object graph so specs never alias shared lists
+across tests (some tests compare specs with ``==`` or round-trip them through
+storage).
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+
+from website.logical.declarative import (
+    Definition,
+    Justification,
+    LinePart,
+    LineSpec,
+    Production,
+    Rule,
+    Subproof,
+)
+
+Binding = tuple[str, str]
+
+
+# --- atomic constructors ---------------------------------------------------
+
+
+def template_prod(
+    sort: str,
+    name: str,
+    template: str,
+    bindings: Iterable[Binding] = (),
+    denotes_constant: bool = False,
+    scopes_over: dict[str, list[str]] | None = None,
+) -> Production:
+    """A composite (notation) production, e.g. ``formula | membership | s ∈ t``.
+
+    ``denotes_constant`` matters only for a *nullary* template, which parses to a
+    ground leaf a definition could introduce. ``scopes_over`` declares which slots
+    bind — ``{"x": ["phi"]}`` for ``∀x.phi`` — and is what lets a definition's
+    ``fresh`` clause be inferred rather than written.
+    """
+    return Production(
+        sort=sort,
+        name=name,
+        template=template,
+        bindings=list(bindings),
+        denotes_constant=denotes_constant,
+        scopes_over={k: list(v) for k, v in (scopes_over or {}).items()},
+    )
+
+
+def regex_prod(sort: str, name: str, regex: str) -> Production:
+    """An atomic (leaf) production matched by a raw regex."""
+    return Production(sort=sort, name=name, regex=regex)
+
+
+def atom_const_prod(
+    sort: str, name: str, value: str, denotes_constant: bool = False
+) -> Production:
+    """An atom *constant* production: a sort member matching one literal token.
+
+    ``denotes_constant`` is the separate, *object-language* question — whether
+    that token is a constant (``⊥``) or a variable the author happened to spell
+    as a single atom (``setvar ::= a | b | c``). Only the second can be bound, so
+    only the first may be introduced by a defining form. It defaults off here as
+    it does in the engine: declaring it is a deliberate act.
+    """
+    return Production(
+        sort=sort, name=name, atom_value=value, denotes_constant=denotes_constant
+    )
+
+
+def atom_family_prod(sort: str, name: str, base: str) -> Production:
+    """An atom *family* production: the infinite ``base_#`` (``p`` -> p, p_0, p_1, …)."""
+    return Production(sort=sort, name=name, atom_base=base)
+
+
+def defn(
+    sort: str,
+    name: str,
+    higher: str,
+    lower: str,
+    bindings: Iterable[Binding],
+    provisos: Iterable[str] = (),
+    fresh: Iterable[Binding] = (),
+    label: str | None = None,
+    justification: Justification | None = None,
+) -> Definition:
+    return Definition(
+        sort=sort,
+        name=name,
+        higher=higher,
+        lower=lower,
+        bindings=list(bindings),
+        provisos=list(provisos),
+        fresh=list(fresh),
+        label=label,
+        justification=justification,
+    )
+
+
+def rule(
+    label: str,
+    name: str,
+    antecedents: Iterable[str],
+    deduction: str,
+    bindings: Iterable[Binding],
+    side_conditions: Iterable[str] = (),
+) -> Rule:
+    return Rule(
+        label=label,
+        name=name,
+        antecedents=list(antecedents),
+        deduction=deduction,
+        bindings=list(bindings),
+        side_conditions=list(side_conditions),
+    )
+
+
+def axiom(label: str, name: str, formula: str, bindings: Iterable[Binding] = ()) -> Rule:
+    """An asserted axiom — a rule with no antecedents whose deduction is the formula."""
+    return Rule(
+        label=label,
+        name=name,
+        antecedents=[],
+        deduction=formula,
+        bindings=list(bindings),
+    )
+
+
+# --- common building blocks shared across systems --------------------------
+
+
+def statement_line() -> LineSpec:
+    """The ``<formula> [<reference>]`` logical line used by every test system.
+
+    The reference field allows ``.`` so a proof can cite a lemma imported from
+    another proof with the engine's dotted navigation syntax (``[alias.line]``,
+    or ``[RULE, alias.line, ...]``); without it such a citation won't even parse.
+
+    It allows ``?`` for the same kind of reason: an open goal is cited
+    ``[?]`` (``proof.HOLE_KEY``), and a grammar whose reference part excludes the
+    character cannot express one. That is a real constraint on an existing system
+    rather than something the engine can paper over — the Metamath importer widens
+    its own regex for it — and this helper stands in for a system that has done so.
+    """
+    return LineSpec(
+        name="statement",
+        shape="<formula> [<reference>]",
+        parts=[LinePart(name="reference", regex="[A-Za-z0-9 ,.?]+")],
+        logical_sort="formula",
+    )
+
+
+def assumption_line() -> LineSpec:
+    """An ``assume <formula>`` line that opens a hypothesis subproof (for →I).
+
+    Both a formula-bearing logical line *and* a scope opener — the two concerns
+    the engine keeps orthogonal. It carries no reference field: a scope opener is
+    granted by fiat, so it cites nothing.
+    """
+    return LineSpec(
+        name="assume",
+        shape="assume <formula>",
+        logical_sort="formula",
+        scope="assumption",
+    )
+
+
+def comment_line() -> LineSpec:
+    """A ``-- <text>`` prose line the checker ignores.
+
+    Free text: unlike a logical line its shape names no grammar sort at all, so
+    it is also the case that pins ``_line_layout``'s relaxation.
+    """
+    return LineSpec(
+        name="note",
+        shape="-- <text>",
+        parts=[LinePart(name="text", regex=".+")],
+        behaviour="comment",
+    )
+
+
+def reiteration_rule() -> Rule:
+    """Reiteration (R): restate an in-scope formula. Exercises scope checking."""
+    return rule("R", "reiteration", ["p"], "p", [("p", "formula")])
+
+
+def cp_rule() -> Rule:
+    """Conditional proof (→I): discharge a hypothesis subproof to an implication.
+
+    Cites no lines — it consumes the whole subproof opened by ``assume p`` and
+    concluded by ``q``, yielding ``(p → q)``.
+    """
+    return Rule(
+        label="CP",
+        name="conditional proof",
+        antecedents=[],
+        deduction="(p → q)",
+        bindings=[("p", "formula"), ("q", "formula")],
+        subproof=Subproof(assume="p", derive="q"),
+    )
+
+
+def variable_prod() -> Production:
+    return regex_prod("term", "variable", "[a-z][a-z0-9]*")
+
+
+def membership_prod() -> Production:
+    return template_prod("formula", "membership", "s ∈ t", [("s", "term"), ("t", "term")])
+
+
+def equality_prod() -> Production:
+    return template_prod("formula", "equality", "s = t", [("s", "term"), ("t", "term")])
+
+
+def negation_prod() -> Production:
+    return template_prod("formula", "negation", "¬p", [("p", "formula")])
+
+
+def conjunction_prod() -> Production:
+    return template_prod(
+        "formula", "conjunction", "(p ∧ q)", [("p", "formula"), ("q", "formula")]
+    )
+
+
+def disjunction_prod() -> Production:
+    return template_prod(
+        "formula", "disjunction", "(p ∨ q)", [("p", "formula"), ("q", "formula")]
+    )
+
+
+def implication_prod() -> Production:
+    return template_prod(
+        "formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]
+    )
+
+
+def biconditional_prod() -> Production:
+    return template_prod(
+        "formula", "biconditional", "(p ↔ q)", [("p", "formula"), ("q", "formula")]
+    )
+
+
+def universal_prod() -> Production:
+    return template_prod(
+        "formula", "universal", "∀x p", [("x", "variable"), ("p", "formula")]
+    )
+
+
+def existential_prod() -> Production:
+    return template_prod(
+        "formula", "existential", "∃x p", [("x", "variable"), ("p", "formula")]
+    )
+
+
+def hyp_rule() -> Rule:
+    """The hypothesis rule: assert any formula from no antecedents."""
+    return rule("HYP", "hypothesis", [], "p", [("p", "formula")])
+
+
+def mp_rule() -> Rule:
+    """Modus ponens: from ``p`` and ``(p → q)`` infer ``q``."""
+    return rule(
+        "MP",
+        "modus ponens",
+        ["p", "(p → q)"],
+        "q",
+        [("p", "formula"), ("q", "formula")],
+    )
+
+
+def subset_def() -> Definition:
+    """``x ⊆ y`` ≝ ``∀z (z ∈ x → z ∈ y)`` — the canonical layered definition.
+
+    ``z`` is declared with ``fresh``, not as a parameter: the defining form
+    *binds* it and the defined form never mentions it, so it is a binder the
+    unfold must be free to rename rather than an argument to be supplied.
+    """
+    return defn(
+        "formula",
+        "subset",
+        "x ⊆ y",
+        "∀z (z ∈ x → z ∈ y)",
+        [("x", "variable"), ("y", "variable")],
+        fresh=[("z", "variable")],
+    )
+
+
+def brackets() -> list[Binding]:
+    """The single ``( )`` grouping pair every bracketed system declares."""
+    return [("(", ")")]

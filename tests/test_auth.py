@@ -61,15 +61,15 @@ def client(tmp_path, monkeypatch) -> Iterator[TestClient]:
 
 def test_auth_routes_are_registered():
     paths = TestClient(app).get("/openapi.json").json()["paths"]
-    assert "/auth/login" in paths
-    assert "/auth/logout" in paths
-    assert "/auth/register" in paths
-    assert "/users/me" in paths
+    assert "/api/auth/login" in paths
+    assert "/api/auth/logout" in paths
+    assert "/api/auth/register" in paths
+    assert "/api/users/me" in paths
 
 
 def test_register_rejects_malformed_email(client):
     response = client.post(
-        "/auth/register", json={"email": "not-an-email", "password": "secret123"}
+        "/api/auth/register", json={"email": "not-an-email", "password": "secret123"}
     )
     assert response.status_code == 422
 
@@ -82,7 +82,7 @@ def test_spa_guard_covers_mounted_auth_routes():
     from app.main import _mounted_api_paths
 
     paths = _mounted_api_paths()
-    assert {"auth/login", "auth/logout", "auth/register", "users/me"} <= paths
+    assert {"api/auth/login", "api/auth/logout", "api/auth/register", "api/users/me"} <= paths
     # Parameterized paths can't be matched by the exact-set guard and are excluded.
     assert not any("{" in p for p in paths)
 
@@ -98,6 +98,19 @@ def test_auth_secret_is_not_a_checked_in_literal():
     assert len(AUTH_SECRET) >= 32
 
 
+def test_this_module_hashes_passwords_the_way_the_deployment_does():
+    # `tests/conftest.py` turns argon2's work factor down for every other module,
+    # because several hundred tests register a user only to have someone own a
+    # system, and the shipped parameters cost ~160ms a login. This module is the
+    # exemption — the flow below is the one place the real hasher is exercised,
+    # so the exemption failing quietly (a rename, a moved test) would leave the
+    # shipped configuration untested everywhere. Assert it is in force here.
+    from fastapi_users import manager
+    from fastapi_users.password import PasswordHelper
+
+    assert manager.PasswordHelper is PasswordHelper
+
+
 # ---------------------------------------------------------------------------
 # Full flow
 # ---------------------------------------------------------------------------
@@ -106,7 +119,7 @@ def test_auth_secret_is_not_a_checked_in_literal():
 def test_register_login_me_logout_flow(client):
     # Register.
     response = client.post(
-        "/auth/register",
+        "/api/auth/register",
         json={
             "email": "ada@example.com",
             "password": "correct horse",
@@ -120,38 +133,38 @@ def test_register_login_me_logout_flow(client):
     assert "hashed_password" not in body
 
     # Unauthenticated access to the current-user route is refused.
-    assert client.get("/users/me").status_code == 401
+    assert client.get("/api/users/me").status_code == 401
 
     # Login sets the auth cookie (fastapi-users uses form fields username/password).
     response = client.post(
-        "/auth/login",
+        "/api/auth/login",
         data={"username": "ada@example.com", "password": "correct horse"},
     )
     assert response.status_code == 204, response.text
     assert backend.cookie_transport.cookie_name in client.cookies
 
     # The cookie authenticates /users/me.
-    response = client.get("/users/me")
+    response = client.get("/api/users/me")
     assert response.status_code == 200
     assert response.json()["email"] == "ada@example.com"
 
     # Profile update round-trips.
-    response = client.patch("/users/me", json={"display_name": "Ada Lovelace"})
+    response = client.patch("/api/users/me", json={"display_name": "Ada Lovelace"})
     assert response.status_code == 200
     assert response.json()["display_name"] == "Ada Lovelace"
 
     # Logout clears the session.
-    assert client.post("/auth/logout").status_code == 204
-    assert client.get("/users/me").status_code == 401
+    assert client.post("/api/auth/logout").status_code == 204
+    assert client.get("/api/users/me").status_code == 401
 
 
 def test_login_with_wrong_password_is_rejected(client):
     client.post(
-        "/auth/register",
+        "/api/auth/register",
         json={"email": "grace@example.com", "password": "right-password"},
     )
     response = client.post(
-        "/auth/login",
+        "/api/auth/login",
         data={"username": "grace@example.com", "password": "wrong-password"},
     )
     assert response.status_code == 400
@@ -159,5 +172,5 @@ def test_login_with_wrong_password_is_rejected(client):
 
 def test_duplicate_registration_is_rejected(client):
     payload = {"email": "dupe@example.com", "password": "password123"}
-    assert client.post("/auth/register", json=payload).status_code == 201
-    assert client.post("/auth/register", json=payload).status_code == 400
+    assert client.post("/api/auth/register", json=payload).status_code == 201
+    assert client.post("/api/auth/register", json=payload).status_code == 400

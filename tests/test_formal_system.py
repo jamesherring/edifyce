@@ -1,177 +1,103 @@
+"""Engine-level tests for proof parsing, line types, inference, and numbering.
+
+Systems are assembled declaratively (`SystemSpec` + `build_system`) — the build
+path the database and API use, and now the only one.
+"""
+
 import pytest
 
 pytest.importorskip("regex")
 
-from website.logical.compiler import compile as compile_formal_system
+from website.logical.declarative import LinePart, LineSpec, SystemSpec, build_system
+
+from tests.spec_helpers import (
+    brackets,
+    hyp_rule,
+    regex_prod,
+    rule,
+    statement_line,
+    template_prod,
+)
 
 
-def compiled(code):
-    result = compile_formal_system(code)
-    assert "errors" not in result, result.get("errors")
-    return result["system"]
+def simple_spec() -> SystemSpec:
+    """Prose the checker accepts without justification.
+
+    The `.edi` original used `behaviour: none`; `comment` is the surviving
+    unchecked behaviour, and it is what these tests need — a line that parses,
+    is recorded, and is never asked to justify itself.
+    """
+    return SystemSpec(
+        name="Simple",
+        lines=[
+            LineSpec(
+                name="statement",
+                shape="<text>",
+                parts=[LinePart(name="text", regex="[a-z ]+")],
+                behaviour="comment",
+            )
+        ],
+    )
 
 
-# A system with plain (behaviour: none) statements and an indent block.
-SIMPLE_SYSTEM = """FormalSystem Simple:
+def logical_spec() -> SystemSpec:
+    """Statements carry a formula and a justification reference.
 
-    Regex word:
-        ^[a-z ]+$
-
-    ProofContext:
-        given: MatchSet()
-
-    Pattern if_pattern:
-        with s as word:
-            if s:
-
-    LineType statement:
-        pattern: word
-        behaviour: none
-
-    LineType if:
-        pattern: if_pattern
-        behaviour: indent
-"""
-
-# A full logical system: statements carry a formula and a justification
-# reference, HYP introduces a formula from nothing, and REP repeats a
-# previously proven formula.
-LOGICAL_SYSTEM = """FormalSystem Logic:
-
-    Regex formula:
-        ^[a-z]+$
-
-    Regex reference:
-        ^[A-Za-z ]+$
-
-    ProofContext:
-        given: MatchSet()
-
-    Pattern statement_pattern:
-        with f as formula, r as reference:
-            f [r]
-
-    statement_pattern.formula():
-        return self.f
-
-    statement_pattern.reference():
-        return self.r
-
-    LineType statement:
-        pattern: statement_pattern
-        behaviour: logical
-
-    with s as formula:
-        InferenceRule hypothesis:
-            label:
-                HYP
-            deduction:
-                s
-
-        InferenceRule repetition:
-            label:
-                REP
-            antecedents:
-                s
-            deduction:
-                s
-"""
+    HYP introduces a formula from nothing; REP repeats a previously proven one.
+    """
+    return SystemSpec(
+        name="Logic",
+        productions=[regex_prod("formula", "word", "[a-z]+")],
+        lines=[statement_line()],
+        rules=[
+            rule("HYP", "hypothesis", (), "s", [("s", "formula")]),
+            rule("REP", "repetition", ("s",), "s", [("s", "formula")]),
+        ],
+    )
 
 
-# A propositional system with a compound production (p -> q). MP has a named
-# metavariable shared across its antecedents and conclusion; PAIR uses the bare
-# sort `formula` twice, so its two premises are independent "any formula" slots.
-PROP_LOGIC_SYSTEM = """FormalSystem PropLogic:
+def prop_logic_spec() -> SystemSpec:
+    """A propositional system with the compound production ``(p -> q)``.
 
-    Regex atom:
-        ^[a-z]$
+    MP shares the metavariable p across its antecedents and conclusion; PAIR uses
+    the bare sort `formula` twice, so its two premises are independent
+    "any formula" slots.
+    """
+    def pq() -> list[tuple[str, str]]:
+        # Fresh per call: a spec must never alias a shared mutable list.
+        return [("p", "formula"), ("q", "formula")]
 
-    Regex reference:
-        ^[A-Za-z 0-9,]+$
-
-    ProofContext:
-        given: MatchSet()
-
-    UnionPattern formula:
-        atom
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p -> q)
-
-    formula:
-        implication
-
-    Pattern statement_pattern:
-        with f as formula, r as reference:
-            f [r]
-
-    statement_pattern.formula():
-        return self.f
-
-    statement_pattern.reference():
-        return self.r
-
-    LineType statement:
-        pattern: statement_pattern
-        behaviour: logical
-
-    with p as formula, q as formula:
-        InferenceRule hypothesis:
-            label:
-                HYP
-            deduction:
-                p
-
-        InferenceRule modus_ponens:
-            label:
-                MP
-            antecedents:
-                p
-                (p -> q)
-            deduction:
-                q
-
-        InferenceRule reflexive:
-            label:
-                RImp
-            deduction:
-                (p -> q)
-            side_conditions:
-                equal(p, q)
-
-        InferenceRule non_occurring:
-            label:
-                NOcc
-            deduction:
-                (p -> q)
-            side_conditions:
-                not occurs(p, q)
-
-    InferenceRule pair:
-        label:
-            PAIR
-        antecedents:
-            formula
-            formula
-        deduction:
-            formula
-"""
+    return SystemSpec(
+        name="PropLogic",
+        brackets=brackets(),
+        productions=[
+            regex_prod("formula", "atom", "[a-z]"),
+            template_prod("formula", "implication", "(p -> q)", pq()),
+        ],
+        lines=[statement_line()],
+        rules=[
+            hyp_rule(),
+            rule("MP", "modus_ponens", ["p", "(p -> q)"], "q", pq()),
+            rule("RImp", "reflexive", (), "(p -> q)", pq(), ["equal(p, q)"]),
+            rule("NOcc", "non_occurring", (), "(p -> q)", pq(), ["not occurs(p, q)"]),
+            rule("PAIR", "pair", ["formula", "formula"], "formula", ()),
+        ],
+    )
 
 
 @pytest.fixture(scope="module")
 def simple_system():
-    return compiled(SIMPLE_SYSTEM)
+    return build_system(simple_spec())
 
 
 @pytest.fixture(scope="module")
 def logical_system():
-    return compiled(LOGICAL_SYSTEM)
+    return build_system(logical_spec())
 
 
 @pytest.fixture(scope="module")
 def prop_logic_system():
-    return compiled(PROP_LOGIC_SYSTEM)
+    return build_system(prop_logic_spec())
 
 
 # ---------------------------------------------------------------------------
@@ -209,14 +135,6 @@ def test_blank_lines_are_ignored(simple_system):
     assert displays == ["hello", "world"]
 
 
-def test_indent_block_parses_nested_lines(simple_system):
-    proof = simple_system.parse("if abc:\n    abc")
-    lines = proof.data()["lines"]
-    assert [l["display"] for l in lines] == ["if abc:", "abc"]
-    assert [l["indent"] for l in lines] == [0, 4]
-    assert all(l["valid"] for l in lines)
-
-
 def test_proof_data_structure(simple_system):
     data = simple_system.parse("hello").data()
     assert set(data) == {"indicator", "lines"}
@@ -228,6 +146,48 @@ def test_proof_data_structure(simple_system):
         "display",
         "indent",
     }
+
+
+# ---------------------------------------------------------------------------
+# Citation numbering
+# ---------------------------------------------------------------------------
+
+
+def test_blank_lines_carry_no_citation_number(prop_logic_system):
+    # Numbers count citable steps, not text lines, so `[MP, 1, 2]` names the two
+    # hypotheses however the source is spaced out.
+    proof = prop_logic_system.parse(
+        "\n"
+        "a [HYP]\n"
+        "\n"
+        "(a -> b) [HYP]\n"
+        "\n"
+        "b [MP, 1, 2]"
+    )
+    assert proof.valid is True
+    assert [line.number for line in proof.proof_lines] == [None, 1, None, 2, None, 3]
+
+
+def test_inserting_a_blank_line_does_not_renumber_citations(prop_logic_system):
+    # The regression this numbering exists for: pressing Enter above a proof used
+    # to shift every citation below it.
+    source = "a [HYP]\n(a -> b) [HYP]\nb [MP, 1, 2]"
+    assert prop_logic_system.parse(source).valid is True
+    assert prop_logic_system.parse("\n" + source).valid is True
+
+
+def test_unparseable_lines_are_still_numbered(prop_logic_system):
+    # A line that matched no type is a step the author is still writing; skipping
+    # it would renumber everything below a typo.
+    proof = prop_logic_system.parse("a [HYP]\n???\n(a -> b) [HYP]\nb [MP, 1, 3]")
+    assert [line.number for line in proof.proof_lines] == [1, 2, 3, 4]
+    assert proof.proof_lines[1].valid is False
+    assert proof.proof_lines[3].valid is True
+
+
+def test_citation_number_reaches_the_data_payload(prop_logic_system):
+    lines = prop_logic_system.parse("\na [HYP]").data()["lines"]
+    assert [line["number"] for line in lines] == [None, 1]
 
 
 # ---------------------------------------------------------------------------
@@ -274,30 +234,6 @@ def test_unknown_reference_is_invalid(logical_system):
 
     line = proof.data()["lines"][0]
     assert line["invalid_message"] == "Invalid reference: NOPE"
-
-
-def test_logical_line_without_formula_is_invalid():
-    # The statement pattern has no formula() function, so logical lines
-    # cannot be checked.
-    system = compiled(
-        """FormalSystem NoFormula:
-
-    Regex word:
-        ^[a-z]+$
-
-    ProofContext:
-        given: MatchSet()
-
-    LineType statement:
-        pattern: word
-        behaviour: logical
-"""
-    )
-
-    proof = system.parse("abc")
-    assert proof.valid is False
-    line = proof.data()["lines"][0]
-    assert line["invalid_message"] == "No formula defined for logical line."
 
 
 # ---------------------------------------------------------------------------
@@ -364,3 +300,77 @@ def test_line_types_expose_behaviour(logical_system):
 def test_indicator_reflects_validity(simple_system):
     assert simple_system.parse("hello").indicator() == "ok"
     assert simple_system.parse("BAD 1").indicator() == "error"
+
+
+# ---------------------------------------------------------------------------
+# LineType construction guards
+# ---------------------------------------------------------------------------
+
+
+def test_indent_is_no_longer_a_line_behaviour():
+    # Block nesting by indentation was superseded by `LineSpec.scope`, and only
+    # the retired `.edi` compiler could author it. Rejecting it at construction
+    # keeps it from being resurrected as a silent no-op.
+    from website.logical.formal_system import LineType
+
+    with pytest.raises(ValueError, match="not a valid LineType behaviour"):
+        LineType(name="block", behaviour="indent")
+
+
+def test_definition_is_no_longer_a_line_behaviour():
+    # A definition belongs to the system, not to a proof line: it is built once
+    # from the SystemSpec and reaches every proof through the shared context.
+    # Nothing has registered a per-line definition since the accessor mechanism
+    # that supplied its payload was removed, so the value could only produce
+    # lines that fail closed. Rejecting it at construction keeps `ProofLine`
+    # free of a definition slot nothing fills.
+    from website.logical.formal_system import LineType
+
+    with pytest.raises(ValueError, match="not a valid LineType behaviour"):
+        LineType(name="defines", behaviour="definition")
+
+
+def test_logical_line_must_declare_a_formula_field():
+    # Every instance of such a line was rejected with "No formula defined for
+    # logical line." — an inert line type. It is refused where the author can
+    # still act on it, rather than once per proof line.
+    from website.logical.formal_system import LineType
+
+    with pytest.raises(ValueError, match="declares no formula field"):
+        LineType(name="statement", behaviour="logical")
+
+    # A comment carries no formula by design, so it is unaffected.
+    assert LineType(name="note", behaviour="comment").formula_field is None
+
+
+def test_the_rule_index_notices_a_list_replaced_behind_it():
+    # `rule_by_label` is an index over the public `inference_rules` list, and a
+    # citation resolves through it — so it has to notice when a caller changes the
+    # list rather than going through `add_inference_rule`. The scan it replaced
+    # read the list every time and could not go stale; a length-only guard would
+    # miss a same-length replacement and keep resolving a rule that is gone.
+    from website.logical.formal_system.rules import InferenceRule
+    from website.logical.formal_system.system import FormalSystem
+
+    def rule(label):
+        return InferenceRule(name=label, label=label, antecedents=[], deduction="p")
+
+    system = FormalSystem(name="t")
+    system.add_inference_rule(rule("A"))
+    assert system.rule_by_label("A") is not None
+
+    # Same length, different contents: `A` is gone and `B` is there.
+    system.inference_rules = [rule("B")]
+    assert system.rule_by_label("A") is None
+    assert system.rule_by_label("B") is not None
+
+    # An append behind the index is seen too.
+    system.inference_rules.append(rule("C"))
+    assert system.rule_by_label("C") is not None
+
+    # And replacing a label through the supported path keeps the list at one
+    # entry — the case where `add_inference_rule` itself rebuilds the list.
+    replacement = rule("C")
+    system.add_inference_rule(replacement)
+    assert [r.label for r in system.inference_rules] == ["B", "C"]
+    assert system.rule_by_label("C") is replacement

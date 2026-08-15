@@ -2,15 +2,18 @@ import pytest
 
 pytest.importorskip("pydantic")
 
+from typing import get_args
+
 from pydantic import ValidationError
 
 from app.schemas import (
-    CompileRequest,
-    CompileResponse,
     HealthResponse,
-    VerifyProofRequest,
+    LineBehaviour,
+    LineScope,
+    ProofVerifyRequest,
     VerifyProofResponse,
 )
+from website.logical.declarative import _LINE_BEHAVIOURS, _LINE_SCOPES
 
 
 # ---------------------------------------------------------------------------
@@ -23,61 +26,17 @@ def test_health_response_defaults_to_ok():
 
 
 # ---------------------------------------------------------------------------
-# CompileRequest
+# ProofVerifyRequest — the DB-backed verify body (proof text only)
 # ---------------------------------------------------------------------------
 
 
-def test_compile_request_accepts_code():
-    assert CompileRequest(code="FormalSystem X:").code == "FormalSystem X:"
+def test_proof_verify_request_accepts_empty_proof_text():
+    assert ProofVerifyRequest(proof_text="").proof_text == ""
 
 
-def test_compile_request_rejects_empty_code():
+def test_proof_verify_request_requires_proof_text():
     with pytest.raises(ValidationError):
-        CompileRequest(code="")
-
-
-def test_compile_request_requires_code():
-    with pytest.raises(ValidationError):
-        CompileRequest()
-
-
-# ---------------------------------------------------------------------------
-# CompileResponse
-# ---------------------------------------------------------------------------
-
-
-def test_compile_response_defaults():
-    response = CompileResponse(success=True)
-    assert response.errors == []
-    assert response.system_name is None
-    assert response.line_type_count is None
-    assert response.inference_rule_count is None
-
-
-def test_compile_response_error_lists_are_independent():
-    first = CompileResponse(success=False)
-    first.errors.append("boom")
-    assert CompileResponse(success=False).errors == []
-
-
-# ---------------------------------------------------------------------------
-# VerifyProofRequest
-# ---------------------------------------------------------------------------
-
-
-def test_verify_request_accepts_empty_proof_text():
-    request = VerifyProofRequest(system_code="FormalSystem X:", proof_text="")
-    assert request.proof_text == ""
-
-
-def test_verify_request_rejects_empty_system_code():
-    with pytest.raises(ValidationError):
-        VerifyProofRequest(system_code="", proof_text="abc")
-
-
-def test_verify_request_requires_proof_text():
-    with pytest.raises(ValidationError):
-        VerifyProofRequest(system_code="FormalSystem X:")
+        ProofVerifyRequest()
 
 
 # ---------------------------------------------------------------------------
@@ -94,3 +53,23 @@ def test_verify_response_defaults():
 def test_verify_response_holds_proof_data():
     proof = {"indicator": "ok", "lines": []}
     assert VerifyProofResponse(success=True, proof=proof).proof == proof
+
+
+# ---------------------------------------------------------------------------
+# Line vocabularies
+# ---------------------------------------------------------------------------
+#
+# `LineBehaviour` / `LineScope` restate the engine's authorable sets as literals
+# so the generated OpenAPI schema stays legible. Nothing imports one from the
+# other, so these pin the two together: if the engine's vocabulary moves, the
+# API's must move with it rather than silently drift.
+
+
+def test_line_behaviour_matches_the_declarative_vocabulary() -> None:
+    assert set(get_args(LineBehaviour)) == set(_LINE_BEHAVIOURS)
+
+
+def test_line_scope_matches_the_declarative_vocabulary() -> None:
+    # `_LINE_SCOPES` carries None for "opens no scope"; the API expresses that as
+    # an absent/null field rather than a member of the literal.
+    assert set(get_args(LineScope)) == {s for s in _LINE_SCOPES if s is not None}

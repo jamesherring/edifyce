@@ -5,12 +5,18 @@ fastapi-users: an httponly-cookie + JWT backend, a user manager, and the
 register / login / logout / users routers mounted in `app/main.py`.
 """
 
-from app.auth.backend import auth_backend, current_active_user, fastapi_users
+from app.auth.backend import (
+    auth_backend,
+    current_active_user,
+    current_active_user_optional,
+    fastapi_users,
+)
 from app.auth.schemas import UserCreate, UserRead, UserUpdate
 
 __all__ = [
     "auth_backend",
     "current_active_user",
+    "current_active_user_optional",
     "fastapi_users",
     "UserCreate",
     "UserRead",

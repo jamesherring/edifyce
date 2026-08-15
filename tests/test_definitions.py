@@ -13,63 +13,56 @@ import pytest
 
 pytest.importorskip("regex")
 
-from website.logical.compiler import compile as compile_formal_system
+from website.logical.declarative import Definition as Definition_
+from website.logical.declarative import SystemSpec, build_spec, build_system
 from website.logical.kernel import (
-    Definition,
+    Occurs,
+    Term,
+    Node,
+    constructor_for,
     DisjointLeaves,
     Var,
     check_definitional_step,
     from_match,
+    introduced_leaves,
     match,
+    unbound_parameters,
     unfold,
 )
+from website.logical.formal_system.definitions import parse_definition
 from website.logical.matching import Context, RegexPattern, StringPattern, UnionPattern
+from tests.spec_helpers import (
+    atom_const_prod,
+    atom_family_prod,
+    brackets,
+    regex_prod,
+    statement_line,
+    template_prod,
+)
 
 
-def build(code):
-    result = compile_formal_system(code)
-    assert "errors" not in result, result.get("errors")
-    system = result["system"]
+def build(spec):
+    system = build_system(spec)
     context = copy(system.context)
     context.variables.update(system.build_context.variables)
     return system, context
 
 
 # Set theory: membership, implication, a universal quantifier, and subset -
-# enough to state df-subset as a genuinely multi-level definition.
-SET_THEORY = """FormalSystem SetTheory:
-
-    Regex setvar:
-        ^[a-z]$
-
-    Pattern membership:
-        with x as setvar, y as setvar:
-            (x ∈ y)
-
-    UnionPattern formula:
-        membership
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p → q)
-
-    formula:
-        implication
-
-    Pattern forall:
-        with x as setvar, phi as formula:
-            ∀x.phi
-
-    formula:
-        forall
-
-    Pattern subset:
-        with x as setvar, y as setvar:
-            (x ⊆ y)
-
-    formula:
-        subset
-"""
+# enough to state df-subset as a genuinely multi-level definition. `setvar` is a
+# leaf sort whose regex member is named distinctly from the sort.
+SET_THEORY = SystemSpec(
+    name="SetTheory",
+    brackets=brackets(),
+    productions=[
+        regex_prod("setvar", "letter", "[a-z]"),
+        template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+        template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
+        template_prod("formula", "forall", "∀x.phi", [("x", "setvar"), ("phi", "formula")]),
+        template_prod("formula", "subset", "(x ⊆ y)", [("x", "setvar"), ("y", "setvar")]),
+    ],
+    lines=[statement_line()],
+)
 
 
 @pytest.fixture(scope="module")
@@ -94,42 +87,24 @@ def term(theory, formula, string):
     _system, context = theory
     matched = formula.match(string, context)
     assert matched is not None, string
-    return from_match(matched, context)
+    return from_match(matched)
 
 
 # Propositional logic with a biconditional whose arguments are *formulas*. Unlike
 # df-subset (whose arguments are atoms and so cannot nest), df-bicon's redex can
 # contain another biconditional, which is what lets a definition apply at
 # overlapping (nested) positions.
-PROP = """FormalSystem Prop:
-
-    Regex atom:
-        ^[a-z]$
-
-    UnionPattern formula:
-        atom
-
-    Pattern implication:
-        with p as formula, q as formula:
-            (p → q)
-
-    formula:
-        implication
-
-    Pattern conjunction:
-        with p as formula, q as formula:
-            (p ∧ q)
-
-    formula:
-        conjunction
-
-    Pattern biconditional:
-        with p as formula, q as formula:
-            (p ↔ q)
-
-    formula:
-        biconditional
-"""
+PROP = SystemSpec(
+    name="Prop",
+    brackets=brackets(),
+    productions=[
+        regex_prod("formula", "atom", "[a-z]"),
+        template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
+        template_prod("formula", "conjunction", "(p ∧ q)", [("p", "formula"), ("q", "formula")]),
+        template_prod("formula", "biconditional", "(p ↔ q)", [("p", "formula"), ("q", "formula")]),
+    ],
+    lines=[statement_line()],
+)
 
 
 @pytest.fixture(scope="module")
@@ -149,7 +124,7 @@ def df_bicon(prop):
     # formula arguments (no binders, so no `fresh`).
     _system, context = prop
     formula = _system.build_context.variables["formula"]
-    return Definition.parse(
+    return parse_definition(
         formula,
         "(p ↔ q)",
         "((p → q) ∧ (q → p))",
@@ -162,7 +137,7 @@ def df_subset(theory, setvar, condition=None, fresh=None):
     # (x ⊆ y)  :=  ∀z.((z ∈ x) → (z ∈ y))
     _system, context = theory
     formula = _system.build_context.variables["formula"]
-    return Definition.parse(
+    return parse_definition(
         formula,
         "(x ⊆ y)",
         "∀z.((z ∈ x) → (z ∈ y))",
@@ -272,7 +247,9 @@ def test_side_condition_gates_the_unfold(theory, formula, setvar):
     # capture-avoidance generated from `fresh`); here it requires the two
     # arguments to be distinct variables. The unfold only fires when it holds.
     _system, context = theory
-    d = df_subset(theory, setvar, condition=DisjointLeaves("x", "y", sort=setvar))
+    d = df_subset(
+        theory, setvar, condition=DisjointLeaves("x", "y", sort=constructor_for(setvar))
+    )
 
     # Distinct arguments: proviso holds, unfold applies.
     assert check_definitional_step(
@@ -306,15 +283,13 @@ def test_definition_backed_subject_admits_its_sort():
     formula = UnionPattern("formula", [membership])
 
     context.string_variables = {"x": setvar, "y": setvar}
-    formula.add_definition(
-        "x in y", "x is a member of y", context, require_lower_match=False
-    )
+    formula.add_notation("x is a member of y", context)
 
-    subject = from_match(formula.match("a is a member of b", context), context)
+    subject = from_match(formula.match("a is a member of b", context))
     # Its recorded sort is the union it belongs to, not its higher constructor.
-    assert subject.sort is formula
+    assert subject.sort is constructor_for(formula)
 
-    binding = match(Var("phi", formula), subject, context)
+    binding = match(Var("phi", constructor_for(formula)), subject, context)
     assert binding is not None
     assert binding["phi"].to_string() == "a is a member of b"
 
@@ -411,12 +386,12 @@ def test_unfold_renames_the_binder_to_a_chosen_fresh_name(theory, formula, setva
     _system, context = theory
     d = df_subset(theory, setvar, fresh={"z": setvar})
 
-    renamed = unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": "w"})
+    renamed = unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": term(theory, setvar, "w")})
     assert renamed is not None
     assert renamed.to_string() == "∀w.((w ∈ z) → (w ∈ b))"  # binder renamed, no capture
 
     # The other slot behaves symmetrically: `(a ⊆ z)` -> ∀w.(w ∈ a → w ∈ z).
-    other = unfold(d, term(theory, formula, "(a ⊆ z)"), context, names={"z": "w"})
+    other = unfold(d, term(theory, formula, "(a ⊆ z)"), context, names={"z": term(theory, setvar, "w")})
     assert other is not None
     assert other.to_string() == "∀w.((w ∈ a) → (w ∈ z))"
 
@@ -427,10 +402,10 @@ def test_a_chosen_name_that_still_collides_is_rejected(theory, formula, setvar):
     _system, context = theory
     d = df_subset(theory, setvar, fresh={"z": setvar})
 
-    assert unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": "z"}) is None
-    assert unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": "b"}) is None
+    assert unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": term(theory, setvar, "z")}) is None
+    assert unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": term(theory, setvar, "b")}) is None
     # A clear name still works, confirming only the colliding choices are refused.
-    assert unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": "w"}) is not None
+    assert unfold(d, term(theory, formula, "(z ⊆ b)"), context, names={"z": term(theory, setvar, "w")}) is not None
 
 
 def test_check_step_recovers_the_renamed_binder_from_the_target(theory, formula, setvar):
@@ -671,20 +646,351 @@ def test_binder_recovery_does_not_instantiate_parameters(theory, formula, setvar
 
 
 # ---------------------------------------------------------------------------
-# A caller-supplied binder name must denote a leaf of its sort; a name that does
-# not parse as the sort is rejected rather than producing a bogus formula.
+# A caller-supplied binder name must *be* a leaf of its sort. The check used to
+# parse the caller's string against the sort pattern; it is now structural, over
+# the term, which is what keeps the grammar out of the kernel at check time.
 # ---------------------------------------------------------------------------
 
 
-def test_rejects_a_chosen_name_that_is_not_a_leaf_of_its_sort(theory, formula, setvar):
+def test_rejects_a_chosen_binder_name_that_is_not_a_leaf_of_its_sort(theory, formula, setvar):
     _system, context = theory
     d = df_subset(theory, setvar, fresh={"z": setvar})
     redex = term(theory, formula, "(a ⊆ b)")
 
-    # `setvar` is `^[a-z]$`: neither a multi-letter name nor a compound formula
-    # parses as a single variable, so the unfold is refused (no bogus `∀aa...`).
-    assert unfold(d, redex, context, names={"z": "aa"}) is None
-    assert unfold(d, redex, context, names={"z": "(a ∈ b)"}) is None
-    # A genuine single-letter name is still accepted, confirming only the
+    # A compound is not a name: `∀(a ∈ b).…` is not a formula anyone meant.
+    compound = term(theory, formula, "(a ∈ b)")
+    assert unfold(d, redex, context, names={"z": compound}) is None
+
+    # Nor is a schematic variable — it stands for a term, it does not name one.
+    assert unfold(d, redex, context, names={"z": Var("q", constructor_for(setvar))}) is None
+
+    # Nor a childless node carrying no literal: it spells nothing, so it could
+    # not be the binder a reader sees. Only reachable by hand-building a term —
+    # every producer gives a ground leaf its literal — but the guard replaced a
+    # *parse*, which could not have admitted it either.
+    nameless = Node(constructor=constructor_for(setvar))
+    assert nameless.literal is None and not nameless.children
+    assert unfold(d, redex, context, names={"z": nameless}) is None
+
+    # A genuine leaf of the binder's sort is still accepted, confirming only the
     # ill-typed choices are refused.
-    assert unfold(d, redex, context, names={"z": "w"}) is not None
+    assert unfold(d, redex, context, names={"z": term(theory, setvar, "w")}) is not None
+
+
+# Two leaf sorts, so a chosen binder name can be a perfectly good leaf of the
+# *wrong* one — which "is it a leaf" alone would let through.
+TWO_LEAF_SORTS = SystemSpec(
+    name="TwoLeafSorts",
+    brackets=brackets(),
+    productions=[
+        regex_prod("setvar", "letter", "[a-z]"),
+        regex_prod("predicate", "predicate_letter", "[A-Z]"),
+        template_prod("formula", "application", "P(x)", [("P", "predicate"), ("x", "setvar")]),
+        template_prod("formula", "implication", "(p → q)", [("p", "formula"), ("q", "formula")]),
+        template_prod("formula", "forall", "∀x.phi", [("x", "setvar"), ("phi", "formula")]),
+        template_prod("formula", "holds", "(x holds y)", [("x", "setvar"), ("y", "setvar")]),
+    ],
+    lines=[statement_line()],
+)
+
+
+def test_rejects_a_chosen_binder_name_of_the_wrong_sort():
+    # A `predicate` letter is a ground leaf, but not one this `setvar` binder
+    # admits — the guard is sort admission, not merely "is it a leaf".
+    system, context = build(TWO_LEAF_SORTS)
+    formula = system.build_context.variables["formula"]
+    setvar = system.build_context.variables["setvar"]
+    predicate = system.build_context.variables["predicate"]
+
+    d = parse_definition(
+        formula,
+        "(x holds y)",
+        "∀z.(P(z) → P(z))",
+        {"x": setvar, "y": setvar},
+        context,
+        fresh={"z": setvar},
+    )
+    # Not admissible as a definition (it drops x/y), but well-formed enough to
+    # unfold — this test is about the binder-name guard, nothing else.
+    redex = from_match(formula.match("(a holds b)", context))
+
+    wrong_sort = from_match(predicate.match("P", context))
+    assert unfold(d, redex, context, names={"z": wrong_sort}) is None
+
+    right_sort = from_match(setvar.match("w", context))
+    assert unfold(d, redex, context, names={"z": right_sort}) is not None
+
+
+# ---------------------------------------------------------------------------
+# Admissibility: what a defining form may introduce
+# ---------------------------------------------------------------------------
+
+
+def test_a_well_formed_definition_introduces_nothing(prop):
+    # Every leaf of `((p → q) ∧ (q → p))` is a parameter the defined form
+    # supplies, so the unfold is free-variable preserving and there is nothing to
+    # report.
+    d = df_bicon(prop)
+    assert unbound_parameters(d) == ()
+    assert introduced_leaves(d) == ()
+
+
+def test_a_declared_binder_is_not_reported(theory, setvar):
+    # `z` is declared `fresh`, so it is stored abstractly and its name is chosen
+    # by the step rather than supplied by the defined form. Being declared is
+    # exactly what makes it safe. `Bound` subclasses `Var`, so a binder would read
+    # as an undetermined parameter but for `Bound.free_vars` returning nothing —
+    # this pins that the two agree.
+    d = df_subset(theory, setvar, fresh={"z": setvar})
+    assert unbound_parameters(d) == ()
+    assert introduced_leaves(d) == ()
+
+
+def test_an_undeclared_binder_is_reported_as_a_ground_leaf(theory, setvar):
+    # Without `fresh`, `z` survives the parse as an ordinary ground leaf: the
+    # defining form spells a name the defined form never mentions.
+    d = df_subset(theory, setvar)
+    assert unbound_parameters(d) == ()
+    assert [leaf.literal for leaf in introduced_leaves(d)] == ["z"]
+
+
+def test_a_parameter_the_defined_form_cannot_supply_is_reported(theory, setvar):
+    # `w` is a parameter of the defining form alone. An unfold binds parameters by
+    # matching the *defined* form against the redex, so nothing determines `w`;
+    # it would be free in the result and open to capture where the step is taken.
+    _system, context = theory
+    formula = _system.build_context.variables["formula"]
+    d = parse_definition(
+        formula,
+        "(x ⊆ y)",
+        "∀z.((z ∈ x) → (z ∈ w))",
+        {"x": setvar, "y": setvar, "w": setvar},
+        context,
+        fresh={"z": setvar},
+    )
+    assert unbound_parameters(d) == ("w",)
+
+
+def test_introduced_leaves_are_deduplicated_and_ordered(theory, setvar):
+    # `z` occurs twice in the defining form; it is one problem, reported once, and
+    # several are reported in a stable order so a build error reads the same way
+    # every time.
+    _system, context = theory
+    formula = _system.build_context.variables["formula"]
+    d = parse_definition(
+        formula, "(x ⊆ y)", "∀q.((z ∈ z) → (q ∈ y))", {"x": setvar, "y": setvar}, context
+    )
+    assert [leaf.literal for leaf in introduced_leaves(d)] == ["q", "z"]
+
+
+# A grammar where one token is built by two different productions: `S` is both a
+# nullary `formula` notation and a `setvar` (the regex is uppercase-only, so the
+# constant `c` is not variable-like). Introduced leaves must be tracked by
+# constructor, not spelling — otherwise the defined form's `formula` S excuses the
+# defining form's `setvar` S, and `∀S.S ⟶ ∀S.(S ∈ c)` captures.
+MASKED = SystemSpec(
+    name="Masked",
+    brackets=brackets(),
+    productions=[
+        regex_prod("setvar", "setvar_atom", "[A-Z]"),
+        atom_const_prod("setvar", "cee", "c"),
+        template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+        template_prod("formula", "forall", "∀x.phi", [("x", "setvar"), ("phi", "formula")]),
+        template_prod("formula", "ess", "S", []),
+    ],
+    lines=[statement_line()],
+)
+
+
+def test_a_leaf_is_not_excused_by_a_same_spelled_other_constructor():
+    system, context = build(MASKED)
+    formula = system.build_context.variables["formula"]
+    d = parse_definition(formula, "S", "(S ∈ c)", {}, context)
+
+    # The `S` of `higher` is the nullary formula notation; the `S` of `lower` is a
+    # setvar. Same token, different constructors, so the second is still
+    # introduced — matching how `Term.equal` compares a ground leaf. `c` is
+    # reported too: the kernel names every unaccounted leaf and leaves it to the
+    # grammar layer to excuse the constants.
+    assert [leaf.literal for leaf in introduced_leaves(d)] == ["S", "c"]
+    reported = {leaf.literal: leaf for leaf in introduced_leaves(d)}
+    assert reported["S"].constructor is not d.higher.constructor
+
+
+def _masked_build_spec(productions):
+    return SystemSpec(
+        name="MaskedBuild",
+        brackets=MASKED.brackets,
+        productions=list(productions),
+        lines=list(MASKED.lines),
+        definitions=[
+            Definition_(sort="formula", name="d", higher="S", lower="(S ∈ c)", bindings=[])
+        ],
+    )
+
+
+def test_a_masked_leaf_still_fails_the_system_build():
+    # End to end: neither `S` nor `c` is declared a constant, so both are refused
+    # and the step `∀S.S ⟶ ∀S.(S ∈ c)` the definition would license never arises.
+    result = build_spec(_masked_build_spec(MASKED.productions))
+    assert "errors" in result
+    (message,) = result["errors"]
+    assert "'S'" in message and "'c'" in message
+
+
+def test_an_atom_declared_constant_is_excused_but_a_masked_variable_is_not():
+    # `c` declared a constant is excused; the `setvar` S is a variable however it
+    # is spelled, so the definition is still refused — and named for the leaf that
+    # actually endangers it.
+    declared = [
+        atom_const_prod("setvar", "cee", "c", denotes_constant=True)
+        if prod.name == "cee"
+        else prod
+        for prod in MASKED.productions
+    ]
+    result = build_spec(_masked_build_spec(declared))
+    assert "errors" in result
+    (message,) = result["errors"]
+    assert "'S'" in message and "'c'" not in message
+
+
+# `c` is a member of `setvar`, so `∀c.` binds it — the author said as much by
+# putting it in that union. Its *constructor* is an atom constant, which is what
+# the retired shape heuristic read, so `T ≝ (c ∈ c)` was admitted and the step
+# below captured `c`. Nothing about the production's shape distinguishes this
+# from `formula ::= ⊥`; only the declaration does.
+ATOM_VARIABLE = SystemSpec(
+    name="AtomVariable",
+    brackets=brackets(),
+    productions=[
+        regex_prod("setvar", "setvar_atom", "[A-Z]"),
+        atom_const_prod("setvar", "cee", "c"),
+        template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+        template_prod("formula", "forall", "∀x.phi", [("x", "setvar"), ("phi", "formula")]),
+        template_prod("formula", "tee", "T", []),
+    ],
+    lines=[statement_line()],
+    definitions=[Definition_(sort="formula", name="d", higher="T", lower="(c ∈ c)", bindings=[])],
+)
+
+
+def test_an_atom_constant_in_the_variable_sort_is_not_excused():
+    result = build_spec(ATOM_VARIABLE)
+    assert "errors" in result
+    (message,) = result["errors"]
+    assert "'c'" in message
+
+
+def test_an_atom_family_cannot_be_declared_a_constant():
+    # A family is a supply of interchangeable tokens — `AtomPattern.fresh` mints
+    # new ones, which is what eigenvariable selection draws on. So this is not a
+    # judgement the author could get right, and the build refuses it rather than
+    # letting it excuse `S ≝ (p_0 ∈ p_1)` and admit `∀p_0.S ⟶ ∀p_0.(p_0 ∈ p_1)`.
+    spec = SystemSpec(
+        name="FamilyConstant",
+        brackets=brackets(),
+        productions=[
+            atom_family_prod("setvar", "prop", "p"),
+            template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+            template_prod("formula", "forall", "∀x.phi", [("x", "setvar"), ("phi", "formula")]),
+            template_prod("formula", "ess", "S", []),
+        ],
+        lines=[statement_line()],
+        definitions=[
+            Definition_(sort="formula", name="d", higher="S", lower="(p_0 ∈ p_1)", bindings=[])
+        ],
+    )
+    spec.productions[0].denotes_constant = True
+
+    result = build_spec(spec)
+    assert "errors" in result
+    (message,) = result["errors"]
+    assert "'prop'" in message and "p_#" in message
+
+    # Left undeclared the family is variable-like, so the definition is refused
+    # for the ordinary reason and the system still does not build.
+    spec.productions[0].denotes_constant = False
+    assert "errors" in build_spec(spec)
+
+
+def test_declaring_a_bindable_atom_constant_is_the_author_s_to_get_wrong():
+    # The declaration is authoritative: tick the box on a token a binder can bind
+    # and the definition builds, and `∀c.T ⟶ ∀c.(c ∈ c)` captures `c`. Pinned so
+    # the trust boundary is visible in the suite rather than only in prose — this
+    # is the one direction that costs soundness, and it takes a positive act.
+    #
+    # Detecting it needs to know which sorts a binder ranges over, and `forall`
+    # here declares no binding slots — so nothing contradicts the declaration and
+    # it stands. A grammar that *does* declare them has this refused at build
+    # (`declarative._validate_constant_declarations`); see
+    # tests/test_binding_slots.py for the same spec with the declaration added.
+    # What remains trusted is a sort no binder mentions.
+    spec = SystemSpec(
+        name="AtomVariableDeclared",
+        brackets=ATOM_VARIABLE.brackets,
+        productions=[
+            atom_const_prod("setvar", "cee", "c", denotes_constant=True)
+            if prod.name == "cee"
+            else prod
+            for prod in ATOM_VARIABLE.productions
+        ],
+        lines=list(ATOM_VARIABLE.lines),
+        definitions=list(ATOM_VARIABLE.definitions),
+    )
+    result = build_spec(spec)
+    assert "errors" not in result
+
+
+def test_a_defined_form_is_opaque_to_a_structural_proviso() -> None:
+    """A characterisation test, not an endorsement.
+
+    `Occurs` is what the proviso vocabulary is built from, and what an
+    eigenvariable-style freshness condition ultimately asks. It reads the term it
+    is given, and a defined form is a *leaf* — so it answers differently either
+    side of a definitional equality:
+
+        Occurs('x', 'phi')  phi := S        -> False
+        Occurs('x', 'phi')  phi := (a ∈ b)  -> True
+
+    That is sound under the current trust model: `S ≝ (a ∈ b)` is admissible only
+    because `a` and `b` are *declared constants*, and if that declaration is true
+    then no freshness proviso is about them. It stops being sound the moment an
+    open abbreviation over genuine variables is admitted — which is why
+    `docs/scope-aware-definitional-steps.md` reports that scope-awareness at the
+    redex is not sufficient on its own.
+
+    Pinned here so the boundary is in the suite rather than only in prose. If a
+    later change makes notation transparent to `Occurs`, this is the test that
+    should fail and be rewritten.
+    """
+    spec = SystemSpec(
+        name="OpaqueNotation",
+        brackets=brackets(),
+        productions=[
+            # Listed before the regex so they win the parse and the leaf really
+            # is the declared-constant production.
+            atom_const_prod("setvar", "aa", "a", denotes_constant=True),
+            atom_const_prod("setvar", "bb", "b", denotes_constant=True),
+            regex_prod("setvar", "letter", "[a-z]"),
+            template_prod("formula", "membership", "(x ∈ y)", [("x", "setvar"), ("y", "setvar")]),
+            template_prod("formula", "ess", "S", []),
+        ],
+        lines=[statement_line()],
+        definitions=[
+            Definition_(sort="formula", name="d", higher="S", lower="(a ∈ b)", bindings=[])
+        ],
+    )
+    system, context = build(spec)
+    formula = system.build_context.variables["formula"]
+
+    def term(text: str) -> Term:
+        matched = formula.match(text, context)
+        assert matched is not None, text
+        return from_match(matched)
+
+    defined, defining = term("S"), term("(a ∈ b)")
+    binding = {"phi": defined, "x": defining.children["x"]}
+    assert not Occurs("x", "phi").check(binding, context)
+
+    binding["phi"] = defining
+    assert Occurs("x", "phi").check(binding, context)

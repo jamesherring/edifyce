@@ -1,71 +1,97 @@
-"""A declarative front-end that lowers to the existing Edifyce compiler.
+"""A declarative model of a formal system, built directly into the engine.
 
-The proof engine is powerful but its source language forces three unrelated
-jobs -- describing the *grammar*, the *inference rules*, and *side conditions*
--- through one imperative, whitespace-sensitive mechanism (``Pattern`` /
-``UnionPattern`` / ``with ... as ...`` / ``.each(...)`` / ``return self.f``).
-Recursive grammars only work if the author performs a non-obvious ordering
-dance (forward-declare an empty ``UnionPattern`` *then* fill it), and a wrong
-guess compiles cleanly yet silently matches nothing.
+This is the only way a formal system is built. It replaced a bespoke source
+language (``.edi``, since deleted) that forced three unrelated jobs -- the
+*grammar*, the *inference rules*, and *side conditions* -- through one
+whitespace-sensitive mechanism, and in which a recursive grammar only worked if
+the author performed a non-obvious ordering dance (forward-declare an empty
+``UnionPattern`` *then* fill it); a wrong guess compiled cleanly and silently
+matched nothing.
 
-This module offers a small, sectioned, non-code configuration format and
-*lowers it to ordinary ``.edi`` source*, which the real
-:func:`website.logical.compiler.compile` then turns into a ``FormalSystem``.
-It is deliberately a thin front-end: nothing here re-implements matching or
-proof checking -- it only rearranges declarative input into the engine's own
-language and then hands off. The one thing the ``.edi`` language cannot
-express, ``respect_brackets``, is patched onto the compiled patterns
-afterwards.
+What replaced it is a structured, order-independent description of a system --
+the :class:`SystemSpec` dataclasses (grammar productions, a logical line,
+definitions, axioms, rules). :func:`build_spec` / :func:`build_system` turn one
+into a ``FormalSystem`` **directly**, by calling the engine's own construction
+primitives (``build_schema_pattern``, ``add_variables``, ``add_notation``,
+``parse_side_condition``, the ``Pattern`` constructors) -- no text pass. Nothing
+here re-implements matching or proof checking; it only wires the declarative
+model into engine objects. Because there is no text pass, ``respect_brackets``
+is set on each pattern at construction.
 
-Crucially, **definitions remain first-class**: a ``definitions`` section
-lowers to the engine's ``Define <higher> as <lower> [where <proviso>]``, so a
-complex base system (ZFC) can be layered up with familiar notation (``⊆``,
-``∅``, ``P(x)`` ...) exactly as the engine already supports.
+A :class:`SystemSpec` is built by the persistence layer
+(``app.db.system_to_spec`` reconstructs one from stored rows) or, in tests, by
+scripted assembly. The relational storage, not a source blob, is the source of
+truth.
 
-The input format (see ``examples/zfc.system`` for a full worked example)::
-
-    system <Name>
-
-    notation
-      brackets ( )                       # optional grouping bracket pair
-
-    grammar
-      <sort> | <name> | matches <regex>              # atomic (leaf) member
-      <sort> | <name> | <template> | <bindings>      # composite production
-
-    line <name>
-      shape <text with <placeholders>>
-      <part> | matches <regex>           # inline parts (e.g. a reference)
-      logical <sort>                     # which placeholder is the formula
-
-    definitions
-      <sort> | <name> | <higher> | means <lower> | <bindings> [ | if <cond> ]
-
-    axioms
-      <label> | <name> | <formula> [ | <bindings> ]
-
-    rules
-      <label> | <name> | from <a> ; <b> | infer <c> | <bindings>
-
-``<bindings>`` is a ``;``-separated list of groups ``n1, n2 : sort``.
-
-``|`` separates columns; a literal pipe inside a field (a regex alternation or
-pipe notation such as set-builder ``{ x \\| y }``) is written ``\\|``.
+Crucially, **definitions remain first-class**: a definition becomes the engine's
+``Define <higher> as <lower> [where <proviso>]``, so a complex base system (ZFC)
+can be layered up with familiar notation (``⊆``, ``∅``, ``P(x)`` ...) exactly as
+the engine already supports.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import hashlib
+import json
+from collections.abc import Callable, Iterable, Sequence
+from copy import copy
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
 
-from .compiler import compile as compile_edi
+from .build_context import (
+    DefinitionSlot,
+    FormalSystemContext,
+    SchemaSlot,
+    build_schema_pattern,
+    combine_side_conditions,
+)
+from .formal_system import (
+    FormalSystem,
+    InferenceRule,
+    LineType,
+    SubproofSchema,
+    statement_term,
+)
+from .formal_system.definitions import (
+    DefinitionError,
+    ParsedForms,
+    build_kernel_definition,
+    denotes_a_constant,
+)
+from .formal_system.side_condition_syntax import parse_side_condition
+from .kernel import And, match, references, restate
+from .kernel.constructors import constructor_for, project_grammar
+from .kernel.terms import Node, from_match
+from .matching import AtomPattern, Pattern, RegexPattern, StringPattern, UnionPattern
+from .promotion import promote_from_source
+
+if TYPE_CHECKING:
+    from .build_context import DefinitionTermSource, SchemaTermSource
+    from .kernel import SideCondition
+    from .kernel.constructors import Constructor
+    from .kernel.definitions import Definition as KernelDefinition
+    from .kernel.terms import Term
+    from .matching import Match
+    from .matching.context import Context
+    from .matching.definitions import DefinedNotation
 
 
 class DeclarativeError(Exception):
-    """Raised for problems the front-end can detect before lowering."""
+    """Raised for problems detectable in a :class:`SystemSpec` before lowering."""
+
+
+# The scopes a line type may open (mirrors LineType.scope's accepted values).
+_LINE_SCOPES = (None, "assumption", "variable")
+
+# The line behaviours a declarative system may author. `LineType` accepts one
+# more - `axiom` - which is emitted from `spec.axioms` rather than declared on a
+# line, so offering it here would give two ways to say the same thing. Keep this
+# in step with `app.schemas.LineBehaviour`, the API's mirror of it.
+_LINE_BEHAVIOURS = ("logical", "comment")
 
 
 # ---------------------------------------------------------------------------
-# Parsing the sectioned input into structured records
+# Structured records: the declarative model of a system
 # ---------------------------------------------------------------------------
 
 
@@ -74,8 +100,82 @@ class Production:
     sort: str
     name: str
     template: str | None = None        # composite: the notation template
-    regex: str | None = None           # atomic: a raw regex
+    regex: str | None = None           # atomic (leaf): a raw regex
+    atom_value: str | None = None      # atom constant: the single literal token it matches
+    atom_base: str | None = None       # atom family: base of the `p_#` indexed family
     bindings: list[tuple[str, str]] = field(default_factory=list)  # (var, sort)
+    # Whether this production's tokens are *constants* of the object language —
+    # one fixed denotation, never standing for a bound variable — as opposed to
+    # variables of it. This is Metamath's `$c` vs `$v`, and like Metamath's it is
+    # declared, not inferred: no property of a production's shape decides it. A
+    # single-token atom is a constant in `formula ::= ⊥` and a variable in
+    # `setvar ::= a | b | c`, and only the author knows which was meant.
+    #
+    # Consulted for one purpose: whether a definition's defining form may
+    # introduce this token without the defined form supplying it (see
+    # `formal_system.definitions.build_kernel_definition`). Defaults to False —
+    # variable-like — so omitting it costs a refused definition, never a
+    # capturing one.
+    denotes_constant: bool = False
+    # Which of this production's slots *bind*, and over what: a binding's `var`
+    # mapped to the sibling vars it scopes over. `∀x phi` declares
+    # `{"x": ["phi"]}`. Empty — the default — means the production says nothing
+    # about binding, which is what every production said before this field
+    # existed and is read exactly as it was then.
+    #
+    # Declared, like `denotes_constant`, and for the same reason: `∀x phi` and a
+    # two-argument connective are the same shape. What it buys is that a
+    # definition's `fresh` clause need no longer be written by hand — a leaf
+    # sitting in a binder slot of the defining form *is* a binder, and
+    # `formal_system.definitions` reads it off the parsed term. See
+    # docs/binding-slots-design.md.
+    scopes_over: dict[str, list[str]] = field(default_factory=dict)
+
+
+@dataclass
+class Justification:
+    """A proof obligation a definition carries, discharged by citing a theorem.
+
+    Some definitions hold only because something is *provable*. Metamath's
+    `df-sb` defines proper substitution through a dummy `y` that appears on the
+    right only, and is sound just because the choice of `y` is immaterial; its
+    hypothesis `sbjust.1` is the statement that it is.
+
+    That is not a proviso and cannot become one. Every predicate in the kernel's
+    closed algebra is a total structural check on *shape*, while this is a claim
+    about *derivability*: a `Proven(φ)` condition would have to search for a proof
+    at every citation, which is undecidable and would restore the executable
+    condition language the kernel retired.
+
+    So it is discharged once, when the definition is registered, by naming a
+    theorem already proved in the system whose statement is the obligation -
+    which is what Metamath does too, since `sbjust` is a proved `$p` preceding
+    `df-sb` and stating exactly its hypothesis. ``statement`` is the obligation in
+    the system's own grammar, over the definition's own metavariables; ``label``
+    names the promoted theorem that settles it.
+
+    When it is *not* needed
+    -----------------------
+    An obligation of `df-sb`'s particular kind - "the dummy could have been any
+    name" - is an artefact of writing definitions with named binders. Declare the
+    dummy `fresh` and the kernel stores it abstractly
+    (:class:`~website.logical.kernel.terms.Bound`), so the definition makes no
+    choice of name and there is nothing left to justify: both spellings are unfolds
+    of one defined form, and their equivalence follows rather than precedes.
+
+    That is not a reason to drop this. `set.mm` states the argument itself, in
+    `df-sb`'s comment - *"Without this hypothesis, sbjust would be derivable from
+    propositional axioms alone: one could apply the definiens twice, using
+    different dummy variables"* - and keeps the hypothesis anyway, because making
+    `sbjust` derivable would weaken an independence claim about its axioms. So the
+    two routes import the same theorems under different metatheoretic discipline,
+    and a faithful import wants this one. The obligations it is really *needed*
+    for are the ones no representation removes: an existence lemma of the
+    `df-div`/`df-sqrt` kind (roadmap A4).
+    """
+
+    label: str
+    statement: str
 
 
 @dataclass
@@ -85,7 +185,42 @@ class Definition:
     higher: str
     lower: str
     bindings: list[tuple[str, str]]
-    condition: str | None = None
+    # Soundness provisos, one kernel-vocabulary line each and implicitly conjoined
+    # — the same shape a rule's `side_conditions` takes. Checked at every unfold
+    # against what that unfold binds, so a proviso may name a parameter of the
+    # *defined* form or one of the `fresh` binders below (by its declared name — a
+    # binder is stored abstractly, so the proviso constrains whatever leaf it takes
+    # there). Naming anything else is refused at build: there would be nothing to
+    # resolve it against.
+    provisos: list[str] = field(default_factory=list)
+    # The defining form's bound variables, `[(var, sort)]` (the `fresh` clause).
+    # Declaring a binder lets the term checker unfold the definition
+    # capture-avoidingly, so a quantified definition (and any proviso on it) takes
+    # the kernel path instead of being refused. Empty for a binder-free alias.
+    fresh: list[tuple[str, str]] = field(default_factory=list)
+    # Optional name a proof cites this definition by (`[<label>, <line>]`); the
+    # generic `[Def, <line>]` keyword searches all in-scope definitions instead.
+    # Must be unique within a system so a named citation resolves unambiguously.
+    label: str | None = None
+    # The obligation this definition holds only under, discharged by citing an
+    # already-proved theorem when the system is built. None — the default — is a
+    # definition that holds outright, which is nearly all of them.
+    justification: Justification | None = None
+
+
+@dataclass
+class Subproof:
+    """The subproof a discharge rule consumes as a unit (→I, RAA, ∀I).
+
+    A discharge rule cites no lines: it consumes a whole subproof. ``derive`` is
+    the pattern its final line must match; the subproof is opened by exactly one
+    of ``assume`` (a hypothesis pattern, an *assumption* subproof) or ``fresh``
+    (an eigenvariable pattern, a *variable* subproof). All three are rule-schema
+    source lines, parsed against the rule's metavariables like its deduction.
+    """
+    derive: str
+    assume: str | None = None
+    fresh: str | None = None
 
 
 @dataclass
@@ -95,6 +230,28 @@ class Rule:
     antecedents: list[str]
     deduction: str
     bindings: list[tuple[str, str]]
+    # Soundness provisos from the `side_conditions` section, one kernel-vocabulary
+    # line each (implicit conjunction). Attached to the rule by its label; empty
+    # for axioms and unconditioned rules.
+    side_conditions: list[str] = field(default_factory=list)
+    # How steps are checked against this rule: "structural" (term unification,
+    # the default) or "string" (associative matching, for a string-rewriting
+    # rule such as MIU's — see website.logical.matching.rewriting).
+    matching: str = "structural"
+    # The subproof this rule discharges, or None for an ordinary line-antecedent
+    # rule. A discharge rule typically has no `antecedents`.
+    subproof: Subproof | None = None
+    # Whether a citation may name *more* lines than the rule has antecedent slots.
+    # The surplus lines are recorded as `extra_antecedents` and left unconstrained
+    # (they justify nothing), so this weakens what the citation must prove; off by
+    # default, so a citation must name exactly the rule's antecedents.
+    #
+    # Inert on a discharge rule: that path cites exactly one subproof opener and
+    # never consults this flag. Unlike antecedents/side-conditions (which the
+    # discharge check also ignores, but whose loss would drop a *soundness*
+    # constraint, hence the guard in build_system), an ignored allowance can only
+    # ever be stricter, so the pairing is permitted rather than rejected.
+    allow_extra_antecedents: bool = False
 
 
 @dataclass
@@ -109,17 +266,55 @@ class LineSpec:
     shape: str
     parts: list[LinePart] = field(default_factory=list)
     logical_sort: str | None = None
+    # The scope this line opens, orthogonal to its logical behaviour: None (a
+    # plain line), "assumption" (opens a subproof under a hypothesis, for e.g.
+    # →I) or "variable" (opens one under a fresh variable, for e.g. ∀I). A scope
+    # opener may still bear a formula, so this is separate from the line's shape.
+    scope: str | None = None
+    # What the checker does with lines of this type: "logical" (the default — the
+    # line asserts a formula and must be justified) or "comment" (prose, never
+    # checked and never numbered, so no citation can name it). A comment line
+    # carries no formula, so it needs no `logical_sort` and its shape need not
+    # name a grammar sort — the one line kind that may be pure text.
+    behaviour: str = "logical"
 
 
 @dataclass
 class SystemSpec:
     name: str = ""
     brackets: list[tuple[str, str]] = field(default_factory=list)
+    # Whether every token of this system's notation is written whitespace-
+    # separated, as Metamath's is (`( ph -> ps )`, never `(ph->ps)`).
+    #
+    # Declared rather than inferred: it is a claim about how proofs will be
+    # *written*, which no set of templates settles. Nothing depends on it being
+    # true - a constant spelled with a bracket is read correctly either way,
+    # because `Pattern._opaque_positions` decides token by token rather than
+    # trusting the system (and a glued system simply cannot write such a
+    # constant glued). What declaring it buys is that the production templates
+    # are then held to it, so a system meaning to be token-separated is told
+    # where it is not.
+    token_separated: bool = False
     productions: list[Production] = field(default_factory=list)
-    line: LineSpec | None = None
+    # Logical line types, in order. A system typically has one (`statement`), but
+    # may declare several (e.g. a `claim` line and a scoped `assume` line); the
+    # engine tries each when parsing a proof line.
+    lines: list[LineSpec] = field(default_factory=list)
     definitions: list[Definition] = field(default_factory=list)
     axioms: list[Rule] = field(default_factory=list)
     rules: list[Rule] = field(default_factory=list)
+    # Per definition, in `definitions` order, how many of `axioms` and `rules`
+    # were declared *before* it — what the freshness check may look at
+    # (`_require_a_fresh_defined_form`).
+    #
+    # Empty, the default, means "all of them", and that is what a single-layer
+    # spec means: `build_system` builds every axiom and rule before any
+    # definition, so there every primitive does precede every definition. Only
+    # `layered_spec` fills it, because an inheritance chain is the one case where
+    # the flat reading is false — a parent's definition of `∧` precedes a child's
+    # axiom stated over `∧`, and holding the parent to a primitive its own layer
+    # had never heard of would refuse a tower that is built the ordinary way.
+    definition_scope: list[tuple[int, int]] = field(default_factory=list)
 
     def sort_names(self) -> list[str]:
         seen = []
@@ -129,200 +324,8 @@ class SystemSpec:
         return seen
 
 
-_SECTIONS = {"system", "notation", "grammar", "line", "definitions", "axioms", "rules"}
-
-
-def _split_columns(row: str) -> list[str]:
-    # Split a row on its ``|`` column separators. A literal pipe inside a field
-    # -- a regex alternation ``[a-z]+\|[A-Z]+`` or pipe notation like
-    # set-builder ``{ x \| φ }`` -- is written ``\|`` and does not split.
-    # Only ``\|`` is special; other backslashes (``\d``, ``\.``) pass through.
-    columns: list[str] = []
-    current: list[str] = []
-    i = 0
-    while i < len(row):
-        ch = row[i]
-        if ch == "\\" and i + 1 < len(row) and row[i + 1] == "|":
-            current.append("|")
-            i += 2
-            continue
-        if ch == "|":
-            columns.append("".join(current).strip())
-            current = []
-            i += 1
-            continue
-        current.append(ch)
-        i += 1
-    columns.append("".join(current).strip())
-    return columns
-
-
-def _parse_bindings(text: str) -> list[tuple[str, str]]:
-    # Parse "x, y : variable, p : formula" (or ';'-separated) into
-    # [(x, variable), (y, variable), (p, formula)]. Names sharing a sort are
-    # comma-listed before the ':'; a ':' atom closes the current group.
-    bindings: list[tuple[str, str]] = []
-    text = text.replace(";", ",").strip()
-    if not text:
-        return bindings
-
-    pending: list[str] = []
-    for atom in text.split(","):
-        atom = atom.strip()
-        if not atom:
-            continue
-        if ":" in atom:
-            name, sort = atom.split(":", 1)
-            name, sort = name.strip(), sort.strip()
-            if name:
-                pending.append(name)
-            for pending_name in pending:
-                bindings.append((pending_name, sort))
-            pending = []
-        else:
-            pending.append(atom)
-
-    if pending:
-        raise DeclarativeError(f"Binding names {pending} have no ': sort'.")
-
-    return bindings
-
-
-def _blocks(source: str) -> list[tuple[str, str, list[str]]]:
-    # Yield (section_keyword, header_remainder, body_lines) for each top-level
-    # section. A section header sits at column 0; its body is every following
-    # indented (or blank) line until the next column-0 line.
-    lines = source.splitlines()
-    blocks: list[tuple[str, str, list[str]]] = []
-
-    i = 0
-    while i < len(lines):
-        raw = lines[i]
-        stripped = raw.strip()
-
-        if not stripped or stripped.startswith("#"):
-            i += 1
-            continue
-
-        if raw[0].isspace():
-            raise DeclarativeError(f"Unexpected indented line outside any section: {raw!r}")
-
-        keyword = stripped.split()[0]
-        if keyword not in _SECTIONS:
-            raise DeclarativeError(f"Unknown section '{keyword}'.")
-
-        header_remainder = stripped[len(keyword):].strip()
-
-        body: list[str] = []
-        i += 1
-        while i < len(lines) and (not lines[i].strip() or lines[i][0].isspace()):
-            body_line = lines[i].strip()
-            if body_line and not body_line.startswith("#"):
-                body.append(body_line)
-            i += 1
-
-        blocks.append((keyword, header_remainder, body))
-
-    return blocks
-
-
-def parse(source: str) -> SystemSpec:
-    """Parse declarative source into a :class:`SystemSpec`."""
-
-    spec = SystemSpec()
-
-    for keyword, header, body in _blocks(source):
-
-        if keyword == "system":
-            spec.name = header
-
-        elif keyword == "notation":
-            for row in body:
-                if row.startswith("brackets"):
-                    toks = row.split()[1:]
-                    if len(toks) != 2:
-                        raise DeclarativeError("'brackets' needs an opening and closing symbol.")
-                    spec.brackets.append((toks[0], toks[1]))
-
-        elif keyword == "grammar":
-            for row in body:
-                cols = _split_columns(row)
-                if len(cols) < 3:
-                    raise DeclarativeError(f"Grammar row needs at least 'sort | name | body': {row!r}")
-                sort, name, third = cols[0], cols[1], cols[2]
-                if third.startswith("matches "):
-                    spec.productions.append(Production(sort=sort, name=name, regex=third[len("matches "):].strip()))
-                else:
-                    bindings = _parse_bindings(cols[3]) if len(cols) > 3 else []
-                    spec.productions.append(Production(sort=sort, name=name, template=third, bindings=bindings))
-
-        elif keyword == "line":
-            line = LineSpec(name=header, shape="")
-            for row in body:
-                if row.startswith("shape "):
-                    line.shape = row[len("shape "):].strip()
-                elif row.startswith("logical "):
-                    line.logical_sort = row[len("logical "):].strip()
-                else:
-                    cols = _split_columns(row)
-                    if len(cols) == 2 and cols[1].startswith("matches "):
-                        line.parts.append(LinePart(name=cols[0], regex=cols[1][len("matches "):].strip()))
-                    else:
-                        raise DeclarativeError(f"Unrecognised line row: {row!r}")
-            spec.line = line
-
-        elif keyword == "definitions":
-            for row in body:
-                cols = _split_columns(row)
-                # sort | name | higher | means <lower> | bindings [ | where <proviso> ]
-                if len(cols) < 4 or not cols[3].startswith("means "):
-                    raise DeclarativeError(f"Definition row must be 'sort | name | higher | means <lower> | bindings': {row!r}")
-                lower = cols[3][len("means "):].strip()
-                bindings = _parse_bindings(cols[4]) if len(cols) > 4 else []
-                condition = None
-                if len(cols) > 5 and cols[5].startswith("where "):
-                    condition = cols[5][len("where "):].strip()
-                elif len(cols) > 5 and cols[5].startswith("if "):
-                    raise DeclarativeError(
-                        f"The legacy `if` definition proviso is no longer supported; use `where`: {row!r}"
-                    )
-                spec.definitions.append(Definition(
-                    sort=cols[0], name=cols[1], higher=cols[2], lower=lower,
-                    bindings=bindings, condition=condition,
-                ))
-
-        elif keyword == "axioms":
-            for row in body:
-                cols = _split_columns(row)
-                if len(cols) < 3:
-                    raise DeclarativeError(f"Axiom row must be 'label | name | formula': {row!r}")
-                bindings = _parse_bindings(cols[3]) if len(cols) > 3 else []
-                spec.axioms.append(Rule(label=cols[0], name=cols[1], antecedents=[],
-                                        deduction=cols[2], bindings=bindings))
-
-        elif keyword == "rules":
-            for row in body:
-                cols = _split_columns(row)
-                # label | name | from a ; b | infer c | bindings
-                if len(cols) < 4:
-                    raise DeclarativeError(f"Rule row must be 'label | name | from ... | infer ... | bindings': {row!r}")
-                from_col = cols[2]
-                infer_col = cols[3]
-                if from_col != "from" and not from_col.startswith("from "):
-                    raise DeclarativeError(f"Rule row needs a 'from ...' column: {row!r}")
-                if not infer_col.startswith("infer "):
-                    raise DeclarativeError(f"Rule row needs an 'infer ...' column: {row!r}")
-                antecedents = [a.strip() for a in from_col[len("from"):].split(";") if a.strip()]
-                deduction = infer_col[len("infer "):].strip()
-                bindings = _parse_bindings(cols[4]) if len(cols) > 4 else []
-                spec.rules.append(Rule(label=cols[0], name=cols[1], antecedents=antecedents,
-                                       deduction=deduction, bindings=bindings))
-
-    return spec
-
-
 # ---------------------------------------------------------------------------
-# Lowering a SystemSpec to ``.edi`` source
+# Shared helpers for turning spec fields into engine objects
 # ---------------------------------------------------------------------------
 
 
@@ -333,97 +336,6 @@ def _identifier(name: str) -> str:
     return ident
 
 
-def _with_clause(bindings: list[tuple[str, str]]) -> str:
-    return ", ".join(f"{var} as {sort}" for var, sort in bindings)
-
-
-def lower(spec: SystemSpec) -> str:
-    """Lower a :class:`SystemSpec` to ``.edi`` source text.
-
-    The ordering here is what removes the engine's forward-declaration trap:
-    every sort's ``UnionPattern`` is declared empty up front, so productions in
-    any order can reference any sort, and the unions are filled afterwards.
-    """
-
-    out: list[str] = []
-    pad = "    "
-
-    def emit(level: int = 0, text: str = "") -> None:
-        out.append((pad * level + text) if text else "")
-
-    emit(0, f"FormalSystem {_identifier(spec.name) or 'System'}:")
-    emit()
-
-    # 1. Atomic (regex) sort members and inline line parts.
-    for prod in spec.productions:
-        if prod.regex is not None:
-            emit(1, f"Regex {prod.name}:")
-            emit(2, _anchor(prod.regex))
-            emit()
-
-    if spec.line:
-        for part in spec.line.parts:
-            emit(1, f"Regex {part.name}:")
-            emit(2, _anchor(part.regex))
-            emit()
-
-    # 2. Forward-declare every sort as an empty union (order independence).
-    for sort in spec.sort_names():
-        emit(1, f"UnionPattern {sort}:")
-        emit()
-
-    # 3. Composite productions.
-    for prod in spec.productions:
-        if prod.template is None:
-            continue
-        emit(1, f"Pattern {prod.name}:")
-        if prod.bindings:
-            emit(2, f"with {_with_clause(prod.bindings)}:")
-            emit(3, prod.template)
-        else:
-            emit(2, prod.template)
-        emit()
-
-    # 4. Fill each sort union with its members, in declared order.
-    for sort in spec.sort_names():
-        members = [p.name for p in spec.productions if p.sort == sort]
-        if not members:
-            continue
-        emit(1, f"{sort}:")
-        for member in members:
-            emit(2, member)
-        emit()
-
-    # 5. Proof context + line type (statement pattern and accessors).
-    if spec.line:
-        _emit_line(spec, emit)
-
-    # 6. Definitions -- layered abbreviations, first-class.
-    for defn in spec.definitions:
-        emit(1, f"{defn.sort}:")
-        tail = f" where {defn.condition}" if defn.condition else ""
-        if defn.bindings:
-            emit(2, f"with {_with_clause(defn.bindings)}:")
-            emit(3, f"Define {defn.higher} as {defn.lower}{tail}")
-        else:
-            emit(2, f"Define {defn.higher} as {defn.lower}{tail}")
-        emit()
-
-    # 7a. Axioms -> axiom line types. An axiom is *asserted*, not derived by a
-    # rule: the engine's `behaviour: axiom` marks a line matching the axiom
-    # formula valid on its own. (This also sidesteps the kernel's schema->term
-    # projection, which cannot represent a whole concrete formula in rule
-    # deduction position.)
-    for axiom in spec.axioms:
-        _emit_axiom(axiom, emit)
-
-    # 7b. Rules -> inference rules.
-    for rule in spec.rules:
-        _emit_rule(rule, emit)
-
-    return "\n".join(out) + "\n"
-
-
 def _anchor(regex: str) -> str:
     if not regex.startswith("^"):
         regex = "^" + regex
@@ -432,13 +344,44 @@ def _anchor(regex: str) -> str:
     return regex
 
 
-def _emit_line(spec: SystemSpec, emit) -> None:
-    line = spec.line
-    sorts = set(spec.sort_names())
+def _line_layout(
+    line: LineSpec, sorts: set[str],
+) -> tuple[str, list[tuple[str, str]], tuple[str, str] | None, tuple[str, str] | None]:
+    """Resolve a line's template and its formula/reference placeholders.
+
+    Returns ``(template, placeholders, logical_ph, reference_ph)`` where each
+    ``_ph`` is a ``(placeholder_name, variable)`` pair (either may be ``None``),
+    given the system's grammar ``sorts`` so the logical placeholder can be
+    resolved. ``logical_ph`` is ``None`` only for a comment line, which carries
+    no formula.
+    """
     part_names = {p.name for p in line.parts}
 
     # Tokenise the shape into (placeholder | literal) fragments.
     template, placeholders = _shape_to_template(line.shape)
+
+    # Every placeholder has to resolve to something later (`ctx.variables[ph]`),
+    # so name the undeclared one here rather than letting it surface as a bare
+    # KeyError whose message is just the token.
+    undeclared = [ph for ph, _ in placeholders if ph not in part_names and ph not in sorts]
+    if undeclared:
+        raise DeclarativeError(
+            f"Line {line.name!r} has placeholder(s) "
+            f"{', '.join(repr(ph) for ph in undeclared)} in its shape naming no "
+            f"grammar sort or part; declare each as a part of the line."
+        )
+
+    # A comment line asserts nothing, so it has no formula to project — and its
+    # shape is free to be prose, naming no grammar sort at all.
+    if line.behaviour == "comment":
+        if line.logical_sort is not None:
+            raise DeclarativeError(
+                f"Line {line.name!r} is commentary, so it carries no formula; "
+                f"remove its logical sort {line.logical_sort!r}."
+            )
+        # Nor a citation. Projecting the prose as the line's `reference` would
+        # surface it in the UI as the rule that justified the line.
+        return template, placeholders, None, None
 
     # Choose the logical placeholder: explicit 'logical <sort>' or first sort.
     logical_ph = None
@@ -462,30 +405,7 @@ def _emit_line(spec: SystemSpec, emit) -> None:
             reference_ph = (ph, var)
             break
 
-    emit(1, "ProofContext:")
-    emit(2, "given: MatchSet()")
-    emit()
-
-    bindings = [(var, ph) for ph, var in placeholders]
-    emit(1, "Pattern statement_pattern:")
-    emit(2, f"with {_with_clause(bindings)}:")
-    emit(3, template)
-    emit()
-
-    # The engine fetches logical content via formula() and the citation via
-    # reference(); those accessor names are part of its contract.
-    emit(1, "statement_pattern.formula():")
-    emit(2, f"return self.{logical_ph[1]}")
-    emit()
-    if reference_ph is not None:
-        emit(1, "statement_pattern.reference():")
-        emit(2, f"return self.{reference_ph[1]}")
-        emit()
-
-    emit(1, f"LineType {line.name}:")
-    emit(2, "pattern: statement_pattern")
-    emit(2, "behaviour: logical")
-    emit()
+    return template, placeholders, logical_ph, reference_ph
 
 
 def _shape_to_template(shape: str) -> tuple[str, list[tuple[str, str]]]:
@@ -522,76 +442,1376 @@ def _fresh_var(placeholder: str, used: set[str]) -> str:
     return f"{base}{n}"
 
 
-def _emit_axiom(axiom: Rule, emit) -> None:
-    # An axiom lowers to a Pattern for its formula plus an axiom-behaviour line
-    # type; a line matching the formula is self-justifying.
-    pattern_name = f"{_identifier(axiom.name)}_axiom"
-
-    emit(1, f"Pattern {pattern_name}:")
-    if axiom.bindings:
-        emit(2, f"with {_with_clause(axiom.bindings)}:")
-        emit(3, axiom.deduction)
-    else:
-        emit(2, axiom.deduction)
-    emit()
-
-    # The engine reads a logical line's content via formula(); for a bare axiom
-    # assertion the whole match is the formula.
-    emit(1, f"{pattern_name}.formula():")
-    emit(2, "return self")
-    emit()
-
-    emit(1, f"LineType {_identifier(axiom.name)}:")
-    emit(2, f"pattern: {pattern_name}")
-    emit(2, "behaviour: axiom")
-    emit()
-
-
-def _emit_rule(rule: Rule, emit) -> None:
-    has_bindings = bool(rule.bindings)
-    base_level = 1
-    if has_bindings:
-        emit(1, f"with {_with_clause(rule.bindings)}:")
-        base_level = 2
-
-    emit(base_level, f"InferenceRule {_identifier(rule.name)}:")
-    emit(base_level + 1, "label:")
-    emit(base_level + 2, rule.label)
-    if rule.antecedents:
-        emit(base_level + 1, "antecedents:")
-        for ant in rule.antecedents:
-            emit(base_level + 2, ant)
-    emit(base_level + 1, "deduction:")
-    emit(base_level + 2, rule.deduction)
-    emit()
-
-
 # ---------------------------------------------------------------------------
-# respect_brackets -- the one thing ``.edi`` can't express, patched on after.
+# Direct builder: SystemSpec -> FormalSystem.
+#
+# This constructs the engine objects straight from the SystemSpec by calling the
+# engine's own low-level primitives (build_schema_pattern, add_variables,
+# add_notation, parse_side_condition, the Pattern constructors), driven from
+# the spec fields directly. There is no text pass, so respect_brackets is set on
+# each pattern at construction rather than patched on afterwards.
 # ---------------------------------------------------------------------------
 
 
-def _patch_brackets(system, bracket_pairs: list[tuple[str, str]]) -> None:
-    if not bracket_pairs:
+def _bracket_map(spec: SystemSpec) -> dict[str, str] | None:
+    # The opening->closing map every pattern respects: declared pairs, else the
+    # default `()` when any template/definition/deduction actually uses a paren.
+    brackets = list(spec.brackets)
+    if not brackets and _uses_parens(spec):
+        brackets = [("(", ")")]
+    return {o: c for o, c in brackets} or None
+
+
+def _bracket_opaque_tokens(
+    spec: SystemSpec, brackets: dict[str, str] | None
+) -> tuple[str, ...]:
+    # Declared constants that *contain* a bracket delimiter without being one.
+    # Whether a character groups is a property of the grammar, not of the
+    # character, and only the grammar knows which of its tokens merely spell one:
+    # set.mm names its half-open intervals `[,)` and `(,]`, so `( 0 [,) +oo )`
+    # counts three closing brackets against two openings and reads as unbalanced.
+    # Sorted for a deterministic order only. Overlap needs no care from the
+    # caller: `_opaque_positions` unions the spans of *every* occurrence of
+    # *every* token, so one token containing another (set.mm has `O(1)` inside
+    # `<_O(1)`) covers the same indices whichever is seen first.
+    if not brackets:
+        return ()
+
+    delimiters = (*brackets, *brackets.values())
+    tokens = {
+        production.atom_value
+        for production in spec.productions
+        if production.atom_value is not None
+        and production.atom_value not in delimiters
+        and any(delimiter in production.atom_value for delimiter in delimiters)
+    }
+    return tuple(sorted(tokens))
+
+
+def _glued_to_a_slot(template: str, labels: Iterable[str]) -> str | None:
+    # The first slot label in `template` that shares a whitespace-delimited token
+    # with anything else, or None. `( a -> b )` keeps every token apart;
+    # `(a -> b)` glues the slot `a` to the opening paren.
+    #
+    # Compared token-wise rather than by scanning for the label, so a label that
+    # merely *occurs inside* a literal is not mistaken for a slot - `A` sits
+    # inside the quantifier `A.` throughout set.mm, which is the collision
+    # `metamath.importer._uncollide` exists for.
+    tokens = template.split()
+
+    for label in labels:
+        if any(label in token and token != label for token in tokens):
+            return label
+
+    return None
+
+
+def _check_token_separation(spec: SystemSpec) -> None:
+    # A system declaring `token_separated` is held to it, so that the declaration
+    # means something and a system meaning to be token-separated is told where it
+    # is not. Nothing depends on the answer - see `SystemSpec.token_separated` -
+    # so this refuses a *mis-declaration*, never a system that simply did not
+    # declare.
+    #
+    # Production templates only. They are what a formula is read against; a line
+    # shape carries its own field syntax (`<wff> [<reference>]`), and definitions
+    # and rule schemas never receive `bracket_opaque` at all.
+    if not spec.token_separated:
         return
-    mapping = {o: c for o, c in bracket_pairs}
 
-    seen: set[int] = set()
+    for prod in spec.productions:
+        if not prod.template:
+            continue
 
-    def walk(pattern) -> None:
-        if pattern is None or id(pattern) in seen:
+        glued = _glued_to_a_slot(prod.template, (label for label, _ in prod.bindings))
+
+        if glued is not None:
+            raise DeclarativeError(
+                f"Production {prod.name!r} declares token_separated but writes "
+                f"{glued!r} against another token in {prod.template!r}. Separate every "
+                f"token with a space, or declare token_separated=False."
+            )
+
+
+def _binding_patterns(bindings: list[tuple[str, str]], ctx: FormalSystemContext) -> dict[str, Pattern]:
+    # Map a `with`-style binding list `[(var, sort)]` to `{var: sort_pattern}`,
+    # the string-variable dict the engine's pattern/rule builders consume.
+    return {var: ctx.variables[sort] for var, sort in bindings}
+
+
+def _binding_scopes(prod: Production, pattern: StringPattern) -> dict[str, tuple[str, ...]]:
+    """Validate ``prod.scopes_over`` against the template and return it in the
+    projected form (``{slot: (slot, ...)}``).
+
+    A binding slot is a claim about *this* production's slots, so everything it
+    can get wrong is decidable here: both sides must name slots the template
+    actually has, and nothing scopes over itself. Checked at build rather than
+    trusted, because the whole point of the declaration is that a later stage
+    (a definition's inferred ``fresh`` clause) reads it as fact.
+    """
+    # The pattern's variables are exactly the declared bindings that occur in the
+    # template — one that does not occupies no slot, so there is no position for
+    # it to bind at and no child for it to scope over.
+    slots = set(pattern.variables)
+
+    def require_slot(var: str, role: str) -> None:
+        if var not in slots:
+            raise DeclarativeError(
+                f"Production {prod.name!r} declares that {role} names a slot "
+                f"{var!r}, but its template '{prod.template}' has no such slot. "
+                f"A binding slot may only name this production's own slots "
+                f"({', '.join(sorted(slots)) or 'none'})."
+            )
+
+    scopes: dict[str, tuple[str, ...]] = {}
+    for binder, scoped in prod.scopes_over.items():
+        require_slot(binder, "a binder")
+        if not scoped:
+            # A slot that binds over nothing is not a binder — a binding that
+            # reaches into no slot is no binding. Dropped rather than stored as an
+            # empty entry, because presence in this mapping is what marks a slot
+            # as binding, and storage records the scopes rather than the keys, so
+            # an empty entry would not survive a round trip anyway.
+            continue
+        for target in scoped:
+            require_slot(target, f"the scope of binder {binder!r}")
+            if target == binder:
+                raise DeclarativeError(
+                    f"Production {prod.name!r} declares that slot {binder!r} "
+                    f"scopes over itself. A binder scopes over the slots its "
+                    f"binding reaches into, which never includes its own."
+                )
+        scopes[binder] = tuple(scoped)
+    return scopes
+
+
+def _bindable_sorts(
+    spec: SystemSpec, ctx: FormalSystemContext
+) -> dict[Constructor, tuple[str, str, str]]:
+    """Every production a binder can bind, mapped to the binder that can bind it
+    — ``(binding production, binder slot, the sort that slot ranges over)``.
+
+    A binder slot names the sort it ranges over, and a sort admits its own
+    branches — so ``∀x.phi`` declaring ``x : setvar`` says that *everything
+    `setvar` admits* is bindable, including the atoms enumerating it. That is the
+    whole of the deduction; ``Constructor.admits`` already computes the closure.
+
+    Keyed by constructor rather than name because it is the constructor a
+    production is compared by, and two productions may spell the same token.
+    Where several binders reach one production the first in spec order is kept,
+    which only decides which binder the error names — ``admits`` is a frozenset,
+    so nothing may depend on *its* order.
+    """
+    bindable: dict[Constructor, tuple[str, str, str]] = {}
+    for prod in spec.productions:
+        constructor = constructor_for(ctx.variables[prod.name])
+        # The projected `scopes_over`, not the spec's: it is the validated and
+        # normalised one (`_binding_scopes` drops a slot that scopes over nothing,
+        # which declares no binding at all).
+        for binder in constructor.scopes_over:
+            sort = constructor.slot_sorts[binder]
+            for admitted in sort.admits:
+                bindable.setdefault(admitted, (prod.name, binder, sort.name))
+    return bindable
+
+
+def _validate_constant_declarations(spec: SystemSpec, ctx: FormalSystemContext) -> None:
+    """Refuse a ``denotes_constant`` declaration the grammar contradicts.
+
+    ``denotes_constant`` is trusted — nothing about a production's shape settles
+    it, so the author declares it (see :class:`Production`). Binding slots make
+    exactly one class of mistake checkable: a production in the sort a binder
+    ranges over yields tokens that binder can *bind*, and a token that can be
+    bound is not a constant of the object language whatever the author ticked.
+
+    This is the hole ``test_an_atom_constant_in_the_variable_sort_is_not_excused``
+    documents. ``setvar ::= [A-Z] | c`` with ``c`` declared constant admits
+    ``T ≝ (c ∈ c)``, and ``∀c.T ⟶ ∀c.(c ∈ c)`` then captures ``c`` — the one
+    direction of the declaration that costs soundness. Refused here, naming the
+    binder that settles it.
+
+    It narrows the trusted surface rather than removing it: a sort no binder
+    mentions is still the author's call, and a grammar that declares no binding
+    slots is checked exactly as much as it was before — which is not at all.
+    """
+    bindable = _bindable_sorts(spec, ctx)
+    for prod in spec.productions:
+        if not prod.denotes_constant:
+            continue
+        binder = bindable.get(constructor_for(ctx.variables[prod.name]))
+        if binder is None:
+            continue
+        binder_production, binder_slot, binder_sort = binder
+        # A sort admits its branches transitively, so the production's own sort
+        # need not be the one the binder names — say both when they differ.
+        reached = (
+            "" if binder_sort == prod.sort else f", and {binder_sort!r} admits {prod.sort!r}"
+        )
+        raise DeclarativeError(
+            f"Production {prod.name!r} (sort {prod.sort!r}) is declared to denote "
+            f"a constant of the object language, but production "
+            f"{binder_production!r} binds {binder_sort!r} through its slot "
+            f"{binder_slot!r}{reached}. A token a binder can bind is a variable of "
+            f"the object language, not a constant: declaring it one would let a "
+            f"definition introduce it, and an unfold under that binder would "
+            f"capture it. Drop the declaration; or, if it really names one fixed "
+            f"thing, move it out of the sort the binder ranges over."
+        )
+
+
+def build_system(
+    spec: SystemSpec,
+    schema_terms: SchemaTermSource | None = None,
+    definition_terms: DefinitionTermSource | None = None,
+) -> FormalSystem:
+    """Build a :class:`FormalSystem` directly from a :class:`SystemSpec`.
+
+    Raises :class:`DeclarativeError` for a structurally-invalid spec (e.g. a line
+    shape with no grammar-sort placeholder); :func:`build_spec` wraps that into
+    the ``{"errors": [...]}`` contract.
+
+    ``schema_terms`` supplies previously-composed rule-schema terms so the build
+    need not re-parse the templates (see :func:`schema_digests`);
+    ``definition_terms`` does the same for each definition's two surface forms and
+    each declared binder's default (see :func:`definition_digest`). Both are
+    *projections* of the spec, never part of it: passing none, or one that answers
+    for no slot, builds exactly the same system by the longer route.
+    """
+    # A string-rewriting rule is justified by associative matching over surface
+    # strings, with no term binding to evaluate side-conditions against; refuse
+    # the pairing rather than silently ignoring a proviso the author wrote.
+    for rule in spec.rules:
+        if rule.matching == "string" and rule.side_conditions:
+            raise DeclarativeError(
+                f"Rule {rule.label!r} uses string matching, which cannot enforce "
+                f"side-conditions; drop them or switch it to structural matching."
+            )
+        # A discharge rule is checked by consuming its subproof (check_discharge);
+        # that path never evaluates line antecedents or side-conditions, so
+        # configuring them would silently drop a soundness constraint. Refuse the
+        # pairing rather than accept a rule whose provisos are ignored.
+        if rule.subproof is not None and (rule.antecedents or rule.side_conditions):
+            raise DeclarativeError(
+                f"Rule {rule.label!r} discharges a subproof, so it cannot also carry "
+                f"antecedents or side-conditions (the discharge check ignores them); "
+                f"remove them."
+            )
+
+    name = _identifier(spec.name) or "System"
+    ctx = FormalSystemContext()
+    system = FormalSystem(name=name)
+    ctx.variables[name] = system
+
+    brackets = _bracket_map(spec)
+    opaque = _bracket_opaque_tokens(spec, brackets)
+    _check_token_separation(spec)
+
+    def register(pattern: Pattern) -> Pattern:
+        # Every named pattern respects the system's brackets (parity with the
+        # old post-compile `_patch_brackets`, which walked the same set), and
+        # steps over any declared constant that merely spells one.
+        pattern.respect_brackets = brackets
+        pattern.bracket_opaque = opaque
+        return pattern
+
+    def unregistered(pattern: Pattern) -> Pattern:
+        # Bracket parity deliberately not applied — see its uses.
+        return pattern
+
+    def declare(pattern: Pattern, prod: Production) -> Pattern:
+        # Carry the author's object-language role onto the built pattern. Only a
+        # *leaf* production can ever be the term this decides about, but setting
+        # it uniformly keeps one path and costs nothing.
+        pattern.denotes_constant = prod.denotes_constant
+        # A binder is a *slot* of a template, so an atomic production has nowhere
+        # to put one. Refused rather than ignored: silently dropping it would
+        # leave a definition's `fresh` clause inferred from a grammar the author
+        # thinks says something it does not (see `_binding_scopes`).
+        if prod.template is None and prod.scopes_over:
+            raise DeclarativeError(
+                f"Production {prod.name!r} declares binding slots "
+                f"({', '.join(sorted(prod.scopes_over))}), but it is atomic and has "
+                f"no template, so it has no slots. Binding slots belong on the "
+                f"production whose notation does the binding."
+            )
+        return pattern
+
+    # 1. Atomic productions: regex leaves, atom constants, and atom families.
+    for prod in spec.productions:
+        if prod.regex is not None:
+            ctx.variables[prod.name] = declare(
+                register(RegexPattern(name=prod.name, pattern=_anchor(prod.regex))), prod
+            )
+        elif prod.atom_value is not None or prod.atom_base is not None:
+            # An indexed family is a *supply* of interchangeable tokens — the
+            # whole point of `AtomPattern.fresh` is that there is always a next
+            # one, which is what eigenvariable selection draws on. So no grammar
+            # can make one denote a single fixed thing, and unlike a one-token
+            # atom (a constant in `formula ::= ⊥`, a variable in
+            # `setvar ::= a | b | c`) this is not a judgement call the author
+            # could get right. Refuse it rather than let a declaration excuse a
+            # leaf a binder can bind.
+            if prod.atom_base is not None and prod.denotes_constant:
+                raise DeclarativeError(
+                    f"Production {prod.name!r} is an indexed atom family "
+                    f"('{prod.atom_base}_#'), so it cannot denote a constant of the "
+                    f"object language: every member is an interchangeable "
+                    f"placeholder a binder may bind, and fresh ones can always be "
+                    f"minted. Declare a specific token with `atom_value` if you "
+                    f"meant a constant."
+                )
+            # An atom constant (`value`, one literal token) or indexed family
+            # (`base`, the infinite `p_#` -> p_0, p_1, ...). A single token needs
+            # no bracket parity, so it is not `register`ed — its `respect_brackets`
+            # stays None.
+            ctx.variables[prod.name] = declare(
+                AtomPattern(
+                    name=prod.name,
+                    value=prod.atom_value,
+                    base=prod.atom_base,
+                ),
+                prod,
+            )
+    # (Inline line parts are registered per-line in step 5, immediately before
+    # the line that uses them, so two lines may reuse a part name with different
+    # regexes without the shared namespace binding both to the last one.)
+
+    # 2. Forward-declare every sort as an empty union (order independence).
+    for sort in spec.sort_names():
+        ctx.variables[sort] = register(
+            UnionPattern(name=sort, patterns=[])
+        )
+
+    # 3. Composite productions.
+    for prod in spec.productions:
+        if prod.template is None:
+            continue
+        pattern = StringPattern(name=prod.name, pattern=prod.template)
+        pattern.add_variables(_binding_patterns(prod.bindings, ctx))
+        pattern.scopes_over = _binding_scopes(prod, pattern)
+        # A nullary template (`S`, `∅`) parses to a ground leaf, so it too can be
+        # the leaf a definition introduces and carries the declaration.
+        ctx.variables[prod.name] = declare(register(pattern), prod)
+
+    # 4. Fill each sort union with its members, in declared order.
+    for sort in spec.sort_names():
+        union = ctx.variables[sort]
+        for prod in spec.productions:
+            if prod.sort == sort:
+                union.add_pattern(ctx.variables[prod.name])
+
+    # 4a. Project the grammar to its kernel constructors, now that the unions are
+    # complete. Everything from here on builds terms, and a term's sort is a
+    # constructor: a union projected while still empty would be linked with no
+    # branches and would admit nothing but itself thereafter. Done explicitly so
+    # the moment is chosen, rather than falling out of whichever term is built
+    # first (see kernel.constructors.project_grammar).
+    # `ctx.variables` is the whole build namespace, which also holds referenced
+    # systems; only the productions are projectable.
+    project_grammar(p for p in ctx.variables.values() if isinstance(p, Pattern))
+
+    # 4b. Now that every sort knows what it admits, cross-check the one class of
+    # `denotes_constant` mistake the grammar can actually settle: a token a binder
+    # ranges over is not a constant of the object language.
+    _validate_constant_declarations(spec, ctx)
+
+    # 5. Lines: a statement pattern + logical line type per declared line. Each
+    # line's inline parts are registered just before it is built (see step 1).
+    if spec.lines:
+        sorts = set(spec.sort_names())
+        for line in spec.lines:
+            # Commentary is prose, not a term: bracket parity must not apply to
+            # it, or an unbalanced bracket in a note ("-- discharge ( here")
+            # stops the line matching at all and fails the proof. Same reason an
+            # atom constant is left unregistered in step 1.
+            line_register = unregistered if line.behaviour == "comment" else register
+            for part in line.parts:
+                built = line_register(
+                    RegexPattern(name=part.name, pattern=_anchor(part.regex))
+                )
+                # Two lines may declare the same part name with *different*
+                # regexes, and each must keep its own — that is what the rebind
+                # is for. Declaring the identical part twice is not that case,
+                # and must not mint a second object: productions are canonical
+                # (one object per production, so sort identity decides sort
+                # equality — see kernel.constructors.Constructor.admits), and two
+                # equivalent-but-distinct patterns would break it.
+                previous = ctx.variables.get(part.name)
+                if (
+                    isinstance(previous, RegexPattern)
+                    and previous.pattern == built.pattern
+                    and previous.respect_brackets == built.respect_brackets
+                ):
+                    built = previous
+                ctx.variables[part.name] = built
+            _build_line(line, sorts, ctx, system, line_register)
+
+    # 6. Axioms -> axiom-behaviour line types.
+    for ax in spec.axioms:
+        _build_axiom(ax, ctx, system, register)
+
+    # 7. Rules -> inference rules. The index is the rule's identity for
+    # `schema_terms`, and is why this stays an ordered walk over `spec.rules`.
+    for index, rule in enumerate(spec.rules):
+        system.add_inference_rule(_build_rule(rule, ctx, index, schema_terms))
+
+    # 8. Publish the build variables into the proof context, then finalise
+    # definitions against that (now complete) context, so `add_notation` can
+    # match the lower form against the productions.
+    system.context.variables.update(ctx.variables)
+    # Wired here rather than at the end because a definition's justification reads
+    # a statement in the system's own grammar, which needs the build context. The
+    # grammar is complete as of the line above; only the pattern dictionary (built
+    # last) still is not, and nothing on this path consults it.
+    system.build_context = ctx
+    # Per position, whether the definition layered — kept in spec order so a
+    # caller can map it back to a specific definition even when two share a
+    # defined form (see registered_definition_layering). A cited definition name
+    # must be unambiguous, so a duplicate label is rejected here rather than
+    # silently letting `[<name>, <line>]` pick one.
+    seen_labels: set[str] = set()
+    layering: list[bool] = []
+    # What the system's primitive statements are stated over: a definition may
+    # not give meaning to a symbol they already constrain. Read on demand and
+    # memoised, because reading them means re-parsing every schema — a fifth of a
+    # ZFC build's cost, paid once, and not at all by a system with no definitions.
+    #
+    # Memoised per *scope* rather than once: a layered spec asks the question
+    # several times, once per layer that declares a definition, and a flat spec
+    # asks it with one scope and so still pays for one scan.
+    everything = (len(spec.axioms), len(spec.rules))
+    scan_cache: dict[tuple[int, int], _SchemaScan] = {}
+
+    def scan(scope: tuple[int, int] = everything) -> _SchemaScan:
+        if scope not in scan_cache:
+            scan_cache[scope] = _scan_schemas(spec, ctx, scope)
+        return scan_cache[scope]
+
+    # Kept on the system so a definition registered *later* is held to the same
+    # freshness rule (`register_definition`), which is the path a corpus import
+    # takes. At the full scope, which is right for a definition arriving after
+    # the build: every primitive the system has does precede it.
+    system.primitive_schemas = scan
+
+    for index, defn in enumerate(spec.definitions):
+        if defn.label is not None:
+            if defn.label in seen_labels:
+                raise DeclarativeError(f"Duplicate definition label '{defn.label}'.")
+            seen_labels.add(defn.label)
+        scope = (
+            spec.definition_scope[index]
+            if index < len(spec.definition_scope)
+            else everything
+        )
+        layering.append(
+            _finalise_definition(
+                defn,
+                ctx,
+                system,
+                lambda s=scope: scan(s),
+                _FormCache(index, definition_terms, system),
+            )
+        )
+    system.definition_layering = layering
+
+    # 9. Parse each rule's provisos now that definitions have resolved, so a
+    # proviso's term argument may use defined notation (e.g. `equal(t, ∅)`). Each
+    # rule brings its own metavariables.
+    for inference_rule in system.inference_rules:
+        if not inference_rule.pending_side_conditions:
+            continue
+        rule_context = copy(system.context)
+        rule_context.string_variables = {
+            **rule_context.string_variables, **(inference_rule.variables or {})
+        }
+        inference_rule.side_conditions.extend(
+            parse_side_condition(line, rule_context)
+            for line in inference_rule.pending_side_conditions
+        )
+        # Index-aligned to what was just appended, so a failed proviso can be
+        # reported in the words the author wrote it in.
+        inference_rule.side_condition_sources.extend(
+            inference_rule.pending_side_conditions
+        )
+        inference_rule.pending_side_conditions = []
+
+    return system
+
+
+def _build_line(line: LineSpec, sorts: set[str], ctx: FormalSystemContext,
+                system: FormalSystem, register: Callable[[Pattern], Pattern]) -> None:
+    if line.scope not in _LINE_SCOPES:
+        raise DeclarativeError(
+            f"Line {line.name!r} has invalid scope {line.scope!r}; "
+            f"expected one of {', '.join(repr(s) for s in _LINE_SCOPES)}."
+        )
+    if line.behaviour not in _LINE_BEHAVIOURS:
+        raise DeclarativeError(
+            f"Line {line.name!r} has invalid behaviour {line.behaviour!r}; "
+            f"expected one of {', '.join(repr(b) for b in _LINE_BEHAVIOURS)}."
+        )
+    if line.behaviour == "comment" and line.scope is not None:
+        # A subproof has to be opened by a line the discharge rule can cite, and
+        # commentary is unnumbered — so the subproof could never be discharged.
+        raise DeclarativeError(
+            f"Line {line.name!r} is commentary, so it cannot open a "
+            f"{line.scope} scope; no rule could discharge it."
+        )
+    template, placeholders, logical_ph, reference_ph = _line_layout(line, sorts)
+
+    # Each line gets a distinctly-named pattern (a single line named "statement"
+    # keeps the historical "statement_pattern" name).
+    pattern_name = f"{_identifier(line.name)}_pattern"
+    pattern = StringPattern(name=pattern_name, pattern=template)
+    pattern.add_variables(_binding_patterns([(var, ph) for ph, var in placeholders], ctx))
+    ctx.variables[pattern_name] = register(pattern)
+
+    line_type = LineType(
+        name=line.name,
+        pattern=pattern,
+        behaviour=line.behaviour,
+        scope=line.scope,
+        # Declared, not merely absent: a comment line has no formula to project,
+        # so leaving the field unset keeps prose out of anything that harvests
+        # line formulae (the term graph, definitional steps).
+        formula_field=logical_ph[1] if logical_ph is not None else None,
+        reference_field=reference_ph[1] if reference_ph is not None else None,
+    )
+    ctx.variables[line.name] = line_type
+    system.add_line_type(line_type)
+
+
+def _build_axiom(axiom: Rule, ctx: FormalSystemContext, system: FormalSystem,
+                 register: Callable[[Pattern], Pattern]) -> None:
+    pattern_name = f"{_identifier(axiom.name)}_axiom"
+    pattern = StringPattern(name=pattern_name, pattern=axiom.deduction)
+    pattern.add_variables(_binding_patterns(axiom.bindings, ctx))
+    ctx.variables[pattern_name] = register(pattern)
+
+    # A bare axiom asserts its whole match, hence `formula_field="self"`.
+    line_type = LineType(
+        name=_identifier(axiom.name), pattern=pattern, behaviour="axiom", formula_field="self"
+    )
+    ctx.variables[_identifier(axiom.name)] = line_type
+    system.add_line_type(line_type)
+
+
+def _build_rule(
+    rule: Rule,
+    ctx: FormalSystemContext,
+    index: int,
+    schema_terms: SchemaTermSource | None,
+) -> InferenceRule:
+    # The rule's bindings are its metavariables; put them in a scoped copy of the
+    # build context so `build_schema_pattern` treats them as variables — the
+    # scope is per-rule, never the system's own.
+    string_variables = _binding_patterns(rule.bindings, ctx)
+    rule_ctx = copy(ctx)
+    rule_ctx.string_variables = dict(string_variables)
+
+    def stored(slot: str, ordinal: int = 0) -> Term | None:
+        if schema_terms is None:
+            return None
+        return schema_terms(SchemaSlot(index, slot, ordinal), rule_ctx)
+
+    inference_rule = InferenceRule(
+        name=_identifier(rule.name),
+        label=rule.label,
+        variables=dict(string_variables),
+        matching=rule.matching,
+        subproof_schema=_build_subproof(rule, rule_ctx, stored),
+        allow_extra_antecedents=rule.allow_extra_antecedents,
+    )
+    for ordinal, antecedent in enumerate(rule.antecedents):
+        inference_rule.antecedents.append(
+            build_schema_pattern(
+                antecedent, rule_ctx, "antecedent",
+                cached=stored("antecedent", ordinal),
+            )
+        )
+    inference_rule.deduction = build_schema_pattern(
+        rule.deduction, rule_ctx, "deduction", cached=stored("deduction")
+    )
+    # Provisos are parsed later (see build_system), once definitions resolve, so a
+    # proviso's term argument may use defined notation. Here we only collect them.
+    inference_rule.pending_side_conditions = list(rule.side_conditions)
+    return inference_rule
+
+
+def _build_subproof(
+    rule: Rule,
+    rule_ctx: FormalSystemContext,
+    stored: Callable[[str], Term | None],
+) -> SubproofSchema | None:
+    # A discharge rule consumes a subproof opened by exactly one of a hypothesis
+    # (`assume`) or a fresh variable (`fresh`); its final line must match
+    # `derive`. Each is a rule-schema line parsed against the rule's variables,
+    # exactly like the deduction.
+    subproof = rule.subproof
+    if subproof is None:
+        return None
+    if (subproof.assume is None) == (subproof.fresh is None):
+        raise DeclarativeError(
+            f"Rule {rule.label!r} subproof must be opened by exactly one of "
+            f"'assume' or 'fresh'."
+        )
+    return SubproofSchema(
+        conclusion=build_schema_pattern(
+            subproof.derive, rule_ctx, "subproof", cached=stored("derive")
+        ),
+        assumption=(build_schema_pattern(
+            subproof.assume, rule_ctx, "subproof", cached=stored("assume"))
+            if subproof.assume is not None else None),
+        fresh=(build_schema_pattern(
+            subproof.fresh, rule_ctx, "subproof", cached=stored("fresh"))
+            if subproof.fresh is not None else None),
+    )
+
+
+@dataclass(frozen=True)
+class _SchemaScan:
+    """What the system's *primitive* rules and axioms are stated over.
+
+    ``signatures`` is every constructor they mention; ``unparsed`` is the schemas
+    no sort could read, kept with the bindings they were written under so they can
+    be tried again once a definition has extended the grammar. ``unions`` are the
+    sort patterns to try them against — live objects, so a notation registered
+    after the scan is in them.
+    """
+
+    signatures: frozenset[tuple[str, ...]]
+    unparsed: tuple[tuple[str, tuple[tuple[str, str], ...]], ...]
+    unions: tuple[Pattern, ...]
+
+
+def _scan_schemas(
+    spec: SystemSpec, ctx: FormalSystemContext, scope: tuple[int, int]
+) -> _SchemaScan:
+    """Read the system's primitive statements, for the freshness check.
+
+    ``scope`` is how far down ``spec.axioms`` and ``spec.rules`` to read — the
+    primitives that precede the definition asking (see
+    ``SystemSpec.definition_scope``). For a single-layer spec it is all of both,
+    which is the only reading that existed before inheritance.
+
+    Taken from the spec's own schema *text*, re-parsed against the grammar, and
+    that is not an accident: a schema is stored as a pattern whose template is
+    the source line with only its declared metavariables punched out as slots.
+    An axiom with no metavariables is therefore one literal blob — `from_pattern`
+    reads it as a ground leaf carrying the whole line, and sees no `∈` inside it.
+    The structure exists only in the string, so recovering it means parsing.
+
+    Parsed against each sort in turn because a schema does not record which sort
+    it was written in; the first that matches is the one. Metavariables come from
+    the schema's own bindings, as they did when it was built.
+
+    A schema that reads against *no* sort is not an error here — `build_schema_pattern`
+    accepts it as a flat text pattern, which matches proof lines by string — but it
+    is the interesting case: it mentions something the grammar cannot spell, and a
+    definition may be about to spell it. So it is kept rather than dropped, to be
+    re-read per definition (`_mentioned_by_an_unparsed_schema`). The list is empty
+    for a system whose statements all parse, which is the ordinary one, and then
+    that per-definition work is nothing.
+    """
+    found: set[tuple[str, ...]] = set()
+    unparsed: list[tuple[str, tuple[tuple[str, str], ...]]] = []
+    unions = tuple(
+        ctx.variables[name]
+        for name in spec.sort_names()
+        if isinstance(ctx.variables.get(name), UnionPattern)
+    )
+    if not unions:
+        return _SchemaScan(frozenset(), (), ())
+
+    def collect(text: str | None, bindings: list[tuple[str, str]]) -> None:
+        if not text:
             return
-        seen.add(id(pattern))
-        if hasattr(pattern, "respect_brackets"):
-            pattern.respect_brackets = mapping
-        for sub in getattr(pattern, "patterns", []) or []:
-            walk(sub)
-        for sub in (getattr(pattern, "variables", {}) or {}).values():
-            walk(sub)
+        matched = _match_a_schema(text, bindings, ctx, ctx, unions)
+        if matched is None:
+            unparsed.append((text, tuple(bindings)))
+            return
+        found.update(_signatures_in(matched))
 
-    for value in system.context.variables.values():
-        if hasattr(value, "respect_brackets"):
-            walk(value)
+    for ax in spec.axioms[: scope[0]]:
+        collect(ax.deduction, ax.bindings)
+    for rule in spec.rules[: scope[1]]:
+        collect(rule.deduction, rule.bindings)
+        for antecedent in rule.antecedents:
+            collect(antecedent, rule.bindings)
+        if rule.subproof is not None:
+            collect(rule.subproof.derive, rule.bindings)
+            collect(rule.subproof.assume, rule.bindings)
+            collect(rule.subproof.fresh, rule.bindings)
+    return _SchemaScan(frozenset(found), tuple(unparsed), unions)
+
+
+def _match_a_schema(
+    text: str,
+    bindings: Iterable[tuple[str, str]],
+    ctx: FormalSystemContext,
+    context: Context,
+    unions: tuple[Pattern, ...],
+) -> Term | None:
+    # One schema read against the sorts, as its own metavariables. `ctx` resolves
+    # the binding sorts (always the build context); `context` is the grammar to
+    # read against, which is the build context during the scan and the *proof*
+    # context afterwards, once definitions have added notation to it.
+    scoped = copy(context)
+    scoped.string_variables = {
+        **context.string_variables,
+        **_binding_patterns(list(bindings), ctx),
+    }
+    for union in unions:
+        matched = union.match(text, scoped)
+        if matched is not None:
+            return from_match(matched)
+    return None
+
+
+def _mentioned_by_an_unparsed_schema(
+    scan: _SchemaScan,
+    signature: tuple[str, ...],
+    ctx: FormalSystemContext,
+    context: Context,
+) -> bool:
+    # Whether a statement the grammar could not read at build time reads *now* —
+    # through notation this definition has just registered — and is stated over
+    # the form being defined. This is the freshness case a signature inventory
+    # alone cannot see: before the definition there was no constructor to put in
+    # it, so a rule concluding `(x ⊑ y)` in a grammar with no `⊑` looked like a
+    # rule about nothing, until `(x ⊑ y) ≝ ⊥` made it a rule about `⊥`.
+    for text, bindings in scan.unparsed:
+        matched = _match_a_schema(text, bindings, ctx, context, scan.unions)
+        if matched is not None and signature in _signatures_in(matched):
+            return True
+    return False
+
+
+def _rule_term_signatures(system: FormalSystem) -> set[tuple[str, ...]]:
+    """What the system's rules are stated over, read off their schema *terms*.
+
+    For rules added after the build, which the spec scan cannot see. It reads the
+    kernel term a schema pattern already carries rather than re-parsing, so it
+    needs no source text — and correspondingly it sees only what carries one: a
+    rule's own schema patterns, not an axiom's line type. That is the right half
+    to have, since a line type is fixed when the system is built and a rule is
+    what a late caller adds.
+    """
+    found: set[tuple[str, ...]] = set()
+
+    def read(pattern: Pattern | None) -> None:
+        if isinstance(pattern, StringPattern) and pattern.schema_term is not None:
+            found.update(_signatures_in(pattern.schema_term))
+
+    for rule in system.inference_rules:
+        read(rule.deduction)
+        for antecedent in rule.antecedents:
+            read(antecedent)
+        if rule.subproof_schema is not None:
+            read(rule.subproof_schema.conclusion)
+            read(rule.subproof_schema.assumption)
+            read(rule.subproof_schema.fresh)
+    return found
+
+
+def _signatures_in(term: Term) -> set[tuple[str, ...]]:
+    # Every constructor a term is built from, itself included.
+    found: set[tuple[str, ...]] = set()
+    stack: list[Term] = [term]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, Node):
+            found.add(current.constructor.signature)
+            stack.extend(current.children.values())
+    return found
+
+
+def _defined_using(system: FormalSystem) -> dict[tuple[str, ...], set[tuple[str, ...]]]:
+    # The "is defined using" relation the system's definitions so far make: from
+    # each defined form's head constructor to every constructor its defining form
+    # is built from. Read off the built definitions rather than accumulated in a
+    # field, so `register_definition` sees the same relation `build_system` does
+    # however the definitions arrived.
+    edges: dict[tuple[str, ...], set[tuple[str, ...]]] = {}
+    for built in system.definitions:
+        if isinstance(built.higher, Node):
+            edges.setdefault(built.higher.constructor.signature, set()).update(
+                _signatures_in(built.lower)
+            )
+    return edges
+
+
+def _require_a_non_circular_definition(
+    defn: Definition,
+    higher_match: Match | None,
+    lower: Term,
+    system: FormalSystem,
+) -> None:
+    """Refuse a definition that would make the "is defined using" relation cycle.
+
+    The non-circularity half of **conservativity**. A definition abbreviates; a
+    cycle abbreviates nothing, because unfolding never terminates. Worse, it
+    asserts something: ``(x ⊑ y) ≝ ((x ⊑ y) → ⊥)`` is ``P ↔ ¬P``, which is a
+    contradiction rather than a notation.
+
+    Most of this is unreachable, which is why it went unnoticed. A definition's
+    defining form is matched against the grammar as extended by the definitions
+    *before* it, so a definition stated in terms of its own **new notation**
+    matches nothing and is dropped as non-layering — the relation is a DAG by
+    index, and no check is involved. What that argument does not cover is a
+    defined form the grammar already spells:
+
+    * a **declared production** is grammatical from the start, so
+      ``(x ⊑ y) ≝ ((x ⊑ y) → ⊥)`` layers and registers, and a pair like
+      ``⊑ ≝ …⊴…``/``⊴ ≝ …⊑…`` cycles with neither definition self-referential;
+    * an **earlier definition's** notation is grammatical too, so ``S ≝ ⊥``,
+      ``T ≝ (S → ⊥)``, ``S ≝ (T → ⊥)`` closes a cycle through a shared defined
+      form.
+
+    Sharing a defined form stays legal — two definitions may attach to one form,
+    each its own citable axiom, as in Metamath. What is refused is the *cycle*.
+    """
+    if higher_match is None:
+        # Not yet grammatical, so this definition introduces the notation and
+        # nothing earlier can refer to it: no cycle is expressible. (Its own
+        # defining form cannot either — that is the non-layering case above.)
+        return
+    head = from_match(higher_match)
+    if not isinstance(head, Node):
+        return
+    signature = head.constructor.signature
+
+    # Reached only for a defined form the grammar already spells, which is the
+    # rare case — a definition introducing its own notation returned above, and
+    # never pays for the relation to be assembled.
+    edges = _defined_using(system)
+    reachable = _signatures_in(lower)
+    stack = list(reachable)
+    while stack and signature not in reachable:
+        for successor in edges.get(stack.pop(), ()):
+            if successor not in reachable:
+                reachable.add(successor)
+                stack.append(successor)
+    if signature not in reachable:
+        return
+    raise DeclarativeError(
+        f"Definition {defn.name!r} defines '{defn.higher}' in terms of itself, "
+        f"directly or through the definitions already registered. A definition "
+        f"abbreviates, and a cycle abbreviates nothing: unfolding it never "
+        f"terminates, and stating a form equivalent to something built from that "
+        f"same form is an assertion about it rather than a name for it. Define it "
+        f"over the forms that precede it; or, if the equivalence is meant, declare "
+        f"it as an axiom."
+    )
+
+
+def _require_a_fresh_defined_form(
+    defn: Definition,
+    union: Pattern,
+    ctx: FormalSystemContext,
+    system: FormalSystem,
+    scan: Callable[[], _SchemaScan],
+) -> None:
+    """Refuse a definition whose defined symbol the system already reasons with.
+
+    The freshness half of **conservativity**: a definition may only give meaning
+    to a symbol that had none. If an axiom or inference rule is already stated
+    over that symbol, the system already constrains it, and a definition equating
+    it to something else is an *axiom* — it can prove statements in the original
+    language that were not provable before.
+
+    Declaring the defined form as a *production* is not what disqualifies it, and
+    that distinction is the whole subtlety here. Declaring ``subset`` and then
+    writing ``Define (x ⊆ y) as ∀z.…`` is the ordinary way to define notation in
+    this engine: the production supplies grammar, the definition supplies meaning,
+    and nothing else in the system mentions ``⊆``. What is refused is defining a
+    symbol the theory is *already about* — ``Define (x ∈ y) as (⊥ → ⊥)`` in a
+    system whose rules reason over ``∈``.
+
+    It is not inert, which is why this is a refusal rather than a note. The kernel
+    definition ends up stated over the *production's* constructor, so
+    ``(⊥ → ⊥) [Def, 1]`` checks against a membership line and the base language
+    gains a theorem.
+
+    Run **after** the defined form's notation is registered, so the form has a
+    constructor to ask about however it became grammatical. Asking beforehand
+    reaches only a form some production already spelled, and misses the sharper
+    case: a rule stated over a form *no* production spells is stored as a flat
+    text pattern, so a zero-premise rule concluding ``(x ⊑ y)`` in a grammar with
+    no ``⊑`` sits inert — until ``(x ⊑ y) ≝ ⊥`` makes its conclusion grammatical
+    and rewritable, and ``⊥`` is proved. The caller withdraws the notation on a
+    refusal (see :func:`_finalise_definition`).
+    """
+    matched = union.match(defn.higher, system.context)
+    if matched is None:
+        return
+    head = from_match(matched)
+    if not isinstance(head, Node):
+        return
+    signature = head.constructor.signature
+    scanned = scan()
+    if signature not in scanned.signatures and not _mentioned_by_an_unparsed_schema(
+        scanned, signature, ctx, system.context
+    ):
+        return
+    raise DeclarativeError(
+        f"Definition {defn.name!r} defines '{defn.higher}', but the system's "
+        f"axioms or inference rules are already stated over that form. A "
+        f"definition may only give meaning to a symbol that had none: a symbol "
+        f"the rules already constrain is one the system reasons about, so "
+        f"equating it to something else is an axiom rather than a definition, "
+        f"and unfolding it proves statements the base system could not. Define a "
+        f"new notation instead; or, if you meant to assert an equation between "
+        f"forms the system already uses, declare it as an axiom."
+    )
+
+
+def _justifying_statement(
+    justification: Justification, system: FormalSystem, name: str
+) -> tuple[Pattern, tuple[SideCondition, ...]] | None:
+    # The statement a justification cites, and the provisos it carries, or None if
+    # the label names nothing citable. A *proved* theorem is the expected case
+    # (Metamath's `sbjust`); a rule that asserts its conclusion outright serves
+    # too, since it is equally a settled statement.
+    #
+    # Not a `SystemSpec.axiom`, though the name invites it: an axiom is lowered to
+    # an axiom-behaviour *line type* (`_build_axiom`), which carries the axiom's
+    # name and never its label, so there is nothing here to resolve a citation
+    # against. An author wanting a citable axiom declares it as a rule with no
+    # antecedents, which is the same assertion and is addressed by label.
+    theorem = system.promoted_theorems.get(justification.label)
+    if theorem is not None:
+        return (
+            (theorem.deduction, theorem.side_conditions)
+            if not theorem.antecedents
+            else None
+        )
+    rule = system.rule_by_label(justification.label)
+    if rule is None or rule.antecedents:
+        return None
+    if rule.is_discharge:
+        # A discharge rule cites no lines, so it has no `antecedents` — but it
+        # consumes a whole subproof, which is a premise by another name. Without
+        # this, conditional proof settles every `(A → B)` there is.
+        return None
+    if rule.pending_side_conditions:
+        # A rule's provisos are parsed only *after* definitions resolve, so that
+        # one may use defined notation — which is exactly why a definition cannot
+        # read them here. Rather than inherit a proviso list that is still empty,
+        # refuse: the citation would silently drop what the rule holds under.
+        raise DeclarativeError(
+            f"Definition '{name}' is justified by rule '{justification.label}', whose "
+            "provisos are parsed after definitions resolve and so cannot be inherited. "
+            "Cite a proved theorem, or drop the rule's provisos."
+        )
+    return rule.deduction, tuple(rule.side_conditions)
+
+
+def _discharge_justification(
+    defn: Definition, system: FormalSystem
+) -> list[SideCondition]:
+    """Settle ``defn``'s proof obligation against the theorem it cites, or refuse.
+
+    Returns the cited theorem's own provisos, restated in the definition's
+    metavariables, for the caller to conjoin with the definition's. The definition
+    *inherits* them because the citation only licences an instance the theorem
+    itself licences — `sbjust` holds under `$d x y z` and so, therefore, does every
+    use of `df-sb` that leans on it. That is stricter than Metamath, which
+    re-proves the hypothesis per use; strictness costs a refused unfold, and in
+    `set.mm` costs nothing at all, since a definition needing a justification
+    carries the same `$d` as its justifying theorem.
+
+    Run *before* the definition's notation is registered: the obligation is stated
+    in the grammar the definition extends, so it must be read while that grammar is
+    still the one in force.
+    """
+    justification = defn.justification
+    if justification is None:
+        raise DeclarativeError(f"Definition '{defn.name}' has no justification to discharge.")
+
+    cited = _justifying_statement(justification, system, defn.name)
+    if cited is None:
+        raise DeclarativeError(
+            f"Definition '{defn.name}' is justified by '{justification.label}', which "
+            "is not a proved theorem of this system, nor a rule that asserts its "
+            "conclusion with no premises of its own. An obligation is discharged by "
+            "citing something already settled. (A spec `axiom` is lowered to a line "
+            "type and carries no label, so it cannot be cited; declare it as a rule "
+            "with no antecedents instead.)"
+        )
+    statement, provisos = cited
+
+    try:
+        obligation = promote_from_source(
+            system,
+            label=f"{defn.name}.justification",
+            statement=justification.statement,
+            metavariables=dict(defn.bindings),
+        )
+    except ValueError as exc:
+        raise DeclarativeError(
+            f"Definition '{defn.name}' states its obligation as "
+            f"'{justification.statement}', which the system cannot read: {exc}"
+        ) from exc
+
+    # The obligation must be an *instance* of what was proved, so the cited
+    # statement is the schema and the obligation the subject: a theorem may be
+    # more general than the obligation needs, never less. The obligation's own
+    # metavariables stay rigid, which is what makes the discharge hold for every
+    # substitution the definition is later used at.
+    binding = match(
+        statement_term(statement), statement_term(obligation.deduction), system.context
+    )
+    if binding is None:
+        raise DeclarativeError(
+            f"Definition '{defn.name}' states its obligation as "
+            f"'{justification.statement}', which is not an instance of what "
+            f"'{justification.label}' proves."
+        )
+
+    try:
+        return [restate(proviso, binding, system.context) for proviso in provisos]
+    except ValueError as exc:
+        raise DeclarativeError(
+            f"Definition '{defn.name}' cannot inherit a proviso of "
+            f"'{justification.label}': {exc}"
+        ) from exc
+
+
+def _binder_patterns(
+    built: KernelDefinition, ctx: FormalSystemContext
+) -> dict[str, Pattern]:
+    """The definition's binders, by the name a proviso would call each one.
+
+    Read off the *built* definition rather than the spec, because a `fresh` clause
+    need not be written: a grammar declaring binding slots has it inferred from
+    the parsed defining form, and a proviso must be able to name those binders on
+    the same terms as declared ones.
+
+    A spelling two binders share is omitted. Binders placed by scope are
+    per-occurrence, so `(∃z.… → ∀z.…)` is two binders both called `z` and a proviso
+    naming `z` could not say which; leaving it out makes such a proviso a refusal
+    (:func:`_check_condition_is_checkable`) rather than a silent pick.
+    """
+    names = [binder.name for binder in built.fresh]
+    patterns: dict[str, Pattern] = {}
+    for binder in built.fresh:
+        if names.count(binder.name) > 1:
+            continue
+        pattern = ctx.variables.get(binder.sort.name)
+        if isinstance(pattern, Pattern):
+            patterns[binder.name] = pattern
+    return patterns
+
+
+def _definition_condition(
+    defn: Definition,
+    built: KernelDefinition,
+    ctx: FormalSystemContext,
+    context_copy: Context,
+    inherited: list[SideCondition],
+) -> SideCondition | None:
+    # The definition's own `where` provisos, parsed with its parameters *and* its
+    # binders in scope, conjoined with whatever its justification's theorem holds
+    # under. A binder is stored abstractly and has no fixed name, so `disjoint(z, x)`
+    # means "whatever this binder is called at this unfold"
+    # (`kernel.definitions._condition_binding`) — which is what an author writing it
+    # means. Without the binders here `z` parses as the literal token `z`, a
+    # coherent reading of nothing anybody wanted.
+    where_strings = [line.strip() for line in defn.provisos if line.strip()]
+    proviso_context = copy(context_copy)
+    proviso_context.string_variables = {
+        **_binder_patterns(built, ctx),
+        **context_copy.string_variables,
+    }
+    own = combine_side_conditions(where_strings, proviso_context)
+
+    parts = (*(() if own is None else (own,)), *inherited)
+    if not parts:
+        return None
+    return parts[0] if len(parts) == 1 else And(parts)
+
+
+def _check_condition_is_checkable(defn: Definition, built: KernelDefinition) -> None:
+    # A definition's proviso is checked against the binding an *unfold* produces,
+    # and that binding comes from matching the defined form against the redex
+    # (`kernel.definitions.unfold`). So a proviso may only name metavariables the
+    # defined form supplies: one naming anything else - a parameter of the
+    # defining form alone, a variable a `$d` mentions but neither form uses - has
+    # nothing to resolve against, and the kernel raises rather than returning a
+    # verdict.
+    #
+    # Unlike a rule, which fails closed on a malformed proviso
+    # (`InferenceRule._side_conditions_hold`), `unfold` lets that escape into the
+    # proof parse - and a generic `[Def, n]` tries every definition in scope, so
+    # one such definition breaks definitional steps system-wide. Settle it here,
+    # where the author can act on it, exactly as an unsound defining form is.
+    if built.condition is None:
+        return
+    # The binders count as supplied: the unfold resolves each to the leaf it takes
+    # there and exposes it under its name (`kernel.definitions._condition_binding`).
+    # Only the unambiguous ones — a spelling two binders share names neither, and
+    # is exactly what should be refused here rather than resolved to one of them.
+    names = [binder.name for binder in built.fresh]
+    supplied = set(built.higher.free_vars()) | {n for n in names if names.count(n) == 1}
+    orphaned = sorted(references(built.condition) - supplied)
+    if orphaned:
+        listed = ", ".join(repr(name) for name in orphaned)
+        raise DeclarativeError(
+            f"Definition '{defn.name}' has a proviso naming {listed}, which its "
+            f"defined form '{defn.higher}' does not supply and its binders do not "
+            "unambiguously name. A proviso is checked against the match between the "
+            "defined form and the term being unfolded, plus the binders that unfold "
+            f"resolves, so it can constrain nothing else. Either make {listed} a "
+            "parameter of the defined form, or state the proviso over what it has."
+        )
+
+
+@dataclass(frozen=True)
+class _FormCache:
+    """Both directions of the definition-term cache, bound to one spec position.
+
+    ``read`` answers the build with a term a previous one parsed (``None`` to
+    parse it now, on :data:`SchemaTermSource`'s contract); ``write`` takes back
+    what this build ended up with, so a persistence layer can store it.
+
+    Threaded down to ``build_kernel_definition`` rather than resolved where the
+    walk starts, because a defined form's constructor *is* the notation
+    registered two calls further in — before that, a stored ``higher`` term has
+    nothing to resolve against.
+    """
+
+    index: int
+    source: DefinitionTermSource | None
+    # None on the late path (`register_definition`), which has neither end of the
+    # cache: a definition added after the build occupies no position in any spec,
+    # so a stored term has no slot to arrive at and a derived one has none to be
+    # filed under. Recording it against `len(definitions)` would be worse than
+    # recording nothing — the persistence layer keys on *row* order, so a system
+    # that mixes built-in and late-registered definitions would file one
+    # definition's forms under another's row.
+    system: FormalSystem | None
+
+    @classmethod
+    def absent(cls) -> _FormCache:
+        return cls(index=0, source=None, system=None)
+
+    def read(self, slot: str, context: Context, ordinal: int = 0) -> Term | None:
+        if self.source is None:
+            return None
+        return self.source(DefinitionSlot(self.index, slot, ordinal), context)
+
+    def binder_defaults(
+        self, names: Sequence[str], context: Context
+    ) -> dict[str, Term]:
+        """The stored default for each declared binder, by name, skipping misses.
+
+        Keyed by *position* in the `fresh` list on the way in and by name on the
+        way out, because those are the two things each end already has: a slot
+        carries no names, and `parse_definition` takes a name-keyed mapping.
+        """
+        found = {}
+        for ordinal, name in enumerate(names):
+            stored = self.read("fresh", context, ordinal)
+            if stored is not None:
+                found[name] = stored
+        return found
+
+    def write(self, parsed: ParsedForms) -> None:
+        if self.system is not None:
+            self.system.definition_forms[self.index] = parsed
+
+
+def _finalise_definition(
+    defn: Definition,
+    ctx: FormalSystemContext,
+    system: FormalSystem,
+    scan: Callable[[], _SchemaScan],
+    forms: _FormCache,
+) -> bool:
+    """Register ``defn`` against the now-complete grammar, returning whether it
+    layered — ``True`` when its defining (lower) form was recognised (given the
+    definitions already in context), ``False`` when it matched nothing and so was
+    dropped. A recognised form is added to the proof context."""
+    union = ctx.variables[defn.sort]
+    context_copy = copy(system.context)
+    context_copy.string_variables.update(_binding_patterns(defn.bindings, ctx))
+
+    # The defining form's bound variables, resolved to their sort patterns, so the
+    # term checker treats them as binders (capture-avoiding unfold) rather than as
+    # stray ground leaves that would force the string path.
+    fresh_patterns = _binding_patterns(defn.fresh, ctx)
+
+    # A definition holding only under an obligation discharges it here, before any
+    # of it is registered — the obligation is stated in the grammar the definition
+    # extends, so it must be settled while that grammar is still the one in force.
+    # What comes back is the cited theorem's own provisos, to be conjoined with the
+    # definition's once those can be parsed.
+    inherited: list[SideCondition] = (
+        _discharge_justification(defn, system) if defn.justification is not None else []
+    )
+
+    # Whether the defining form is recognised *given the definitions before it* is
+    # what "layering" means, and it is settled before anything is registered: a
+    # definition that does not layer must leave the grammar untouched.
+    lower_match = union.match(defn.lower, context_copy)
+    if lower_match is None:
+        return False
+
+    # Non-circularity is read off the grammar as it stands *before* this
+    # definition extends it: a form it cannot yet spell is one nothing earlier
+    # could have been defined in terms of. Freshness is the other way about and
+    # runs below, once the notation exists.
+    _require_a_non_circular_definition(
+        defn,
+        union.match(defn.higher, context_copy),
+        from_match(lower_match),
+        system,
+    )
+
+    notation, is_new = union.notation_for(defn.higher, context_copy)
+    # Registered only when the grammar cannot already spell the defined form.
+    #
+    # A sort tries its own productions before its notations, so a notation for a
+    # form some production already spells is never *reached* by a parse — but is
+    # scanned by every parse that falls through to `try_definitions`, which on a
+    # large grammar is most of them. That is inert work in a hot path, and on an
+    # imported system it is all of them: a Metamath definition's defined form is
+    # grammatical from its own syntax axiom, so every notation registered would be
+    # dead weight. Measured over 5,000 set.mm theorems, carrying them cost 2.4x.
+    #
+    # Asked against a context holding no notations at all, which is the question
+    # exactly: could this form be read without any of them?
+    production_context = copy(context_copy)
+    production_context.definitions = set()
+    # A memo is shared across context copies and keyed only by pattern and string,
+    # so one filled while notations were in scope would answer this question with
+    # *their* reading. Dropped rather than reused: this is the one parse that must
+    # not see them.
+    production_context.parse_memo = None
+    spelled_by_a_production = union.match(defn.higher, production_context) is not None
+
+    registered_now = is_new and not spelled_by_a_production
+    if registered_now:
+        system.context.definitions.add(notation)
+
+    try:
+        return _register_notated_definition(
+            defn, union, notation, ctx, context_copy, fresh_patterns, inherited,
+            system, scan, forms,
+        )
+    except DeclarativeError:
+        # Every refusal past this point is a *late* one: the notation is already
+        # in scope, so the defined form parses as defined notation while no kernel
+        # definition backs it. Harmless when a whole build is being discarded, but
+        # `register_definition` mutates a live system, and a caller that catches
+        # this to keep the assertion as an axiom (which is what a corpus import
+        # does) would be left with the grammar half-extended.
+        #
+        # Only what *this* registration added is withdrawn: a notation an earlier
+        # definition registered is its grammar, not ours to confiscate, and one we
+        # never registered is not there to remove.
+        if registered_now:
+            system.context.definitions.discard(notation)
+        raise
+
+
+def _register_notated_definition(
+    defn: Definition,
+    union: Pattern,
+    notation: DefinedNotation,
+    ctx: FormalSystemContext,
+    context_copy: Context,
+    fresh_patterns: dict[str, Pattern],
+    inherited: list[SideCondition],
+    system: FormalSystem,
+    scan: Callable[[], _SchemaScan],
+    forms: _FormCache,
+) -> bool:
+    # The half of `_finalise_definition` that runs with the defined form's notation
+    # already in scope — which is what makes that form grammatical, and so what
+    # every check below needs. Split out so a refusal here can withdraw it again.
+
+    # Whether the sort actually parses the defined form through *this* notation.
+    # A sort tries its own productions before its notations, so a form the grammar
+    # already spells (`Define x ∈ y as ...`) parses to a declared production and
+    # never reaches here. Asked of the registered notation rather than of the
+    # grammar-before-it, because two definitions may share one defined form: the
+    # second finds the first's notation, which is the same production and still
+    # its own leaf.
+    matched = union.match(defn.higher, system.context)
+    parses_to_its_own_leaf = matched is not None and matched.pattern is notation.template
+
+    # A nullary defined form is a new ground leaf of the grammar that no production
+    # declared a role for, so the build settles its role here: the leaf abbreviates
+    # one fixed term, and a *later* definition may introduce it exactly as it may a
+    # declared constant (`T ≝ S` layers on `S ≝ ⊥`).
+    #
+    # Settled *before* the kernel definition is built, not after, because building
+    # it projects this template to a constructor and a constructor snapshots the
+    # declaration. Safe in both directions: the definition's own leaf is always
+    # among its defined form's, so `introduced_leaves` never puts it to the
+    # constants check during this build, and a definition that goes on to fail
+    # withdraws the notation this is written on (see the caller).
+    notation.template.denotes_constant = denotes_a_constant(notation, parses_to_its_own_leaf)
+
+    # Freshness needs the defined form's constructor, so it waits for the notation
+    # — but not a moment longer than the line above, which must settle the leaf's
+    # role *before* anything projects the template: a constructor snapshots the
+    # declaration, and reading the form to check it is such a projection.
+    _require_a_fresh_defined_form(defn, union, ctx, system, scan)
+
+    # Build the kernel counterpart now, against the context the notation has just
+    # entered — a definition's *defined* form is grammatical only because its
+    # notation is registered, so this must follow the add. `system.context` is
+    # deliberately the one used (not `context_copy`): it is what a proof is
+    # checked in, and the definition's own binding metavariables in `context_copy`
+    # would parse the parameters differently.
+    #
+    # A definition with no sound kernel reading is rejected here rather than
+    # silently accepted and refused per-step later.
+    # Built *without* the condition first, because which binders the definition has
+    # is settled here and the condition may name one. A `fresh` clause need not be
+    # written: a grammar with binding slots has it inferred from the parsed defining
+    # form (`formal_system.definitions`), so reading `defn.fresh` would see nothing
+    # and a proviso naming an inferred binder would parse as the literal token —
+    # inert, and silently so. The condition decides nothing during construction, so
+    # attaching it afterwards costs only this ordering.
+    try:
+        kernel_definition = build_kernel_definition(
+            notation,
+            defn.lower,
+            system.context,
+            fresh=fresh_patterns or None,
+            label=defn.label,
+            # Asked here rather than earlier because a defined form's constructor
+            # is the notation registered just above, so this is the first point at
+            # which a stored `higher` term can resolve at all.
+            higher_term=forms.read("higher", system.context),
+            lower_term=forms.read("lower", system.context),
+            # A binder's default is parsed against the binder's own sort, not the
+            # definition's, so it would resolve earlier than the forms do — asked
+            # here anyway, to keep one read point and one digest.
+            binder_defaults=forms.binder_defaults(
+                [name for name, _sort in defn.fresh], system.context
+            ),
+            record=forms.write,
+        )
+    except DefinitionError as exc:
+        raise DeclarativeError(str(exc)) from exc
+
+    kernel_definition = replace(
+        kernel_definition,
+        condition=_definition_condition(
+            defn, kernel_definition, ctx, context_copy, inherited
+        ),
+    )
+    _check_condition_is_checkable(defn, kernel_definition)
+    system.add_definition(kernel_definition)
+
+    # A freshly added definition or one that de-duplicated into an existing
+    # equivalent — either way its form was recognised, so the definition layers.
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -599,48 +1819,524 @@ def _patch_brackets(system, bracket_pairs: list[tuple[str, str]]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def build(source: str, system_dict: dict | None = None) -> dict:
-    """Build a ``FormalSystem`` from declarative source.
+def register_definition(defn: Definition, system: FormalSystem) -> bool:
+    """Register one definition against an already-built ``system``.
 
-    Mirrors :func:`website.logical.compiler.compile`: returns
-    ``{"system": FormalSystem}`` on success or ``{"errors": [...]}`` on failure.
+    The same registration :func:`build_system` performs for every definition in a
+    spec, for a caller that has one to add later — an import walking a corpus, in
+    which the theorem a definition's justification cites is promoted as the walk
+    reaches it and so is not there when the system is built.
+
+    Returns whether the definition *layered* (see :func:`_finalise_definition`),
+    appending that to ``system.definition_layering`` so it stays positional with
+    ``system.definitions`` however the definitions arrived, and raises
+    :class:`DeclarativeError` if the definition cannot be registered soundly.
     """
+    if system.build_context is None or system.primitive_schemas is None:
+        raise DeclarativeError(
+            f"Cannot register definition '{defn.name}' against a system with no "
+            "build context."
+        )
+    # A cited definition name must resolve to one definition, and nothing else
+    # enforces that: `_definition_by_label` takes the first match, so a collision
+    # would leave the second silently uncitable. `build_system` refuses a
+    # duplicate within its own spec; this is the same refusal against whatever the
+    # system already carries.
+    if defn.label is not None and any(d.label == defn.label for d in system.definitions):
+        raise DeclarativeError(f"Duplicate definition label '{defn.label}'.")
+    # The build's scan plus whatever the system has gained since. A rule added
+    # after the build is not in the spec the scan reads, so on this path — the only
+    # one where that can have happened — the rules are read again, off the schema
+    # terms their patterns carry. Cheap enough to do per late definition, and it is
+    # the difference between the two paths enforcing the same rule and only one.
+    stored = system.primitive_schemas
 
+    def scan() -> _SchemaScan:
+        scanned = stored()
+        return replace(
+            scanned, signatures=scanned.signatures | _rule_term_signatures(system)
+        )
+
+    # Neither end of the definition-term cache on this path; see `_FormCache.absent`.
+    layered = _finalise_definition(
+        defn, system.build_context, system, scan, _FormCache.absent()
+    )
+    system.definition_layering.append(layered)
+    return layered
+
+
+# ---------------------------------------------------------------------------
+# Inheritance: one spec from a chain of them
+# ---------------------------------------------------------------------------
+
+
+def _declares_a_name(prod: Production) -> bool:
+    # A production with no shape declares no name: it *includes* one sort into
+    # another (`setvar_var` into `setvar`), which is an edge rather than a
+    # declaration. See `app.db.systems_mapping.spec_to_system`, which stores it
+    # as membership on the sub-sort for the same reason.
+    return (
+        prod.template is not None
+        or prod.regex is not None
+        or prod.atom_value is not None
+        or prod.atom_base is not None
+    )
+
+
+def layered_spec(specs: Sequence[SystemSpec]) -> SystemSpec:
+    """One :class:`SystemSpec` from an inheritance chain, **ancestors first**.
+
+    This is what ``formal_systems.inherits_from_id`` means: a child's effective
+    system is its ancestors' parts followed by its own. Concatenating the parts
+    is the whole of it, because a part names its sort by *string* — a child
+    adding ``∀x p`` to ``formula`` says ``sort="formula"``, and the union it
+    lands in is the one the ancestor declared. So sorts merge, and
+    :func:`build_system` sees one flat spec: neither it nor the kernel learns a
+    new concept, and inheritance is a fact about how a spec was assembled rather
+    than something the checker has to reason about.
+
+    That is also what makes the child's guarantee cheap. A theorem proved against
+    an ancestor transfers to the child only because the child's primitives *are*
+    the ancestor's rows — not a copy of them — so an ancestor's derivation is a
+    child's derivation and there is nothing to verify. See
+    docs/system-relationships-roadmap.md §2.
+
+    A name may be declared **once** across the chain. A child redeclaring an
+    ancestor's ``implication`` would take over the build namespace
+    (``ctx.variables`` is one dictionary), silently changing what every theorem
+    inherited from that ancestor means — and stored terms name their constructors
+    by name, so it would change what those read back as too. Sorts are the
+    exception, and the point: they are *meant* to be shared and grown.
+
+    ``token_separated`` is the disjunction over the chain: the promise is about
+    the whole notation, so a layer adding glued templates under a token-separated
+    ancestor is told so by ``_check_token_separation`` rather than quietly
+    exempted. The system's ``name`` is the most derived layer's.
+
+    Raises :class:`DeclarativeError` on a cross-layer collision, naming both
+    layers. Parts are shared with the input specs, not copied, and are treated as
+    immutable — as they already are by ``build_system``.
+    """
+    if not specs:
+        raise DeclarativeError("An inheritance chain needs at least one system.")
+
+    # A layer is identified by its **position**, never by its name: names are
+    # free text and two layers of a chain may well share one, which would make
+    # every check below skip the pair it exists to catch. The name is for the
+    # message only.
+    def label(layer: int) -> str:
+        return specs[layer].name or f"layer {layer}"
+
+    # name -> (layer, what it was), for everything that shares `ctx.variables`.
+    names: dict[str, tuple[int, str]] = {}
+    # A citation resolves a label against rules, then promoted theorems, then
+    # definitions, so those three share one namespace too.
+    labels: dict[str, tuple[int, str]] = {}
+    # sort name -> the layer that first declared it. Sorts are the one namespace
+    # that is *meant* to be shared, so they are recorded rather than claimed —
+    # and cross-checked against `names` at the end, since a production taking an
+    # ancestor's sort name would take its union out of the build namespace.
+    sorts: dict[str, int] = {}
+    openings: dict[str, tuple[str, int]] = {}
+
+    def claim(
+        table: dict[str, tuple[int, str]], name: str, layer: int, what: str
+    ) -> None:
+        held = table.get(name)
+        if held is not None and held[0] != layer:
+            raise DeclarativeError(
+                f"{what} {name!r} is declared by {label(layer)!r}, but "
+                f"{label(held[0])!r} already declares a {held[1].lower()} of that "
+                f"name. A name may be declared once across an inheritance chain: "
+                f"redeclaring an ancestor's would change what every theorem "
+                f"inherited from it means."
+            )
+        table.setdefault(name, (layer, what))
+
+    productions: list[Production] = []
+    lines: list[LineSpec] = []
+    definitions: list[Definition] = []
+    axioms: list[Rule] = []
+    rules: list[Rule] = []
+    brackets: list[tuple[str, str]] = []
+    definition_scope: list[tuple[int, int]] = []
+
+    for layer, spec in enumerate(specs):
+        for opening, closing in spec.brackets:
+            held = openings.get(opening)
+            if held is not None and held[1] != layer:
+                if held[0] != closing:
+                    raise DeclarativeError(
+                        f"Bracket {opening!r} closes with {closing!r} in "
+                        f"{label(layer)!r} and with {held[0]!r} in "
+                        f"{label(held[1])!r}. A chain has one bracket map, so the "
+                        f"two readings cannot both hold."
+                    )
+                # The ancestor already declared this pair; one map, one entry.
+                continue
+            openings[opening] = (closing, layer)
+            brackets.append((opening, closing))
+
+        for sort in spec.sort_names():
+            sorts.setdefault(sort, layer)
+        for prod in spec.productions:
+            if _declares_a_name(prod):
+                claim(names, prod.name, layer, "Production")
+            productions.append(prod)
+
+        for line in spec.lines:
+            claim(names, line.name, layer, "Line type")
+            for part in line.parts:
+                claim(names, part.name, layer, "Line part")
+            lines.append(line)
+
+        for ax in spec.axioms:
+            # An axiom becomes a line type, so it takes a name in the same
+            # namespace the grammar uses (see `_shadowed_grammar_names`).
+            claim(names, _identifier(ax.name), layer, "Axiom")
+            claim(labels, ax.label, layer, "Axiom")
+            axioms.append(ax)
+        for rule in spec.rules:
+            claim(labels, rule.label, layer, "Rule")
+            rules.append(rule)
+
+        # Recorded after this layer's primitives are in, and before the next
+        # layer's: a definition may be held to the axioms it was declared under,
+        # never to one a descendant added later.
+        #
+        # A layer that is *itself* a chain already knows where its own
+        # boundaries fall, and its counts are relative to its own lists — so
+        # shift them past what precedes it rather than flattening them into one
+        # scope. That is what makes layering associative: grouping a chain
+        # differently must describe the same system.
+        before = (len(axioms) - len(spec.axioms), len(rules) - len(spec.rules))
+        outer = (len(axioms), len(rules))
+        for index, defn in enumerate(spec.definitions):
+            if defn.label is not None:
+                claim(labels, defn.label, layer, "Definition")
+            definitions.append(defn)
+            inner = (
+                spec.definition_scope[index]
+                if index < len(spec.definition_scope)
+                else None
+            )
+            definition_scope.append(
+                outer
+                if inner is None
+                else (before[0] + inner[0], before[1] + inner[1])
+            )
+
+    # A sort is shared, but its *name* is still one entry in the build namespace:
+    # a production of one layer spelled like a sort of another would replace the
+    # union in `ctx.variables`, and the sort would then admit nothing. Checked
+    # here rather than in `claim`, because within one layer the two coexisting is
+    # long-standing behaviour that `_shadowed_grammar_names` records for the
+    # digest instead of refusing.
+    for name, (layer, what) in names.items():
+        declared_in = sorts.get(name)
+        if declared_in is not None and declared_in != layer:
+            raise DeclarativeError(
+                f"{what} {name!r} is declared by {label(layer)!r}, but "
+                f"{label(declared_in)!r} declares a sort of that name. A chain "
+                f"has one build namespace, so the production would take the "
+                f"sort's place in it and the sort would admit nothing."
+            )
+
+    return SystemSpec(
+        name=specs[-1].name,
+        brackets=brackets,
+        token_separated=any(spec.token_separated for spec in specs),
+        productions=productions,
+        lines=lines,
+        definitions=definitions,
+        axioms=axioms,
+        rules=rules,
+        # One flat layer is the flat reading, and says so by leaving this empty —
+        # which is what keeps `layered_spec([spec]) == spec`. One layer that is
+        # already a chain keeps the boundaries it arrived with.
+        definition_scope=(
+            [] if len(specs) == 1 and not specs[0].definition_scope
+            else definition_scope
+        ),
+    )
+
+
+def build_spec(
+    spec: SystemSpec,
+    *,
+    schema_terms: SchemaTermSource | None = None,
+    definition_terms: DefinitionTermSource | None = None,
+) -> dict:
+    """Build a ``FormalSystem`` from a :class:`SystemSpec`.
+
+    The entry point for callers that hold a ``SystemSpec`` -- e.g. a persistence
+    layer that reconstructs one from database rows, or a test that assembles one
+    directly. Returns ``{"system": FormalSystem}`` on success or
+    ``{"errors": [...]}`` when the spec is invalid.
+
+    A system that inherits from another is built by handing this the chain's
+    :func:`layered_spec`, not by giving the builder a parent to resolve — see
+    that function for why the parts are concatenated rather than referenced.
+
+    ``schema_terms`` and ``definition_terms`` are optional caches of already-derived
+    rule-schema and definition-form terms; see :func:`build_system`. Keyword-only:
+    ``schema_terms`` took second place from a ``system_dict`` parameter that was
+    reserved for exactly the inheritance this signature no longer needs (a chain is
+    layered into one spec *before* it gets here, see :func:`layered_spec`), and a
+    caller still passing one positionally should be told so rather than have it
+    read as a term cache.
+    """
     try:
-        spec = parse(source)
+        return {"system": build_system(spec, schema_terms, definition_terms)}
     except DeclarativeError as exc:
         return {"errors": [str(exc)]}
-
-    return build_spec(spec, system_dict=system_dict)
-
-
-def build_spec(spec: SystemSpec, system_dict: dict | None = None) -> dict:
-    """Build a ``FormalSystem`` from an already-parsed :class:`SystemSpec`.
-
-    The entry point for callers that hold a ``SystemSpec`` directly rather than
-    source text -- e.g. a persistence layer that reconstructs one from database
-    rows. Same return shape as :func:`build`.
-    """
-
-    # Lowering can still reject a parsed-but-invalid spec (e.g. a line shape
-    # with no grammar-sort placeholder); surface that as errors, not an
-    # exception, to keep the build contract.
-    try:
-        edi = lower(spec)
-    except DeclarativeError as exc:
+    except Exception as exc:  # noqa: BLE001
+        # A spec that reaches here passed storage validation but the engine still
+        # rejected it (e.g. a malformed proviso). Preserve the build contract --
+        # return errors rather than raising into the caller (a 500 at the API).
         return {"errors": [str(exc)]}
 
-    result = compile_edi(edi, system_dict=system_dict)
 
-    if "system" in result:
-        # Determine bracket pairs: those declared, else default '()' if any
-        # template/definition actually uses a parenthesis.
-        brackets = list(spec.brackets)
-        if not brackets and _uses_parens(spec):
-            brackets = [("(", ")")]
-        _patch_brackets(result["system"], brackets)
+def schema_digests(spec: SystemSpec) -> list[str]:
+    """Per rule, in ``spec.rules`` order, a digest of what determines its schema terms.
 
-    return result
+    A composed schema term is a pure function of the template, the rule's
+    metavariables, and the grammar the template is parsed against — so two builds
+    that agree on this digest compose the same terms, and a caller holding stored
+    ones may hand them to :func:`build_system` instead. A caller that finds a
+    *different* digest has terms that mean nothing and must ignore them; there is
+    nothing to repair, because composing them again is the same work as checking.
+
+    Deliberately coarse in one direction and exact in the other. Coarse: **every**
+    rule's digest changes when any production does, because a schema term names
+    the constructors it was built from and a grammar edit can rewrite any of them.
+    Exact: what it covers is only what composition reads —
+
+    * the productions, which are what a template is parsed against;
+    * the bracket map and the constants that merely spell a bracket, which decide
+      where a template may be split (both are derived from more of the spec than
+      the productions, hence taken after derivation rather than before);
+    * the rule's own templates and metavariable bindings;
+    * which grammar names the *rest* of the build namespace shadows — see
+      :func:`_shadowed_grammar_names`.
+
+    What is absent: a rule's own **label**, which decides nothing composition
+    reads, so a rename keeps the terms. And the content of lines and axioms —
+    only the names they bind matter, and only where one collides.
+    """
+    grammar = _grammar_fingerprint(spec)
+    return [
+        _fingerprint(
+            [
+                grammar,
+                rule.deduction,
+                rule.antecedents,
+                None if rule.subproof is None else [
+                    rule.subproof.derive, rule.subproof.assume, rule.subproof.fresh
+                ],
+                rule.bindings,
+            ]
+        )
+        for rule in spec.rules
+    ]
+
+
+def definition_digest(spec: SystemSpec) -> str:
+    """What determines the terms a definition's two surface forms parse to.
+
+    :func:`schema_digests`' counterpart for definitions, and — like
+    :func:`library_digest` — **one digest for the whole block** rather than one
+    per definition. That is not a shortcut. A definition's forms are parsed
+    against the grammar *as extended by the definitions before it*, so an edit to
+    any definition can change what a later one parses to; and the defined forms
+    are registered in spec order, so an insertion or a reorder moves every
+    subsequent slot index. A per-definition digest would have to cover every
+    earlier definition anyway, and would still be wrong about the indices.
+
+    Covers the grammar and, per definition in order, everything the two parses
+    read: the sort the forms are parsed against, the two forms themselves, the
+    parameters abstracted out of them, and the ``fresh`` clause that decides which
+    leaves become binders.
+
+    What is absent: ``label``, ``name``, ``provisos`` and ``justification``. A
+    label and a name decide nothing either parse reads; a proviso becomes the
+    definition's ``condition``, which is attached after the forms are built and
+    replaces nothing in them.
+    """
+    return _fingerprint(
+        [
+            _grammar_fingerprint(spec),
+            [
+                [defn.sort, defn.higher, defn.lower, defn.bindings, defn.fresh]
+                for defn in spec.definitions
+            ],
+        ]
+    )
+
+
+def library_digest(spec: SystemSpec) -> str:
+    """What determines the term a *promoted theorem*'s statement composes to.
+
+    :func:`schema_digests`' counterpart for the citable library, and wider,
+    because promotion reads more of the system than a rule schema does. A rule
+    template is parsed against the productions alone; a theorem's statement is a
+    proof line's formula, so it is composed at the sorts a **line** is read at
+    (``promotion.logical_sorts``), and a *ground* one may use the system's
+    resolved **definitions** (``promotion._ground_schema_term``). Both therefore
+    have to be here, where `schema_digests` can leave them out.
+
+    One digest for the whole library rather than one per theorem: the per-theorem
+    half is the theorem's own strings, which the persistence layer already holds
+    beside the term it is guarding, and hashing them there keeps a library of
+    50,000 from recomputing this for each one.
+    """
+    return _fingerprint(
+        [
+            _grammar_fingerprint(spec),
+            [
+                [
+                    line.name, line.shape, line.logical_sort, line.scope,
+                    line.behaviour, [[p.name, p.regex] for p in line.parts],
+                ]
+                for line in spec.lines
+            ],
+            [
+                [
+                    defn.sort, defn.name, defn.higher, defn.lower, defn.bindings,
+                    defn.provisos, defn.fresh, defn.label,
+                ]
+                for defn in spec.definitions
+            ],
+        ]
+    )
+
+
+def _grammar_fingerprint(spec: SystemSpec) -> str:
+    # What a template is parsed *against*: the productions, the bracket map that
+    # decides where one may be split, and the names something else in the build
+    # namespace shadows.
+    #
+    # **Ordered, and that includes the sort inclusions.** It is tempting to hash
+    # an inclusion as membership rather than as a positioned production — it is
+    # an edge, `_declares_a_name` says so, and `spec_to_system` stores it as one.
+    # It is not sound (found in review on #181). `build_system` adds every member
+    # of a sort's union in `spec.productions` order and `UnionPattern.match`
+    # takes the first that succeeds, so where an inclusion sits **decides the
+    # parse** wherever it and a direct production of the parent sort match the
+    # same text: `formula ::= atom | direct` reads `A` as `atom_leaf`, and
+    # `formula ::= direct | atom` reads it as `direct`.
+    #
+    # A digest that ignored that would give two grammars with different parses
+    # one value — and unlike a stale digest, which costs a parse and never a
+    # difference, an equal one is *believed*. A cached term composed under one
+    # precedence would be accepted under the other.
+    #
+    # `tests/test_systems_store.py` pins the overlap directly, so the temptation
+    # cannot be taken up a second time.
+    return _fingerprint(
+        [
+            sorted((_bracket_map(spec) or {}).items()),
+            _bracket_opaque_tokens(spec, _bracket_map(spec)),
+            [
+                [
+                    prod.sort, prod.name, prod.template, prod.regex,
+                    prod.atom_value, prod.atom_base, prod.denotes_constant,
+                    prod.bindings, sorted(prod.scopes_over.items()),
+                ]
+                for prod in spec.productions
+            ],
+            _shadowed_grammar_names(spec),
+        ]
+    )
+
+
+def _shadowed_grammar_names(spec: SystemSpec) -> list[str]:
+    """Grammar names that something *else* in the build namespace also binds.
+
+    ``ctx.variables`` is one namespace, and lines, line parts, axioms and the
+    system itself are registered into it after the grammar (steps 5 and 6 of
+    :func:`build_system`). A name declared twice resolves to the later one — so a
+    production named ``implication`` and an axiom named ``implication`` leave
+    ``ctx.variables["implication"]`` holding the axiom's line type.
+
+    That matters to a *stored* term, which names its constructors by name.
+    Composing has no such problem: it parses against the sort unions, which hold
+    the production objects themselves and are indifferent to what the name now
+    means. So a rename onto a production's name changes nothing a template
+    composes to, and would leave the stored rows looking current when what they
+    resolve *to* has moved — which is why it has to reach the digest.
+
+    This is not what makes such a system correct, and was once mistaken for it: a
+    collision present from the outset matches the digest at both ends. Resolving a
+    stored constructor through the grammar rather than through this namespace is
+    what settles that (``app.db.terms_mapping.TermGraph._grammar_of``); the digest
+    only has to notice the *change*.
+
+    Only the *collisions*, not every outside name: a line renamed to something no
+    production is called shadows nothing, and invalidating every schema term for
+    it would be cost with no defect behind it.
+    """
+    grammar = {prod.name for prod in spec.productions} | set(spec.sort_names())
+    outside = {_identifier(spec.name) or "System"}
+    for line in spec.lines:
+        outside.add(line.name)
+        outside.update(part.name for part in line.parts)
+    for axiom in spec.axioms:
+        outside.add(_identifier(axiom.name))
+        outside.add(f"{_identifier(axiom.name)}_axiom")
+    return sorted(grammar & outside)
+
+
+def _fingerprint(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, default=list).encode()
+    ).hexdigest()
+
+
+def registered_definition_layering(spec: SystemSpec) -> list[bool]:
+    """Per definition, in ``spec.definitions`` order, whether it *layers*.
+
+    Definitions layer positionally: a definition may build on the ones before it,
+    so its defining (lower) form is parsed against the grammar those earlier
+    definitions have already extended. A definition placed **ahead** of one whose
+    notation its lower form uses does not raise -- its lower form simply matches
+    nothing, and it is dropped silently. The returned flag is ``True`` for a
+    definition that was recognised, ``False`` for one that was dropped.
+
+    Keyed by **position**, not by defined form, so a caller can tell whether a
+    *specific* definition would be dropped even when two definitions share a
+    higher form (a set of forms would collapse them) or are structurally
+    equivalent up to renaming (which ``add_notation`` de-duplicates).
+
+    Layering depends only on the grammar (productions, in their sort unions) and
+    the definitions themselves; axioms, rules and lines contribute nothing to it.
+    So the build is done against a spec **reduced** to grammar plus definitions:
+    an unrelated draft error the draft-tolerant CRUD persisted (a half-written
+    rule, a malformed proviso) then can't fail the build and blind the check into
+    reporting every definition dropped. What still errors is a broken *grammar* —
+    and there no definition can layer at all, so all-``False`` is the honest
+    answer (nothing is live for a reorder to drop) — or a definition the build
+    refuses outright (a circular or non-fresh defined form), where all-``False``
+    is a degradation: a reorder guard cannot act on it, but the caller has the
+    build's own error, which says which definition and why.
+
+    A definition's *justification* goes with the rules, and for the same reason:
+    it cites one, so keeping it would fail the reduced build over something that
+    decides nothing about layering — reporting every definition dropped, which is
+    exactly what the reduction exists to prevent.
+    """
+    reduced = copy(spec)
+    reduced.axioms = []
+    reduced.rules = []
+    reduced.lines = []
+    reduced.definitions = [
+        replace(defn, justification=None) if defn.justification is not None else defn
+        for defn in spec.definitions
+    ]
+    result = build_spec(reduced)
+    if "errors" in result:
+        return [False] * len(spec.definitions)
+    return result["system"].definition_layering
 
 
 def _uses_parens(spec: SystemSpec) -> bool:
@@ -648,37 +2344,3 @@ def _uses_parens(spec: SystemSpec) -> bool:
     texts += [d.lower for d in spec.definitions]
     texts += [r.deduction for r in spec.axioms + spec.rules]
     return any("(" in t for t in texts)
-
-
-def _demo(path: str) -> None:
-    # `python -m website.logical.declarative <file.system>`: show the lowered
-    # .edi and confirm the system compiles.
-    with open(path, encoding="utf-8") as handle:
-        source = handle.read()
-
-    print("=" * 70)
-    print("LOWERED .edi")
-    print("=" * 70)
-    print(lower(parse(source)))
-
-    result = build(source)
-    print("=" * 70)
-    if "errors" in result:
-        print("COMPILE ERRORS")
-        for err in result["errors"]:
-            print("  ", err)
-        return
-
-    system = result["system"]
-    print(f"COMPILED: {system.name}")
-    print("  line types:", [lt.name for lt in system.line_types])
-    print("  rules:", [ir.label for ir in system.inference_rules])
-
-
-if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) != 2:
-        print("usage: python -m website.logical.declarative <file.system>")
-        raise SystemExit(2)
-    _demo(sys.argv[1])

@@ -1,9 +1,51 @@
 name: Tests
 
+# The backend suite. The frontend's lives in frontend.yml, split out so each only
+# runs when its own side changed — two thirds of PRs here touch both, but a
+# backend-only change should not spend a runner rebuilding the SPA.
+#
+# The paths below are "what pytest reads", which is wider than app/ + website/:
+# six test modules import from scripts/ (check_layering, import_metamath,
+# rebuild_markup, restore_proofs, backfill_line_citations), so a change there
+# must re-run the suite. What is deliberately absent is deliberately untested —
+# benchmarks/ is measured rather than asserted, tools/ is Atlas's model loader
+# and rides migrations.yml.
+
 on:
   pull_request:
+    paths:
+      - "app/**"
+      - "website/**"
+      - "tests/**"
+      - "scripts/**"
+      # The Vercel entrypoint, which imports app.main.
+      - "api/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "pytest.ini"
+      - ".github/workflows/tests.yml"
   push:
     branches: [develop]
+    paths:
+      - "app/**"
+      - "website/**"
+      - "tests/**"
+      - "scripts/**"
+      # The Vercel entrypoint, which imports app.main.
+      - "api/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "pytest.ini"
+      - ".github/workflows/tests.yml"
+
+# A push that supersedes an earlier one on the same branch cancels its run. The
+# older commit's verdict is not one anybody acts on, and the suite is the bulk of
+# this repository's CI minutes — a superseded run has been left to spend twenty
+# of them. `develop` is exempt: every commit on it is merged history, and its
+# result is what the next branch is cut from.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/develop' }}
 
 jobs:
   test:
@@ -20,5 +62,11 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
+      # `-n auto` is one worker per core the runner has (4 on ubuntu-latest).
+      # `--dist loadfile` keeps a file's tests on one worker, so module-scoped
+      # fixtures — of which this suite has many, each building a formal system —
+      # are still built once rather than once per worker. Dropped `-v`: 2,000
+      # lines of PASSED are not what anyone opens a failed run to read, and
+      # xdist interleaves them across workers anyway.
       - name: Run tests
-        run: uv run pytest -v
+        run: uv run pytest -n auto --dist loadfile

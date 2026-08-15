@@ -1,16 +1,16 @@
+from copy import copy
+
 import pytest
 
 pytest.importorskip("regex")
 
 from website.logical.matching import (
-    Condition,
+    AtomPattern,
     Context,
-    MatchSet,
     RegexPattern,
     StringPattern,
     UnionPattern,
-    constant,
-    parse_path,
+    patterns as patterns_module,
 )
 
 
@@ -22,131 +22,6 @@ def context():
 @pytest.fixture
 def word():
     return RegexPattern(name="word", pattern="^[a-z]+$")
-
-
-# ---------------------------------------------------------------------------
-# parse_path
-# ---------------------------------------------------------------------------
-
-
-def test_parse_path_without_dots():
-    assert parse_path("simple") == ("simple", None)
-
-
-def test_parse_path_splits_on_first_dot():
-    assert parse_path("a.b.c") == ("a", "b.c")
-
-
-def test_parse_path_ignores_dots_inside_brackets():
-    assert parse_path("fn(a.b).c") == ("fn(a.b)", "c")
-    assert parse_path("fn(a.b)") == ("fn(a.b)", None)
-
-
-# ---------------------------------------------------------------------------
-# constant
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "s,expected",
-    [
-        ("True", True),
-        ("False", False),
-        ("set()", set()),
-        ("tuple()", tuple()),
-        ("list()", []),
-        ("[]", []),
-        ("dict()", {}),
-        ("{}", {}),
-        ("42", 42),
-        ("3.5", 3.5),
-        ("'hi'", "hi"),
-        ('"hi"', "hi"),
-    ],
-)
-def test_constant_values(s, expected):
-    assert constant(s) == expected
-
-
-def test_constant_match_set():
-    result = constant("MatchSet()")
-    assert isinstance(result, MatchSet)
-    assert len(result) == 0
-
-
-def test_constant_returns_none_for_non_constants():
-    assert constant("unquoted") is None
-    assert constant("None") is None
-
-
-# ---------------------------------------------------------------------------
-# Condition parsing
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "string,expected_type",
-    [
-        ("a and b", "and"),
-        ("a or b", "or"),
-        ("not a", "not"),
-        ("x in y", "in"),
-        ("x not in y", "not in"),
-        ("a is b", "is"),
-        ("a is not b", "is not"),
-        ("x == y", "equals"),
-        ("(a and b)", "brackets"),
-        ("plain", "atomic"),
-    ],
-)
-def test_condition_types(string, expected_type):
-    assert Condition(string=string).type == expected_type
-
-
-def test_condition_sub_items_for_in():
-    condition = Condition(string="x in y")
-    assert condition.sub_items == ["x", "y"]
-
-
-def test_condition_sub_items_for_equals():
-    condition = Condition(string="x == y")
-    assert condition.sub_items == ("x", "y")
-
-
-def test_condition_atomic_flags():
-    assert Condition(string="x in y").is_atomic() is True
-    assert Condition(string="plain").is_atomic() is True
-    assert Condition(string="a and b").is_atomic() is False
-
-
-def test_condition_mismatched_parentheses_raise():
-    with pytest.raises(Exception, match="mismatched parentheses"):
-        Condition(string="(a and b")
-
-    with pytest.raises(Exception, match="mismatched parentheses"):
-        Condition(string="a) and b")
-
-
-def test_condition_conjunctive_parts():
-    condition = Condition(string="a and b and c")
-    assert sorted(part.string for part in condition.conjunctive_parts()) == [
-        "a",
-        "b",
-        "c",
-    ]
-
-
-def test_condition_single_conjunctive_part():
-    condition = Condition(string="a or b")
-    assert condition.conjunctive_parts() == {condition}
-
-
-def test_condition_equivalent_compares_strings():
-    context = Context()
-    assert Condition(string="a in b").equivalent(Condition(string="a in b"), context)
-    assert not Condition(string="a in b").equivalent(
-        Condition(string="a in c"), context
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -185,13 +60,38 @@ def test_string_pattern_no_match(word, context):
     assert pattern.match("while hello:", context) is None
 
 
-def test_string_pattern_pre_format(context):
-    pattern = StringPattern(name="arrow", pattern="x -> y", pre_format={"->": "→"})
-    assert pattern.pre_format_apply("a -> b") == "a → b"
+def test_long_strings_match_without_a_length_limit(context):
+    # The retired `pre_format` hook ran every candidate string through a rewriter
+    # that raised above 1000 characters. Since the engine always passed it an
+    # empty (but non-None) dictionary, that limit applied to *every* match, so a
+    # long-but-legitimate formula was rejected with an incomprehensible error.
+    # Matching must have no length ceiling.
+    long_word = "a" * 5000
+    word = RegexPattern(name="word", pattern="^[a-z]+$")
+    assert word.match(long_word, context) is not None
 
-    match = pattern.match("x → y", context)
-    assert match is not None
-    assert match.string == "x → y"
+    pattern = StringPattern(name="wrap", pattern="(s)", variables={"s": word})
+    assert pattern.match(f"({long_word})", context) is not None
+
+    union = UnionPattern(name="either", patterns=[word])
+    assert union.match(long_word, context) is not None
+
+
+# ---------------------------------------------------------------------------
+# The `field` accessor (the sole surviving use of the retired interpreter)
+# ---------------------------------------------------------------------------
+
+
+def test_field_projects_declared_sub_match(word, context):
+    pattern = StringPattern(name="if_pattern", pattern="if s:", variables={"s": word})
+    match = pattern.match("if hello:", context)
+    assert match.field("s").string == "hello"
+
+
+def test_field_raises_for_unknown_field(word, context):
+    match = word.match("hello", context)
+    with pytest.raises(KeyError):
+        match.field("nope")
 
 
 # ---------------------------------------------------------------------------
@@ -220,73 +120,109 @@ def test_union_pattern_no_match(word, context):
 
 
 # ---------------------------------------------------------------------------
-# Match equivalence
+# Leading-character index over a union's leaves
 # ---------------------------------------------------------------------------
 
 
-def test_match_equivalent_same_string(word, context):
-    assert word.match("same", context).equivalent(word.match("same", context), context)
+def _arith_union():
+    # A grammar in the shape a large import produces: a handful of compound
+    # productions, and many nullary constants (set.mm has ~1,200 of them).
+    plus = StringPattern(name="plus", pattern="( a + b )")
+    times = StringPattern(name="times", pattern="( a * b )")
+    constants = [AtomPattern(name=f"c{n}", value=str(n)) for n in range(50)]
+    union = UnionPattern(name="expr", patterns=[plus, times, *constants])
+    for compound in (plus, times):
+        compound.add_variables({"a": union, "b": union})
+    return union, plus, constants
 
 
-def test_match_equivalent_different_string(word, context):
-    assert not word.match("same", context).equivalent(
-        word.match("diff", context), context
-    )
+def test_the_leaf_index_excludes_by_opening_character(context):
+    union, plus, constants = _arith_union()
+    _, leaves, _ = union.match_options(context)
+
+    # A string opening `(` cannot be any of the 50 constants.
+    opening_bracket = union.leaf_candidates("( 1 + 2 )", context, leaves)
+    assert plus in opening_bracket
+    assert not any(constant in opening_bracket for constant in constants)
+
+    # A string opening `4` can only be the constants starting with that digit,
+    # and never a compound whose template opens with `(`.
+    digit = union.leaf_candidates("4", context, leaves)
+    assert plus not in digit
+    assert all(leaf.value.startswith("4") for leaf in digit)
 
 
-def test_match_equivalent_different_pattern(word, context):
-    other = RegexPattern(name="other", pattern="^[a-z]+$")
-    assert not word.match("same", context).equivalent(
-        other.match("same", context), context
-    )
+def test_the_leaf_index_does_not_change_what_parses(context):
+    union, _, _ = _arith_union()
+
+    for text in ("( 1 + 2 )", "( ( 1 + 2 ) * 3 )", "7", "( 4 * ( 5 + 6 ) )"):
+        assert union.match(text, context) is not None, text
+
+    for text in ("( 1 + )", "99", "1 + 2", "( 1 ? 2 )"):
+        assert union.match(text, context) is None, text
 
 
-def test_match_contains_submatch(word, context):
-    pattern = StringPattern(name="if_pattern", pattern="if s:", variables={"s": word})
-    match = pattern.match("if hello:", context)
+def test_a_leaf_opening_with_a_variable_is_always_a_candidate(context):
+    # `a = b` can begin with anything its left operand can, so no opening
+    # character may rule it out.
+    union, _, constants = _arith_union()
+    equals = StringPattern(name="equals", pattern="a = b")
+    union.add_pattern(equals)
+    equals.add_variables({"a": union, "b": union})
 
-    assert match.contains(word.match("hello", context), context)
-    assert not match.contains(word.match("zzz", context), context)
+    _, leaves, _ = union.match_options(context)
+    for character in "(4x":
+        assert equals in union.leaf_candidates(character + "...", context, leaves)
 
-
-# ---------------------------------------------------------------------------
-# MatchSet
-# ---------------------------------------------------------------------------
-
-
-def test_match_set_starts_empty_and_complete():
-    match_set = MatchSet()
-    assert len(match_set) == 0
-    assert match_set.complete is True
+    assert union.match("1 = 2", context) is not None
 
 
-def test_match_set_add_and_contains(word, context):
-    match_set = MatchSet()
-    match_set.add(word.match("aaa", context), context)
-    match_set.add(word.match("bbb", context), context)
+def test_the_leaf_index_stands_down_when_it_cannot_reason(context):
+    # Two cases where a leaf can match a string its template does not predict, so
+    # the index must offer every leaf rather than filter on the first character.
+    union, _, _ = _arith_union()
+    _, leaves, _ = union.match_options(context)
 
-    assert len(match_set) == 2
-    assert match_set.contains(word.match("aaa", context), context)
-    assert not match_set.contains(word.match("zzz", context), context)
+    # A bare string variable is matched by any leaf, whatever it opens with.
+    variable_context = copy(context)
+    variable_context.string_variables = {"n": union}
+    assert union.leaf_candidates("n", variable_context, leaves) is leaves
 
-
-def test_match_set_remove(word, context):
-    match_set = MatchSet()
-    match_set.add(word.match("aaa", context), context)
-    match_set.remove(word.match("aaa", context), context)
-
-    assert len(match_set) == 0
-    assert not match_set.contains(word.match("aaa", context), context)
+    # With definitions in scope a leaf can match through an unfold.
+    definition_context = copy(context)
+    definition_context.definitions = {object()}
+    assert union.leaf_candidates("( 1 + 2 )", definition_context, leaves) is leaves
 
 
-def test_match_set_union(word, context):
-    first = MatchSet()
-    first.add(word.match("aaa", context), context)
+def test_a_member_reshaped_after_it_joined_is_still_offered(context):
+    # The index reads a member's *leading literal*, and giving a template its
+    # slots rewrites that: `a = b` opens with the literal `a = b` until `a` is a
+    # variable, after which it opens with anything. A union parsed against in
+    # between must not keep the earlier reading, or the production silently stops
+    # being tried for every string it now reads.
+    union, _, _ = _arith_union()
 
-    second = MatchSet()
-    second.add(word.match("bbb", context), context)
+    equals = StringPattern(name="equals", pattern="a = b")
+    union.add_pattern(equals)
 
-    combined = first.union(second, context)
-    assert len(combined) == 2
-    assert combined.contains(word.match("aaa", context), context)
-    assert combined.contains(word.match("bbb", context), context)
+    # A parse here is what fills the flattening and the leading-character index.
+    assert union.match("7", context) is not None
+
+    equals.add_variables({"a": union, "b": union})
+
+    assert union.match("1 = 2", context) is not None
+
+
+def test_reshaping_a_template_outside_any_union_costs_no_invalidation(context):
+    # The other half of the contract: a rule schema builds a template and parses
+    # with it straight away, so invalidating on every `add_variables` would
+    # re-flatten the whole grammar once per schema.
+    union, _, _ = _arith_union()
+    assert union.match("7", context) is not None
+
+    before = patterns_module._union_revision
+
+    schema = StringPattern(name="schema", pattern="( a + b )")
+    schema.add_variables({"a": union, "b": union})
+
+    assert patterns_module._union_revision == before

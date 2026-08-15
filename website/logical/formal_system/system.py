@@ -1,9 +1,35 @@
 """The top-level :class:`FormalSystem`."""
 
-from copy import copy
+from __future__ import annotations
 
-from ..matching import Context, Match, Pattern, StringPattern, UnionPattern
-from .proof import Proof
+from copy import copy
+from typing import TYPE_CHECKING
+
+from ..kernel.definitions import Definition as KernelDefinition
+from ..kernel.constructors import constructor_for
+from ..kernel.terms import from_match
+from ..matching import Context, Match, Pattern
+from .promotion import PromotedTheorem
+from .proof import CITATION_SEPARATOR, Proof, ProofLine
+from .proposals import ProposalError, grammar_index
+
+if TYPE_CHECKING:
+    from ..kernel.constructors import Constructor
+    from collections.abc import Callable
+
+    from ..declarative import _SchemaScan
+    from ..kernel.terms import Term
+    from .definitions import ParsedForms
+    from .rules import InferenceRule
+
+
+def _line_field(match: Match, field: str) -> Match:
+    # Project a LineType's declared formula/reference field off a line match.
+    # The reserved value "self" denotes the whole match (an axiom asserting its
+    # entire formula); any other value names a matched sub-field to read.
+    if field == "self":
+        return match
+    return match.field(field)
 
 
 class FormalSystem:
@@ -20,271 +46,466 @@ class FormalSystem:
         # A list of valid inference rules for the system
         self.inference_rules = inference_rules if inference_rules is not None else []
 
-        # The build context from compiler
+        # `inference_rules` keyed by label, for `rule_by_label`. A list is the
+        # public shape - order is declaration order and callers render it - but a
+        # citation resolves by label, and an imported system's primitives are not
+        # a handful: set.mm contributes 1,559 logical `$a`, against ~4M citations
+        # across the corpus. See `_rules_by_label` for what keeps the two in step.
+        self._rule_index: dict[str, InferenceRule] = {}
+        self._rule_index_stamp: tuple[int, int] = (0, -1)
+
+        # The system's definitional axioms (kernel Definitions). A proof cites
+        # one by label, or lets the generic keyword search them all. Held here
+        # rather than in the proof context because they are fixed once the system
+        # is built - the context carries only the *notations* that let a defined
+        # form parse (see matching.DefinedNotation).
+        self.definitions: list[KernelDefinition] = []
+
+        # Proved/imported theorems registered for schematic reuse, keyed by label.
+        # Kept out of `inference_rules` so the system's *primitive* rules stay
+        # distinguishable from its (potentially very many) derived theorems; the
+        # reference resolver builds an ephemeral rule per citation. See promotion.
+        self.promoted_theorems: dict[str, PromotedTheorem] = {}
+
+        # The context the system was assembled in (see build_context)
         self.build_context = build_context
 
-        # A pattern dictionary of all the patterns used in build context
-        self.pattern_dictionary = {}
+        # Per declared definition, in spec order, whether it layered: i.e. its
+        # defining form was recognised given the definitions before it. The
+        # declarative builder sets this; it stays empty for systems built another
+        # way. Keyed by position (not by notation) so callers can tell two
+        # distinct definitions apart even when they share a defined form.
+        self.definition_layering: list[bool] = []
+
+        # Per declared definition that registered one, keyed by the same spec
+        # position `definition_layering` uses: everything the build derived from
+        # text — the two forms as parsed and abstracted, *before* any binder was
+        # placed, and the leaf each declared binder's name denotes. Build output,
+        # not part of the system — nothing here reads it. It exists so a
+        # persistence layer can store what this build derived and hand it back to
+        # the next one (see app/db/definition_terms.py).
+        #
+        # Pre-binding is the only cut that round-trips. `bind_scoped` places one
+        # binder per *ground leaf* sitting in a binder slot, so a form that has
+        # already been through it offers nothing to bind and would come back with
+        # no binders at all — a definition silently stripped of its freshness
+        # provisos. The stored term therefore stops where the parse does.
+        self.definition_forms: dict[int, ParsedForms] = {}
+
+
+        # What the system's primitive statements are stated over, on demand —
+        # what a definition's freshness check reads (see
+        # declarative._require_a_fresh_defined_form). Held as a callable because
+        # producing it means re-parsing every schema, so a system with no
+        # definitions never pays for it. The declarative builder sets this; it
+        # stays None for systems built another way, which is also what a
+        # definition registered against one is refused on.
+        self.primitive_schemas: Callable[[], _SchemaScan] | None = None
 
         # Default proof context
         self.context = Context(
             logical=context if context is not None else {}
         )
 
-    def build_pattern_dictionary(self):
-        # Build the pattern dictionary using items included in the build context
+    def parse(
+        self, text: str, proof: Proof | None = None, context: Context | None = None
+    ) -> Proof:
+        # Parse the text into a proof. To let the proof cite lemmas from other
+        # proofs, build the `Proof` yourself, seed its `reference_context` with
+        # them, and pass it as `proof` (see app/routers/proofs.py).
+        #
+        # Two steps, deliberately separable: read each line's *content* off the
+        # grammar, then check the proof those lines make. Only the first step
+        # needs the text — everything it produces (line type, formula term,
+        # formula string, citation string) is also what a stored proof line
+        # carries, so a caller that has those rows can populate the lines itself
+        # and call `check_proof` directly, with no parse at all. See
+        # docs/verification-from-rows.md.
+        proof, context = self.read_proof(text, proof, context)
+        return self.check_proof(proof, context)
 
-        if self.build_context is None:
-            return
+    def read_proof(
+        self, text: str, proof: Proof | None = None, context: Context | None = None
+    ) -> tuple[Proof, Context]:
+        """Read every line's content off the grammar, and stop there.
 
-        def add_pattern(dct, pattern):
-            # Add a pattern to the dictionary
-
-            if pattern.url_id in dct:
-                return
-
-            # Add the pattern to the dictionary
-            dct[pattern.url_id] = pattern
-
-            # Look for subpatterns
-            if isinstance(pattern, StringPattern):
-                for sub_pattern in pattern.variables.values():
-                    add_pattern(dct, sub_pattern)
-
-            elif isinstance(pattern, UnionPattern):
-                for sub_pattern in pattern.patterns:
-                    add_pattern(dct, sub_pattern)
-
-        # Look in the build dictionary variables for patterns
-        for item in self.build_context.variables.values():
-            if not isinstance(item, Pattern):
-                continue
-
-            # Add the pattern
-            add_pattern(self.pattern_dictionary, item)
-
-    def get_references(self, text):
-        # Get references to external proofs from the given code.
-
-        # Create a default context
-        context = copy(self.context)
-
-        # Track the reference slugs
-        references = set()
-
-        # Get the import line types
-        import_line_types = [line_type for line_type in self.line_types if line_type.behaviour == "import"]
-
-        lines = text.split("\n")
-        for line in lines:
-
-            # Check the line is an import line type
-            for line_type in import_line_types:
-
-                result = line_type.parse_line(line, context)
-
-                if result is None:
-                    continue
-
-                # Get the path
-                try:
-                    path = result.get_by_path("path()", context)
-
-                except Exception:
-                    # No valid path here
-                    continue
-
-                references.add(path)
-                break
-
-        return references
-
-    def parse(self, text, proof=None, proof_model_id=None, reference_proofs=None, context=None, line_number_offset=0):
-        # Parse the text into a proof.
-
-        lines = text.split("\n")
-
+        `parse` minus the check. Separate because a caller may need to look at
+        what the lines *say* before checking them — notably at the theorems they
+        cite, so a system with an unbounded library can resolve exactly those and
+        no more (see app/db/promoted_theorems_mapping.py). The context is returned
+        because the check must run in the same one the read used.
+        """
         if proof is None:
-            # Create a new proof instance
             proof = Proof(formal_system=self)
-            proof.reference_proofs = reference_proofs
 
         if context is None:
-            # Create a new proof context instance
             context = copy(self.context)
-            context.proof_model_id = proof_model_id
 
-        i = -1
-        while i + 1 < len(lines):
+        for raw in text.split("\n"):
+            proof_line = proof.add_proof_line(raw.rstrip(), context)
+            if not proof_line.empty:
+                self.read_line(proof_line, context)
 
-            # Increment at the start so we can use 'continue' without concern
-            i += 1
+        return proof, context
 
-            line = lines[i].rstrip()
+    def constructor_named(
+        self, name: str, context: Context, grammar: dict[str, Pattern] | None = None
+    ) -> Constructor:
+        """The production or defined notation ``name`` denotes.
 
-            # Create a proof line for this line
-            proof_line = proof.add_proof_line(line, context)
+        The same three-step lookup a *stored* term's constructor takes
+        (`TermGraph._constructor`), and for the same reason: a grammar name is
+        unique within a system, but `context.variables` is shared with lines,
+        line parts and axioms, so the sort unions are the authority and the
+        namespace is only the fallback for a top-level sort, which is nobody's
+        member.
 
-            # Assume valid unless we find an issue
-            proof_line.valid = True
+        ``grammar`` is :func:`~.proposals.grammar_index` of the same context,
+        passed in by a caller resolving several names — building it is
+        O(grammar), and a proposal has a name per node.
+        """
+        index = grammar_index(context) if grammar is None else grammar
+        pattern = index.get(name)
+        if pattern is None:
+            pattern = next(
+                (n.template for n in context.definitions if n.template.name == name),
+                None,
+            )
+        if pattern is None:
+            found = context.variables.get(name)
+            pattern = found if isinstance(found, Pattern) else None
+        if pattern is None:
+            raise ProposalError(
+                f"This system has no production or defined notation named {name!r}."
+            )
+        return constructor_for(pattern)
 
+    def restate(
+        self, text: str, formula: str, context: Context | None = None
+    ) -> str | None:
+        """``text`` with its formula replaced by ``formula``, or None.
+
+        :meth:`recite`'s twin for the other declared field, and self-checking for
+        the same reason: a `Match` records no positions, so the substitution is
+        textual, and making the result *read back* as the formula asked for is
+        what turns a fragile splice into a safe one.
+
+        Together the two compose a new line out of an existing one — same line
+        type, same indentation, same shape — which is how a line gets *added*
+        without this having to reconstruct a line type's syntax from its pattern.
+
+        The formula is replaced at its **first** occurrence, where a formula sits
+        in every shape anyone writes; the read-back refuses anything else.
+        """
+        if context is None:
+            context = copy(self.context)
+
+        current = self._formula_of(text, context)
+        if current is None or current not in text:
+            return None
+        at = text.index(current)
+        spliced = f"{text[:at]}{formula}{text[at + len(current):]}"
+        if self._formula_of(spliced, context) != formula:
+            return None
+        return spliced
+
+    def renumber(
+        self,
+        lines: list[str],
+        at: int,
+        context: Context | None = None,
+        by: int = 1,
+    ) -> list[str] | None:
+        """``lines`` with every cited line number ``>= at`` shifted by ``by``.
+
+        What editing the *shape* of a proof costs. Citation numbers are
+        positional, so adding or removing a line moves everything below it and
+        every citation that named one of those lines now names the wrong one —
+        silently, because the old number still resolves.
+
+        ``by`` is ``+1`` for an insertion at ``at`` and ``-1`` for the removal of
+        the line *above* ``at``. Removing is the caller's harder case, not this
+        one's: a citation naming the removed line has nothing to shift *to*, and
+        deciding what that means is the caller's (`/lines` refuses it).
+
+        Only bare integers shift. A rule's label, the definitional keyword, the
+        hole keyword and a dotted lemma reference (`[MP, A.2]`, whose `2` is a
+        line of *another* proof) are left exactly as they are.
+
+        None if any line cannot be rewritten, which — since :meth:`recite` is
+        self-checking — means the whole renumbering is refused rather than
+        applied in part. A proof half-renumbered is worse than one not touched.
+        """
+        if context is None:
+            context = copy(self.context)
+
+        shifted: list[str] = []
+        for text in lines:
+            reference = self._reference_of(text, context)
+            if reference is None:
+                # No citation to move: a blank, a comment, or a line type that
+                # declares no reference field.
+                shifted.append(text)
+                continue
+            parts = [
+                str(int(part) + by)
+                if part.isdigit() and int(part) >= at
+                else part
+                for part in reference.split(CITATION_SEPARATOR)
+            ]
+            citation = CITATION_SEPARATOR.join(parts)
+            if citation == reference:
+                shifted.append(text)
+                continue
+            rewritten = self.recite(text, citation, context)
+            if rewritten is None:
+                return None
+            shifted.append(rewritten)
+        return shifted
+
+    def _formula_of(self, text: str, context: Context) -> str | None:
+        # The formula a line carries, read through this grammar — the same reading
+        # the checker will do, for the reason `_reference_of` gives.
+        scratch = ProofLine(proof=Proof(formal_system=self), text=text, context=context)
+        self.read_line(scratch, context)
+        return scratch.formula_string
+
+    def recite(self, text: str, citation: str, context: Context | None = None) -> str | None:
+        """``text`` with its citation replaced by ``citation``, or None.
+
+        None when the line does not parse, declares no reference field, carries no
+        citation to replace, or — the case worth having — when the result does not
+        *read back* as the citation asked for. The substitution is textual, because
+        a `Match` records no positions; making it self-checking is what turns that
+        from a fragile splice into a safe one. A line whose formula happens to
+        contain its own citation text is refused rather than mangled.
+
+        The reference is replaced at its **last** occurrence, which is where a
+        citation sits in every shape anyone writes (`<formula> [<reference>]`).
+        A grammar that puts it first still works or is refused; it cannot silently
+        edit the wrong span, because the read-back would not match.
+        """
+        if context is None:
+            context = copy(self.context)
+
+        current = self._reference_of(text, context)
+        if current is None or current not in text:
+            return None
+        at = text.rindex(current)
+        spliced = f"{text[:at]}{citation}{text[at + len(current):]}"
+        if self._reference_of(spliced, context) != citation:
+            return None
+        return spliced
+
+    def _reference_of(self, text: str, context: Context) -> str | None:
+        # The citation a line carries, read through this grammar. A scratch
+        # `ProofLine` rather than a bespoke parse, so it is the same reading the
+        # checker will do — a citation this cannot see is one no check would use.
+        scratch = ProofLine(proof=Proof(formal_system=self), text=text, context=context)
+        self.read_line(scratch, context)
+        return scratch.reference_string
+
+    def read_line(self, proof_line: ProofLine, context: Context) -> None:
+        """Populate one line's content from its text, against this grammar.
+
+        Sets exactly what a check needs and nothing derived: the matched line
+        type, the formula as a kernel term (and its flat string, for the
+        string-rewriting rule path), and the citation string. Numbering, scope
+        and justification are `check_proof`'s, because they depend on the other
+        lines and this does not.
+        """
+        # Assume valid unless we find an issue
+        proof_line.valid = True
+
+        line = proof_line.text.rstrip()
+
+        # Check the line is of a given line type
+        for line_type in self.line_types:
+
+            line = line.lstrip()
+            result = line_type.parse_line(line, context)
+
+            if result is None:
+                continue
+
+            # Record the line_type of this line
+            proof_line.line_type = line_type
+
+            # Project the line type's declared formula/reference fields off
+            # the match. (`label`, `display` and axiom-marking are handled by
+            # ProofLine's defaults and the `behaviour: axiom` line type - not
+            # by string `get_by_path` accessors, which could no longer be
+            # defined since the accessor-function syntax was removed.)
+            if line_type.formula_field is not None:
+                # The logical formula is the sub-field the line type declares
+                # (or the whole match, for `formula: self`). Project it into a
+                # kernel term *here*, while the match is still in hand: the
+                # term is what every later check runs on, and the match itself
+                # does not outlive this loop body.
+                try:
+                    formula = _line_field(result, line_type.formula_field)
+                except KeyError:
+                    # The line type names a field this line has no sub-match
+                    # for: the line simply carries no formula.
+                    formula = None
+
+                if formula is not None:
+                    proof_line.formula_string = formula.string
+                    try:
+                        proof_line.formula_term = from_match(formula)
+                    except Exception as exc:
+                        # The parse produced a shape the term layer cannot
+                        # read. That used to surface as a raise out of the
+                        # whole parse, from whichever rule check projected it
+                        # first; failing the one line names where the problem
+                        # is and lets the rest of the proof still report.
+                        proof_line.valid = False
+                        proof_line.invalid_message = f"Could not read the formula on this line: {exc}"
+
+            if line_type.reference_field is not None:
+                # The citation reference is the declared sub-field.
+                try:
+                    reference_match = _line_field(result, line_type.reference_field)
+                except KeyError:
+                    reference_match = None
+
+                if reference_match is not None:
+                    proof_line.reference_string = reference_match.string
+                    proof_line.reference_string_display = reference_match.string
+
+            # No need to check other line types
+            break
+
+    def check_proof(self, proof: Proof, context: Context | None = None) -> Proof:
+        """Check a proof whose lines are already populated, and return it.
+
+        The half of `parse` that is not parsing: number each line, place it in
+        its subproof, justify it, then read the proof's verdict off the lines.
+        Public because a proof loaded from its stored rows arrives here with the
+        same fields `read_line` would have set, and needs no text.
+
+        The three steps stay interleaved **per line**, exactly as parsing does
+        them. That ordering is load-bearing: a discharge cites its subproof by
+        the opener's line number, and what stops it reaching a subproof *below*
+        it is that later lines are not numbered or scoped yet when it runs.
+        """
+        if context is None:
+            context = copy(self.context)
+
+        for proof_line in proof.proof_lines:
             if proof_line.empty:
                 # Ignore blank lines
                 continue
 
-            found = False
-            # Check the line is of a given line type
-            for line_type in self.line_types:
-
-                line = line.lstrip()
-                result = line_type.parse_line(line, context)
-
-                if result is None:
-                    continue
-
-                # Otherwise meets this line type
-                found = True
-
-                # Record the line_type of this line
-                proof_line.line_type = line_type
-                proof_line.match = result
-
-                # Check for main line type attributes
-                # Try to get the formula, reference, label, display, is_axiom
-                try:
-                    # Add formula to the proof line
-                    proof_line.formula = result.get_by_path("formula()", context)
-
-                    # It has to be a match
-                    if type(proof_line.formula) is not Match:
-                        proof_line.formula = None
-
-                except Exception:
-                    pass
-
-                try:
-                    reference_match = result.get_by_path("reference()", context)
-
-                    proof_line.reference_string = reference_match.formatted_string()
-                    proof_line.reference_string_display = reference_match.string
-
-                except Exception:
-                    pass
-
-                try:
-                    label = result.get_by_path("label()", context)
-                    proof_line.label = label
-
-                except Exception:
-                    pass
-
-                # Check if the line type has a 'display' value
-                try:
-                    proof_line.display = result.get_by_path("display()", context)
-                except Exception:
-                    # No valid display path
-                    pass
-
-                try:
-                    # Check if there is a valid axiom
-                    result.get_by_path("axiom()", context)
-                    proof_line.is_axiom = True
-                except Exception:
-                    # Not an axiom
-                    pass
-
-                # No need to check other line types
-                break
-
-            if not found:
-                # The line doesn't match any of the line types. Invalid proof
-                proof_line.invalid_message = "Could not parse line."
-                proof_line.valid = False
+            # Give the line its citation number. Done here, after the line type
+            # is known, because whether a line can be cited depends on it.
+            proof.assign_line_number(proof_line)
 
             # Place the line in its subproof (a no-op for systems that declare
             # no scope openers - every line then lands in the root scope).
             proof.assign_scope(proof_line)
 
-            if found:
-                # Follow indent/non-indent line rules
-
-                if not proof_line.line_type.behaviour == "indent":
-                    # Check for data to add to context
-                    try:
-                        proof_line.edit_context(context)
-
-                    except Exception as e:
-                        # Error in editing context
-                        proof_line.valid = False
-                        proof_line.invalid_message = str(e)
-
-                else:
-                    # This is an indent line.
-                    # Parse the block with a copied context
-
-                    new_context = copy(context)
-
-                    # Edit context
-                    proof_line.edit_context(new_context)
-
-                    # Find the next line with this indent
-                    j = i + 1
-                    while j < len(lines):
-                        block_line = lines[j]
-
-                        if len(block_line) - len(block_line.lstrip()) <= proof_line.indent and \
-                                len(block_line.lstrip()) > 0:
-                            # This is the out-denting line
-                            break
-
-                        j += 1
-
-                    # Compile the block
-                    block = "\n".join(lines[i + 1:j])
-
-                    self.parse(
-                        text=block,
-                        proof=proof,
-                        context=new_context,
-                        line_number_offset=i + 1
-                    )
-
-                    # Update context with definitions created in the block
-                    context.definitions = new_context.definitions
-
-                    # Continue from after the block
-                    i = j - 1
-                    continue
-
+            if proof_line.line_type is None:
+                # The line matched no line type, so it asserts nothing and
+                # cannot stand. Decided here rather than where the match failed,
+                # because it is equally true of a line *loaded* from a row that
+                # records no line type — and a line that arrives with no verdict
+                # must not keep `ProofLine`'s optimistic default.
+                proof_line.valid = False
+                if proof_line.invalid_message is None:
+                    proof_line.invalid_message = "Could not parse line."
+                # The most common authoring error of all, so it must carry a code
+                # too — a caller branching on `failure` should not have to fall
+                # back to reading `invalid_message` for the ordinary case.
+                proof_line.fail("unparsed-line")
+            elif (
+                proof_line.line_type.formula_field is not None
+                and proof_line.formula_term is None
+            ):
+                # The line type declares a formula and none projected. Two of the
+                # three behaviours never look: an axiom line asserts its formula
+                # by fiat and a scope opener is granted by fiat, so both would
+                # accept a line stating nothing. `check_logical_line` would catch
+                # it for an ordinary logical line, but not before the other two
+                # had already been let through.
+                #
+                # Stated structurally, and here, so it holds for a line rebuilt
+                # from a row as well as one just parsed — a row records the line
+                # type and a null term, and nothing in it says the projection was
+                # what failed.
+                proof_line.valid = False
+                if proof_line.invalid_message is None:
+                    proof_line.invalid_message = "No formula could be read on this line."
+                proof_line.fail("no-formula")
+            else:
                 # Execute the proof line
                 proof_line.execute(context)
 
-        if line_number_offset == 0:
-            # Check if the proof is valid or has warnings
+        # Check if the proof is valid or has warnings
 
-            proof.valid = True
-            proof.has_warnings = False
+        proof.valid = True
+        proof.has_warnings = False
 
-            for line in proof.proof_lines:
-                if not line.valid:
-                    proof.valid = False
-                    break
+        for line in proof.proof_lines:
+            if not line.valid:
+                proof.valid = False
+                break
 
-            for line in proof.proof_lines:
-                if line.warning_message is not None:
-                    proof.has_warnings = True
-                    break
+        for line in proof.proof_lines:
+            if line.warning_message is not None:
+                proof.has_warnings = True
+                break
 
         return proof
 
-    def add_inference_rule(self, rule):
-        # Add an inference rule
+    def add_definition(self, definition: KernelDefinition) -> None:
+        # Register a definitional axiom. Labels are checked for uniqueness by the
+        # builder, so a citation resolves to exactly one.
+        self.definitions.append(definition)
 
-        # Remove existing inference rules with the same label
-        self.inference_rules = [ir for ir in self.inference_rules if not ir.label == rule.label]
+    def add_inference_rule(self, rule: InferenceRule) -> None:
+        # Add an inference rule, replacing any existing one with the same label.
+        #
+        # The scan is skipped unless the label is actually taken: an import adds
+        # its axioms one by one and none of them collides, so rebuilding the list
+        # every time made registering `n` rules quadratic in `n`.
+        if self._rules_by_label().get(rule.label) is not None:
+            self.inference_rules = [
+                ir for ir in self.inference_rules if not ir.label == rule.label
+            ]
 
-        # Add the new rule
         self.inference_rules.append(rule)
+        self._rule_index[rule.label] = rule
+        self._rule_index_stamp = (id(self.inference_rules), len(self.inference_rules))
+
+    def rule_by_label(self, label: str) -> InferenceRule | None:
+        """The primitive inference rule labelled ``label``, or None."""
+        return self._rules_by_label().get(label)
+
+    def _rules_by_label(self) -> dict[str, InferenceRule]:
+        # `inference_rules` is a public list, so the index has to notice when one
+        # is changed behind it. The stamp is the list's identity *and* its length:
+        # identity catches a caller assigning a whole new list (including the one
+        # `__init__` may be handed, and the one `add_inference_rule` builds to drop
+        # a replaced label - both of which can keep the length), length catches an
+        # append. The scan this replaced read the list every time and so could not
+        # go stale at all; that is what is being traded for an O(1) lookup, and the
+        # one mutation still outside it is assigning *into* the list
+        # (`rules[i] = other`), which no caller does and `add_inference_rule` is
+        # the supported way to do.
+        stamp = (id(self.inference_rules), len(self.inference_rules))
+        if self._rule_index_stamp != stamp:
+            self._rule_index = {ir.label: ir for ir in self.inference_rules}
+            self._rule_index_stamp = stamp
+        return self._rule_index
+
+    def promote(self, theorem: PromotedTheorem) -> None:
+        # Register a proved/imported theorem for schematic reuse under its label.
+        # Deliberately separate from `inference_rules`: a citation of this label
+        # resolves to an ephemeral rule built from the theorem (see
+        # Proof.get_reference), so no per-theorem rule is persisted among the
+        # system's primitives.
+        self.promoted_theorems[theorem.label] = theorem
 
     def add_line_type(self, line_type):
         # Add a line type
@@ -294,54 +515,6 @@ class FormalSystem:
 
         # Add the new line type
         self.line_types.append(line_type)
-
-    def equivalent(self, other, context, memo=None):
-        # Check if two formal systems are equivalent
-
-        if memo is None:
-            memo = {}
-
-        if (self, other) in memo:
-            return memo[(self, other)]
-
-        memo[(self, other)] = False
-
-        if not type(other) is FormalSystem:
-            return False
-
-        if not self.name == other.name:
-            return False
-
-        if not len(self.line_types) == len(other.line_types):
-            return False
-
-        if not len(self.inference_rules) == len(other.inference_rules):
-            return False
-
-        # Assume equivalent while checking recursively
-        memo[(self, other)] = True
-
-        for self_line, other_line in zip(self.line_types, other.line_types):
-            if not self_line.equivalent(other_line, context, memo):
-                memo[(self, other)] = False
-                return False
-
-        for self_rule, other_rule in zip(self.inference_rules, other.inference_rules):
-            if not self_rule.equivalent(other_rule, context, memo):
-                memo[(self, other)] = False
-                return False
-
-        if not self.context.equivalent(other.context, context, memo):
-            memo[(self, other)] = False
-            return False
-
-        # Otherwise ok
-        return True
-
-    def format_string(self, s):
-        # Format a string s
-        pattern = StringPattern(name="temporary", pattern="", pre_format=self.build_context.pre_format)
-        return pattern.pre_format_apply(s)
 
     def __str__(self):
         return self.name
