@@ -113,6 +113,23 @@ class ProofLineRow(Base):
     # from `reference` — a promoted theorem resolves to an ephemeral rule that
     # appears in no system's rule list.
     rule: Mapped[str | None] = mapped_column(String(256))
+    # *Which* library entry that label named, when it named one. `rule` is a
+    # label, and a label is only a citation — resolving it back to an entry means
+    # knowing the citing system's whole library order, which is a chain load for
+    # a question the checker already answered when it resolved the line. So the
+    # answer is recorded here, at the one moment it is known for certain.
+    #
+    # Null means the line was justified by something that is *not* a library
+    # entry — an inference rule the system declares, or a hypothesis of the
+    # theorem being proved — which is why `proofs.citations_stored` exists: on a
+    # row written before this column, null means "nobody looked" instead, and
+    # only the flag tells the two apart.
+    #
+    # SET NULL rather than CASCADE, as `definition_id` is: losing the entry must
+    # not delete the line that cited it.
+    theorem_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("promoted_theorems.id", ondelete="SET NULL"), index=True
+    )
     # The definition a definitional step applied, for the same reason: a generic
     # `[Def, n]` citation names no definition at all — the checker searches those
     # in scope — so which one was used is recoverable from nowhere else. SET NULL

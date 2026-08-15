@@ -431,6 +431,36 @@ class PendingLibrary:
     chain: LibraryChain = LibraryChain(())
 
     @property
+    def entry_ids(self) -> dict[str, uuid.UUID]:
+        """Which library entry each cited label resolved to.
+
+        The resolution itself, as a caller can record it: :func:`_nearest` has
+        already picked one entry per label, so this is what the citation *means*
+        in this proof's library — shadowing settled, edges followed — and not a
+        guess a later reader would have to reconstruct from the chain.
+
+        ``owner``'s hypotheses are deliberately absent, and they also *remove* a
+        label rather than merely failing to add one. They are promoted under
+        their own labels and are citable from this proof alone, but they are not
+        library entries and nothing rests on them: a proof cites its own
+        theorem's ``$e`` the way it cites a rule. And a hypothesis **wins** a
+        name clash with a cited theorem (:func:`read_library`), so where both
+        exist the line was justified by the hypothesis — recording the entry
+        there would invent a dependency the proof does not have, which is the
+        one thing this column must never do.
+        """
+        shadowed = (
+            {premise.label for premise in self.owner.premises}
+            if self.owner is not None
+            else set()
+        )
+        return {
+            entry.label: entry.id
+            for entry in self.cited
+            if entry.label not in shadowed
+        }
+
+    @property
     def term_ids(self) -> list[uuid.UUID]:
         """Every cached term worth loading — the roots this contributes to a sweep."""
         ids = [term_id for entry in self.fresh.values() for term_id in entry.term_ids]

@@ -91,7 +91,7 @@ from website.logical.rendering import total_projection
 from website.logical.metamath.importer import LibraryEntry
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence, Set as AbstractSet
 
     from app.db.systems import SymbolRow
     from website.logical.declarative import SystemSpec
@@ -332,6 +332,8 @@ def import_corpus(
                         descriptions,
                         layers.folder_for(layer, checked.label),
                         owner,
+                        library.ids,
+                        library.unstored,
                     )
             except Exception as exc:  # noqa: BLE001 - reported, not fatal
                 _record_failure(report, checked.label, str(exc))
@@ -917,19 +919,31 @@ class _Routed:
     ) -> None:
         self._libraries = list(libraries)
         self._of_label = of_label
-
-    @property
-    def ids(self) -> dict[str, uuid.UUID]:
-        """Every label stored, across every layer, as `_link_proofs_to_theorems`
-        wants it: a proof is linked to its theorem by id, and which layer either
-        sits in is not something that query needs to know."""
-        found: dict[str, uuid.UUID] = {}
-        for library in self._libraries:
-            found.update(library.ids)
-        return found
+        # Every label stored, across every layer, as `_link_proofs_to_theorems`
+        # wants it: a proof is linked to its theorem by id, and which layer either
+        # sits in is not something that query needs to know.
+        #
+        # Accumulated rather than merged on demand. It is read once per proof now
+        # (a proof records which entry each citation resolved to), and rebuilding
+        # the merge there made the walk quadratic in the corpus — ~17s of pure
+        # dict copying over set.mm's 44,000 assertions, for an answer that changes
+        # by one entry at a time. Each label routes to exactly one layer, so the
+        # two agree entry for entry.
+        self.ids: dict[str, uuid.UUID] = {}
+        # And the labels whose entry did *not* store. A proof citing one of these
+        # resolves to no row, so it must stay on the read path that reports the
+        # citation as unresolved rather than claim a resolution of none.
+        self.unstored: set[str] = set()
 
     def store(self, entry: LibraryEntry) -> None:
-        self._libraries[self._of_label(entry.spec.label)].store(entry)
+        label = entry.spec.label
+        library = self._libraries[self._of_label(label)]
+        library.store(entry)
+        stored = library.ids.get(label)
+        if stored is None:
+            self.unstored.add(label)
+        else:
+            self.ids[label] = stored
 
 
 def _effective_symbols(spine: Sequence[FormalSystem]) -> list[dict[str, SymbolRow]]:
@@ -1087,10 +1101,24 @@ def _store(
     descriptions: Mapping[str, Description],
     folder_id: uuid.UUID | None,
     owner: uuid.UUID | None,
+    entry_ids: Mapping[str, uuid.UUID],
+    unstored: AbstractSet[str],
 ) -> _Stored:
     engine_proof = checked.proof
     valid = bool(engine_proof.valid)
     described = descriptions.get(checked.label)
+
+    # A label whose entry failed to store is in the run's library in memory and
+    # in no row, so `entry_ids` cannot answer for it — and recording "no entry"
+    # there would read as "this line cited a rule" and drop the dependency
+    # silently, where the label path reports it as unresolved. Such a proof keeps
+    # the flag down and goes on being read that way, which is the whole reason
+    # `citations_stored` is a flag and not an inference.
+    resolvable = not unstored.intersection(
+        line.inference_rule.label
+        for line in engine_proof.proof_lines
+        if line.inference_rule is not None
+    )
 
     proof = Proof(
         formal_system_id=system.id,
@@ -1120,13 +1148,29 @@ def _store(
         # `result` and the line rows are one artefact of one check, and a row
         # carrying two of the three is a state nothing else in the schema makes.
         result=engine_proof.data(),
+        # Set on the way in, not assigned after the flush: `store_proof_lines`
+        # below is given this run's label table and records what each citation
+        # resolved to, so the claim is good — and setting it here is what keeps
+        # that one statement an INSERT rather than an UPDATE per proof.
+        citations_stored=resolvable,
     )
     session.add(proof)
     session.flush()
 
     # `replace=False`: the proof was created three lines ago, so there is no
     # earlier structure to clear, and the delete is not free to issue anyway.
-    rows = store_proof_lines(session, proof, system, engine_proof, replace=False)
+    #
+    # `entry_ids` is the run's own label table, which is the resolution here: a
+    # Metamath label is unique across the database and a proof may only cite what
+    # precedes it, so every entry this proof names is already in it — whichever
+    # layer of a spine declared it. That is what spares an import the backfill.
+    # Withheld, not merely incomplete, when some cited entry did not store: the
+    # columns and the flag are one claim, and half of it is the state the flag
+    # exists to make impossible.
+    rows = store_proof_lines(
+        session, proof, system, engine_proof, replace=False,
+        entry_ids=entry_ids if resolvable else None,
+    )
 
     return _Stored(
         valid=valid,

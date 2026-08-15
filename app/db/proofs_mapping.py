@@ -102,11 +102,21 @@ def store_proof_lines(
     engine_proof: EngineProof,
     cited_proofs: CitedProofs = (),
     replace: bool = True,
+    entry_ids: Mapping[str, uuid.UUID] | None = None,
 ) -> list[ProofLineRow]:
     """Replace ``proof``'s stored structure with ``engine_proof``'s.
 
     ``system`` is the row the terms are interned against — the proof's own formal
     system, passed in because the caller already has it loaded.
+
+    ``entry_ids`` maps each cited label to the library entry it resolved to —
+    :attr:`~app.db.promoted_theorems_mapping.PendingLibrary.entry_ids`, the
+    resolution this very check performed. Given, it is recorded per line and
+    ``proof.citations_stored`` is set, which is what lets a later reader ask what
+    the proof rests on without rebuilding the library order to re-resolve labels
+    the checker already resolved. Omitted, the columns are left alone and the
+    flag stays as it was: a caller that cannot supply the resolution must not
+    claim to have.
 
     ``cited_proofs`` pairs each *other* proof whose lines this one may cite (the
     lemmas seeded into ``reference_context``) with its stored id. A citation
@@ -146,10 +156,23 @@ def store_proof_lines(
     #   That was a second wasted round trip per line.
     line_terms = _line_terms(session, system, engine_proof.proof_lines)
 
+    if entry_ids is not None and not proof.citations_stored:
+        # Set here, in the same transaction as the columns it describes: the flag
+        # is the claim that they were written, and a commit carrying one without
+        # the other would leave a proof reporting a resolution it does not hold.
+        #
+        # Guarded on the current value rather than assigned, because a caller that
+        # already set it on an unflushed row — a corpus import does, so the flag
+        # rides the INSERT — must not be dirtied into an UPDATE per proof.
+        proof.citations_stored = True
+
     # Nothing in the build below queries, so nothing in it needs the pending rows
     # on the wire. Holding the flush back is what lets them go as one statement.
     with session.no_autoflush:
-        return _line_rows(session, engine_proof, proof, line_terms, definition_ids, cited)
+        return _line_rows(
+            session, engine_proof, proof, line_terms, definition_ids, cited,
+            entry_ids or {},
+        )
 
 
 def _line_rows(
@@ -159,6 +182,7 @@ def _line_rows(
     line_terms: Sequence[TermRow | None],
     definition_ids: Mapping[tuple[str, str], uuid.UUID],
     cited: Mapping[int, uuid.UUID],
+    entry_ids: Mapping[str, uuid.UUID],
 ) -> list[ProofLineRow]:
     """One row per engine line, wired to each other. Adds them unflushed."""
     rows: list[ProofLineRow] = []
@@ -170,6 +194,7 @@ def _line_rows(
 
     for position, line in enumerate(engine_proof.proof_lines):
         line_type = line.line_type
+        rule = line.inference_rule.label if line.inference_rule is not None else None
         row = ProofLineRow(
             proof_id=proof.id,
             position=position,
@@ -180,7 +205,10 @@ def _line_rows(
             behaviour=line_type.behaviour if line_type is not None else None,
             label=line.label,
             reference=line.reference_string_display,
-            rule=line.inference_rule.label if line.inference_rule is not None else None,
+            rule=rule,
+            # Absent for every label that named a rule or a hypothesis rather
+            # than an entry, which is what null means on a row this check wrote.
+            theorem_id=None if rule is None else entry_ids.get(rule),
             definition_id=_definition_id(line, definition_ids),
             term=line_terms[position],
             valid=bool(line.valid),

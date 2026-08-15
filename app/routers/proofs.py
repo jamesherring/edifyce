@@ -62,7 +62,9 @@ from app.db import (
     inherit_closure,
     stated,
     record_closure,
+    reference_closure,
     rests_on,
+    unresolved_proofs,
     Proof,
     ProofLineRow,
     ProofReference,
@@ -75,7 +77,6 @@ from app.db import (
     load_citable_theorems,
     load_proof_lines,
     load_schema_terms,
-    load_theorems,
     read_library,
     store_definition_terms,
     store_proof_lines,
@@ -389,6 +390,10 @@ class _Verification:
     # compiled proofs (not just their ids) is what lets the snapshot match a
     # cited line to its proof by identity — see store_proof_lines.
     cited_proofs: list[tuple[EngineProof, uuid.UUID]] = field(default_factory=list)
+    # Which library entry each cited label resolved to, as *this* check resolved
+    # it. Recorded onto the line rows so a later reader — the provenance report —
+    # need not rebuild the library order to ask a question already answered here.
+    entry_ids: dict[str, uuid.UUID] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -668,6 +673,11 @@ async def _verify_with_references(
     # `hypotheses_of` covers the other half of both paths below: a proof that
     # *establishes* a library entry proves under that entry's own hypotheses, and
     # states them as lines citing their labels.
+    # Filled by whichever of the two paths below runs, and carried out to the
+    # snapshot: it is the check's own answer to "which entry is this label",
+    # which nothing downstream can reconstruct without the whole chain.
+    resolved: dict[str, uuid.UUID] = {}
+
     def promote(promoted: Mapping[str, PromotedTheorem]) -> None:
         for theorem in promoted.values():
             compiled_system.promote(theorem)
@@ -683,6 +693,7 @@ async def _verify_with_references(
             sync, library, cited_labels(references),
             hypotheses_of=proof.theorem_id,
         )
+        resolved.update(pending.entry_ids)
         return PendingCitations(
             pending.term_ids,
             lambda graph: promote(pending.promote(compiled_system, context, graph)),
@@ -710,25 +721,29 @@ async def _verify_with_references(
             # this pair, and is not used here only because the library has to be
             # resolved between them.
             #
-            # `load_theorems` rather than the split above, because there is no
-            # sweep to share: these lines were just parsed and already carry
+            # `load_theorems`' two halves rather than the call, and only because
+            # this path has to keep the middle one: the resolution is on the
+            # `PendingLibrary`, and the snapshot records it. There is still no
+            # sweep to share — these lines were just parsed and already carry
             # their terms, so the library's is the only one this path does.
             _read, read_context = compiled_system.read_proof(
                 proof.source if source is None else source, proof=root
             )
-            await session.run_sync(
-                lambda sync: promote(
-                    load_theorems(
-                        sync, library,
-                        cited_labels(
-                            line.reference_string
-                            for line in root.proof_lines
-                        ),
-                        compiled_system, context,
-                        hypotheses_of=proof.theorem_id,
+
+            def resolve_library(sync: Session) -> None:
+                pending = read_library(
+                    sync, library,
+                    cited_labels(line.reference_string for line in root.proof_lines),
+                    hypotheses_of=proof.theorem_id,
+                )
+                resolved.update(pending.entry_ids)
+                promote(
+                    pending.promote(
+                        compiled_system, context, prefetch_terms(sync, pending.term_ids)
                     )
                 )
-            )
+
+            await session.run_sync(resolve_library)
             compiled_system.check_proof(root, read_context)
     except Exception as exc:  # noqa: BLE001
         return _Verification(
@@ -751,6 +766,7 @@ async def _verify_with_references(
         # The root's lines may cite lines of any lemma in the closure, and this
         # is how the snapshot names the proof they belong to.
         cited_proofs=[(engine, pid) for pid, engine in compiled.items()],
+        entry_ids=resolved,
     )
 
 
@@ -836,7 +852,10 @@ async def _record_verdict(
     # term interning below safe (a read-then-insert two proofs can both lose)
     # *and* what stops an invalidation landing between the read and this write.
     await session.run_sync(
-        lambda sync: store_proof_lines(sync, proof, system, engine_proof, cited)
+        lambda sync: store_proof_lines(
+            sync, proof, system, engine_proof, cited,
+            entry_ids=verification.entry_ids,
+        )
     )
 
 
@@ -1902,17 +1921,33 @@ async def read_proof_provenance(
             "Verify it first.",
         )
 
-    system = await load_system(session, proof.formal_system_id)
-    if system is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "The proof's system no longer exists."
-        )
-    effective = await load_effective(session, system)
-    if effective.errors:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=effective.errors)
+    # The library order, and *only* if some proof in the closure still needs it.
+    # A check records which entry each citation resolved to
+    # (`proof_lines.theorem_id`), so for a proof checked since, the report is a
+    # join and the chain is not read at all — where reading it means hydrating
+    # every part row of every ancestor to use one list of ids, measured at two
+    # orders of magnitude more than the walk it replaces. The proofs that predate
+    # the column still need it, and asking is one indexed query.
+    closure = await session.run_sync(lambda sync: reference_closure(sync, proof_id))
+    reached, _unread = closure
+    legacy = await session.run_sync(lambda sync: unresolved_proofs(sync, reached))
+    systems: list[uuid.UUID] = []
+    if legacy:
+        system = await load_system(session, proof.formal_system_id)
+        if system is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, "The proof's system no longer exists."
+            )
+        effective = await load_effective(session, system)
+        if effective.errors:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=effective.errors)
+        systems = effective.library.system_ids
 
-    systems = effective.library.system_ids
-    found = await session.run_sync(lambda sync: rests_on(sync, proof_id, systems))
+    # Handed the closure this route already walked: deciding whether to build the
+    # library order is what needed it, and the walk is a query per generation.
+    found = await session.run_sync(
+        lambda sync: rests_on(sync, proof_id, systems, closure)
+    )
     return ProofProvenance(
         proof_id=proof_id,
         assumes=[

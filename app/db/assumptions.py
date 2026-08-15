@@ -509,20 +509,69 @@ def reference_closure(
     return reached, unread
 
 
+def unresolved_proofs(
+    session: Session, proofs: Sequence[uuid.UUID]
+) -> list[uuid.UUID]:
+    """Which of these proofs' lines do **not** carry what their citations resolved to.
+
+    The ones whose structure was stored before ``proof_lines.theorem_id`` existed,
+    and which therefore still need the library order to be read. Split out because
+    it is the question a caller asks *before* paying for that order — see
+    ``read_proof_provenance``, which skips a whole chain load when the answer is
+    none.
+    """
+    return list(
+        session.scalars(
+            select(Proof.id).where(
+                Proof.id.in_(list(proofs)), Proof.citations_stored.is_(False)
+            )
+        )
+    )
+
+
 def cited_entries(
     session: Session, proofs: Sequence[uuid.UUID], systems: Sequence[uuid.UUID]
-) -> tuple[dict[str, uuid.UUID], tuple[str, ...]]:
+) -> tuple[set[uuid.UUID], tuple[str, ...]]:
     """The library entries these proofs' checked lines cite, and what went unread.
 
     ``proof_lines.rule`` and not the reference the author typed: the resolved
     label is what the *checker* used, and reporting a label the resolver never
     reached would invent a dependency the proof does not have. The same choice
     `app/db/provenance.py` makes, and for the same reason.
+
+    Two paths, and the split is on whether the check recorded what it resolved.
+
+    A proof with ``citations_stored`` carries the answer per line, so its entries
+    are read straight off ``proof_lines.theorem_id`` — the resolution the checker
+    performed, not one reconstructed from the chain afterwards. It contributes
+    nothing to ``unresolved`` either, and that is not an omission: on such a row a
+    null ``theorem_id`` beside a non-null ``rule`` *means* the line was justified
+    by an inference rule or a hypothesis, which is exactly what "explained" says.
+
+    A proof stored before that column is the old question, asked the old way,
+    and ``systems`` is what answers it. Returning entry **ids** rather than a
+    label-keyed map is what lets the two paths meet: a label is only unique
+    within a library, while the ids are what the closure walk actually wants.
     """
+    reached = list(proofs)
+    legacy = unresolved_proofs(session, reached)
+    entries = set(
+        session.scalars(
+            select(ProofLineRow.theorem_id)
+            .where(
+                ProofLineRow.proof_id.in_(reached),
+                ProofLineRow.theorem_id.is_not(None),
+            )
+            .distinct()
+        )
+    )
+    if not legacy:
+        return entries, ()
+
     labels = list(
         session.scalars(
             select(ProofLineRow.rule)
-            .where(ProofLineRow.proof_id.in_(list(proofs)), ProofLineRow.rule.is_not(None))
+            .where(ProofLineRow.proof_id.in_(legacy), ProofLineRow.rule.is_not(None))
             .distinct()
         )
     )
@@ -530,20 +579,23 @@ def cited_entries(
         theorem_id
         for theorem_id in session.scalars(
             select(Proof.theorem_id).where(
-                Proof.id.in_(list(proofs)), Proof.theorem_id.is_not(None)
+                Proof.id.in_(legacy), Proof.theorem_id.is_not(None)
             )
         )
     ]
-    entries = resolve_labels(session, systems, labels)
+    resolved = resolve_labels(session, systems, labels)
     explained = explained_labels(session, systems, theorem_ids)
     unresolved = tuple(
-        sorted(label for label in labels if label not in entries and label not in explained)
+        sorted(label for label in labels if label not in resolved and label not in explained)
     )
-    return entries, unresolved
+    return entries | set(resolved.values()), unresolved
 
 
 def rests_on(
-    session: Session, proof_id: uuid.UUID, systems: Sequence[uuid.UUID]
+    session: Session,
+    proof_id: uuid.UUID,
+    systems: Sequence[uuid.UUID],
+    closure: tuple[Sequence[uuid.UUID], tuple[str, ...]] | None = None,
 ) -> RestsOn:
     """What one proof transitively assumes, from rows alone.
 
@@ -556,11 +608,18 @@ def rests_on(
     ``systems`` covers every proof reached, not only the seed: a proof may
     reference only proofs in its own system (which is what lets one lock cover a
     whole reference closure, `_common.lock_system`), so they share a chain.
+
+    ``closure`` is :func:`reference_closure`'s answer, for a caller that already
+    has it. The walk is a query per generation, and a caller that had to know
+    *which* proofs are reached before it could decide whether to build the
+    library order — `read_proof_provenance` — would otherwise pay for it twice.
     """
-    proofs, unread = reference_closure(session, proof_id)
+    proofs, unread = (
+        reference_closure(session, proof_id) if closure is None else closure
+    )
     entries, unresolved = cited_entries(session, proofs, systems)
     return RestsOn(
-        assumptions=hydrate(session, closure_of(session, list(entries.values()))),
+        assumptions=hydrate(session, closure_of(session, list(entries))),
         unresolved=unresolved,
         unread=unread,
     )
