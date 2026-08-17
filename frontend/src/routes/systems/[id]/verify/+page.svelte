@@ -189,6 +189,7 @@
 			<ProofResults
 				{result}
 				{requestError}
+				description="Each proof line and its diagnostics."
 				idleMessage="Start typing a proof to see line-by-line results here."
 				onLineClick={(i) => editor?.focusLine(i)}
 			/>

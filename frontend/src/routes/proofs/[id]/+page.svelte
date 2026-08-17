@@ -391,16 +391,7 @@
 		     reader wants first, and the lines are long. -->
 		{#if ownDescription || documentation || provenance || hasCitations}
 			<Card.Root>
-				<Card.Header>
-					<Card.Title>About</Card.Title>
-					{#if documentation}
-						<Card.Description>
-							What {systemName ?? 'this system'} records about
-							<code class="rounded bg-muted px-1 py-0.5 text-xs">{documentation.label}</code>.
-						</Card.Description>
-					{/if}
-				</Card.Header>
-				<Card.Content class="flex flex-col gap-4">
+				<Card.Content class="flex flex-col gap-4 pt-6">
 					{#if ownDescription}
 						<p class="whitespace-pre-line text-sm leading-relaxed">{ownDescription}</p>
 					{/if}
@@ -430,9 +421,6 @@
 			{primaryLineType}
 			verdicts={false}
 			title="Proof"
-			description={notation === null
-				? 'The proof source, checked line by line.'
-				: `The same checked proof, read in ${notation}.`}
 			idleMessage="Verify the proof to see it line by line."
 		>
 			{#snippet actions()}

@@ -338,6 +338,7 @@
 			<ProofResults
 				result={liveResult}
 				requestError={liveError}
+				description="Each proof line and its diagnostics."
 				idleMessage="Start typing your proof to see line-by-line results here."
 				onLineClick={(i) => editor?.focusLine(i)}
 			/>
