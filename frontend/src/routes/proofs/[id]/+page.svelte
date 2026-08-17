@@ -321,6 +321,8 @@
 	});
 </script>
 
+<svelte:head><title>{heading || 'Proof'} — Edifyce</title></svelte:head>
+
 <PageContainer maxWidth="5xl" gap>
 	<BackLink href="/proofs" label="All proofs" />
 

@@ -69,6 +69,8 @@
 	]);
 </script>
 
+<svelte:head><title>Systems — Edifyce</title></svelte:head>
+
 <PageContainer maxWidth="5xl">
 	<PageHeader title="Formal systems" description="Browse and explore mechanically-checked formal systems.">
 		{#snippet actions()}

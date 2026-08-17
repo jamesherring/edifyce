@@ -95,6 +95,8 @@
 	}
 </script>
 
+<svelte:head><title>New proof — Edifyce</title></svelte:head>
+
 <PageContainer maxWidth="2xl" gap>
 	<BackLink href="/proofs" label="All proofs" />
 	<PageHeader title="New proof" description="Pick a system, then write your proof against it." />

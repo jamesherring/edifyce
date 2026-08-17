@@ -87,6 +87,8 @@
 	});
 </script>
 
+<svelte:head><title>{system ? `Assumptions · ${system.name}` : 'Assumptions'} — Edifyce</title></svelte:head>
+
 <PageContainer maxWidth="3xl" gap>
 	<BackLink href={`/systems/${page.params.id}`} label="Back to system" />
 

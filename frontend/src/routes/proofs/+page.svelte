@@ -80,6 +80,8 @@
 	]);
 </script>
 
+<svelte:head><title>Proofs — Edifyce</title></svelte:head>
+
 <PageContainer maxWidth="5xl">
 	<PageHeader title="Proofs" description="Browse and verify machine-checked proofs.">
 		{#snippet actions()}

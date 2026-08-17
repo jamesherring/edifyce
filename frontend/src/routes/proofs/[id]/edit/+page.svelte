@@ -267,6 +267,8 @@
 	});
 </script>
 
+<svelte:head><title>{proof ? `Edit ${proof.name}` : 'Edit proof'} — Edifyce</title></svelte:head>
+
 <PageContainer maxWidth="5xl" gap>
 	<BackLink href={`/proofs/${page.params.id}`} label="Back to proof" />
 

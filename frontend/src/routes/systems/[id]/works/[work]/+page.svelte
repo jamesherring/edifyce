@@ -52,6 +52,8 @@
 	});
 </script>
 
+<svelte:head><title>{cited?.work ?? 'Work cited'} — Edifyce</title></svelte:head>
+
 <PageContainer maxWidth="3xl" gap>
 	<BackLink href={`/systems/${page.params.id}/works`} label="Back to works cited" />
 
