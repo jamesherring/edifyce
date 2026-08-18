@@ -161,20 +161,6 @@ function documentation(over: Partial<LabelDescription> = {}): LabelDescription {
 	};
 }
 
-/** Sign a reader in. Verifying a proof needs an account — it rebuilds the whole
- *  system and re-checks against it — so a test that clicks Verify has to. */
-async function signIn() {
-	apiMock.me.mockResolvedValue({
-		id: 'u1',
-		email: 'a@b.c',
-		is_active: true,
-		is_superuser: false,
-		is_verified: true,
-		display_name: 'Ada'
-	});
-	await auth.refresh();
-}
-
 beforeEach(async () => {
 	apiMock.logout.mockResolvedValue(undefined);
 	apiMock.me.mockRejectedValue(new Error('anonymous'));
@@ -291,7 +277,7 @@ describe('the proof detail page', () => {
 		await waitFor(() => expect(screen.getByText('( sqrt ` 2 ) e. RR')).toBeInTheDocument());
 		// One view, not a source pane beside a verification pane saying the same
 		// thing: the source block is the fallback for a proof with no structure.
-		expect(screen.queryByText('As written; verify it to see it line by line.')).toBeNull();
+		expect(screen.queryByText('As written. Checking it happens in the editor.')).toBeNull();
 		expect(screen.getByText('by HYP')).toBeInTheDocument();
 	});
 
@@ -399,45 +385,6 @@ describe('the proof detail page', () => {
 		expect(document.querySelector('.katex-html')).not.toBeNull();
 	});
 
-	it('offers a signed-out reader the sign-in rather than the check', async () => {
-		// Reading a published proof is open; re-checking one is not, since it rebuilds
-		// the whole system and checks against it. Better a missing button than a 401
-		// after the click.
-		apiMock.proofs.get.mockResolvedValue(detail());
-		render(Page);
-
-		await waitFor(() =>
-			expect(screen.getByRole('link', { name: /Sign in to verify/ })).toBeInTheDocument()
-		);
-		expect(screen.queryByRole('button', { name: 'Verify' })).toBeNull();
-	});
-
-	it('drops the previous check’s lines when a new verdict arrives', async () => {
-		// The badge is `result`'s and the rows were the structure's, so leaving the
-		// structure up across a verify puts a fresh "Valid" over stale red rows.
-		apiMock.proofs.get.mockResolvedValue(detail());
-		apiMock.proofs.structure.mockResolvedValueOnce(
-			structure([structureLine({ valid: false, invalid_message: 'MP does not apply.' })])
-		);
-		apiMock.proofs.verify.mockResolvedValue({
-			success: true,
-			errors: [],
-			proof: { indicator: 'ok', lines: [payloadLine({ display: 'x = x' })] }
-		});
-		await signIn();
-		render(Page);
-
-		await waitFor(() => expect(screen.getByText('MP does not apply.')).toBeInTheDocument());
-
-		// The re-read never lands, so what is on screen is what the verify itself
-		// returned — which is the point: fresh, not stale.
-		apiMock.proofs.structure.mockImplementation(() => new Promise(() => {}));
-		screen.getByRole('button', { name: 'Verify' }).click();
-
-		await waitFor(() => expect(screen.getByText('x = x')).toBeInTheDocument());
-		expect(screen.queryByText('MP does not apply.')).toBeNull();
-	});
-
 	it('does not ask what a never-checked proof rests on', async () => {
 		// The route reads the citations a check *resolved*, so for an unchecked proof
 		// the request can only 409 — and producing the report costs a chain load.
@@ -446,61 +393,6 @@ describe('the proof detail page', () => {
 
 		await waitFor(() => expect(screen.getByText('sqrt2irr')).toBeInTheDocument());
 		expect(apiMock.proofs.provenance).not.toHaveBeenCalled();
-	});
-
-	it('lets the check’s provenance read win over the page load’s, however they land', async () => {
-		// Both reads are for the same proof, so a page-level sequence cannot tell
-		// them apart — and the pre-verify one resolving last would report the
-		// previous check's debts as this one's, or none at all.
-		const assumed = {
-			theorem_id: 't1',
-			formal_system_id: 'sys1',
-			label: 'riemann',
-			statement: 'RH',
-			reason: 'Open.',
-			source: null
-		};
-		let releaseFirst: (value: unknown) => void = () => {};
-		apiMock.proofs.get.mockResolvedValue(detail());
-		apiMock.proofs.verify.mockResolvedValue({
-			success: true,
-			errors: [],
-			proof: { indicator: 'ok', lines: [payloadLine()] }
-		});
-		// The page load's read hangs; the check's read answers immediately.
-		apiMock.proofs.provenance
-			.mockImplementationOnce(
-				() =>
-					new Promise((resolve) => {
-						releaseFirst = resolve;
-					})
-			)
-			.mockResolvedValueOnce({
-				proof_id: 'p1',
-				assumes: [assumed],
-				unresolved: [],
-				unread_lemmas: [],
-				complete: true
-			});
-		await signIn();
-		render(Page);
-
-		await waitFor(() => expect(screen.getByRole('button', { name: 'Verify' })).toBeEnabled());
-		screen.getByRole('button', { name: 'Verify' }).click();
-
-		expect(await screen.findByRole('link', { name: 'riemann' })).toBeInTheDocument();
-
-		// Now the stale one lands, claiming the proof rests on nothing.
-		releaseFirst({
-			proof_id: 'p1',
-			assumes: [],
-			unresolved: [],
-			unread_lemmas: [],
-			complete: true
-		});
-		await waitFor(() =>
-			expect(screen.getByRole('link', { name: 'riemann' })).toBeInTheDocument()
-		);
 	});
 
 	it('shows a cached verdict’s lines instead of the source beside them', async () => {
@@ -513,7 +405,7 @@ describe('the proof detail page', () => {
 		render(Page);
 
 		await waitFor(() => expect(screen.getByText('( sqrt ` 2 ) e. RR')).toBeInTheDocument());
-		expect(screen.queryByText('As written; verify it to see it line by line.')).toBeNull();
+		expect(screen.queryByText('As written. Checking it happens in the editor.')).toBeNull();
 	});
 });
 
