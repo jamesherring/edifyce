@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/svelte';
+import userEvent from '@testing-library/user-event';
 import Page from './+page.svelte';
 import { auth } from '$lib/auth.svelte';
 import { api, ApiError } from '$lib/api';
@@ -96,10 +97,26 @@ function payloadLine(over: Partial<ProofLine> = {}): ProofLine {
 	};
 }
 
-/** A system whose only interesting features are its notations and where it came
- *  from — both of which the proof page reads off the system, not the proof. */
+/** A system whose only interesting features are its notations, which reading it
+ *  opens in, and where it came from — all of which the proof page reads off the
+ *  system, not the proof. `lines` is carried because the page reads the primary
+ *  line type off it, and a fixture without one throws where the real payload
+ *  never would. */
 function system(over: Record<string, unknown> = {}) {
-	return { name: 'set.mm', notations: [], provenance: null, ...over };
+	return {
+		name: 'set.mm',
+		notations: [],
+		default_notation: null,
+		lines: [],
+		provenance: null,
+		...over
+	};
+}
+
+/** Choose a reading from the notation picker, by the label the option carries. */
+async function pickReading(label: string) {
+	await userEvent.click(await screen.findByRole('combobox', { name: 'Reading' }));
+	await userEvent.click(await screen.findByText(label));
 }
 
 function detail(over: Partial<ProofDetail> = {}): ProofDetail {
@@ -295,8 +312,9 @@ describe('the proof detail page', () => {
 		);
 		render(Page);
 
+		// No TeX notation and no stored default, so it opens in the source.
 		await waitFor(() => expect(screen.getByText('( sqrt ` 2 ) e. RR')).toBeInTheDocument());
-		(await screen.findByRole('button', { name: 'unicode' })).click();
+		await pickReading('unicode');
 
 		// The same row, diagnostics and all — a notation re-spells the term, it
 		// does not fetch a second rendering of the line.
@@ -304,7 +322,9 @@ describe('the proof detail page', () => {
 		expect(screen.getByText('by HYP')).toBeInTheDocument();
 	});
 
-	it('typesets a latex reading instead of showing its source', async () => {
+	it('opens a system with a TeX notation typeset, without being asked', async () => {
+		// Typeset mathematics is the friendlier read, so a system carrying a TeX
+		// notation opens in it rather than in the source spelling.
 		apiMock.proofs.get.mockResolvedValue(detail());
 		apiMock.systems.get.mockResolvedValue(system({ notations: ['latex'] }));
 		apiMock.proofs.structure.mockImplementation(async (_id: string, name?: string) =>
@@ -314,11 +334,40 @@ describe('the proof detail page', () => {
 		);
 		render(Page);
 
-		(await screen.findByRole('button', { name: 'latex' })).click();
-
 		// `.katex-html` is the rendering; the TeX stays in the DOM beside it, in
 		// KaTeX's MathML annotation, which is what a screen reader reads.
 		await waitFor(() => expect(document.querySelector('.katex-html')).not.toBeNull());
+		// And the source was never rendered on the way there — one read, not two.
+		expect(apiMock.proofs.structure).toHaveBeenCalledTimes(1);
+	});
+
+	it('opens in the reading the system stores, over the TeX one', async () => {
+		apiMock.proofs.get.mockResolvedValue(detail());
+		apiMock.systems.get.mockResolvedValue(
+			system({ notations: ['unicode', 'latex'], default_notation: 'unicode' })
+		);
+		apiMock.proofs.structure.mockImplementation(async (_id: string, name?: string) =>
+			name === 'unicode'
+				? structure([structureLine({ rendered: '(√‘2) ∈ ℝ' })], 'unicode')
+				: structure([structureLine()])
+		);
+		render(Page);
+
+		await waitFor(() => expect(screen.getByText('(√‘2) ∈ ℝ')).toBeInTheDocument());
+	});
+
+	it('falls back to the source when the stored default names a notation that is gone', async () => {
+		// The setting and the notations are edited apart, so a default can outlive
+		// what it names; asking for it would only earn an error on every proof.
+		apiMock.proofs.get.mockResolvedValue(detail());
+		apiMock.systems.get.mockResolvedValue(
+			system({ notations: [], default_notation: 'unicode' })
+		);
+		apiMock.proofs.structure.mockResolvedValue(structure([structureLine()]));
+		render(Page);
+
+		await waitFor(() => expect(screen.getByText('( sqrt ` 2 ) e. RR')).toBeInTheDocument());
+		expect(apiMock.proofs.structure).toHaveBeenCalledWith('p1', undefined);
 	});
 
 	it('typesets by the reading on screen, not the one being fetched', async () => {
@@ -335,17 +384,18 @@ describe('the proof detail page', () => {
 		);
 		render(Page);
 
-		(await screen.findByRole('button', { name: 'latex' })).click();
+		// Opens typeset, being a system with a TeX notation.
 		await waitFor(() => expect(document.querySelector('.katex-html')).not.toBeNull());
 
 		// Switch back, with the source reading never arriving.
 		apiMock.proofs.structure.mockImplementation(() => new Promise(() => {}));
-		const sourceButton = await screen.findByRole('button', { name: 'Source' });
-		sourceButton.click();
+		await pickReading('Source');
 
-		// The control follows the *selection*, so its active state marks the window
-		// the rows are still the previous reading's — while the latex stays typeset.
-		await waitFor(() => expect(sourceButton.className).toContain('bg-secondary'));
+		// The picker follows the *selection*, so what it shows marks the window the
+		// rows are still the previous reading's — while the latex stays typeset.
+		await waitFor(() =>
+			expect(screen.getByRole('combobox', { name: 'Reading' })).toHaveTextContent('Source')
+		);
 		expect(document.querySelector('.katex-html')).not.toBeNull();
 	});
 

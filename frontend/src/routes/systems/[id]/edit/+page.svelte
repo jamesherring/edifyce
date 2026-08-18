@@ -5,6 +5,8 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
 	import { Textarea } from '$lib/components/ui/textarea';
+	import { Combobox, type ComboboxOption } from '$lib/components/ui/combobox';
+	import { isTeX } from '$lib/math';
 	import * as Card from '$lib/components/ui/card';
 	import * as Alert from '$lib/components/ui/alert';
 	import PageContainer from '$lib/components/PageContainer.svelte';
@@ -49,6 +51,7 @@
 
 	let confirmOpen = $state(false);
 	let deleting = $state(false);
+	let savingReading = $state(false);
 
 	let validation = $state<SystemValidation | null>(null);
 	let validating = $state(false);
@@ -61,6 +64,18 @@
 	// the grammar reference shown beside it.
 	const symbols = $derived(systemSymbols(system));
 	const notation = $derived(notationReference(system));
+
+	// The picker's value for "no stored default", which is not a notation name —
+	// it hands the choice to the reader's client, which prefers a typeset reading.
+	const AUTOMATIC = ' automatic';
+	const readingOptions = $derived<ComboboxOption[]>([
+		{ value: AUTOMATIC, label: 'Automatic', hint: 'typeset where there is one' },
+		...(system?.notations ?? []).map((n) => ({
+			value: n,
+			label: n,
+			hint: isTeX(n) ? 'typeset' : undefined
+		}))
+	]);
 
 	// Only the details form defers its save — every part saves from its own sheet
 	// the moment you confirm it — so that's all this guards.
@@ -185,6 +200,28 @@
 		}
 	}
 
+	// Which reading a proof of this system opens in. Saves on select rather than
+	// through the details form, which is the convention for everything that isn't
+	// name-and-description — and which is what lets it be offered on a *published*
+	// system, where that form is frozen and this setting is not.
+	async function saveReading(picked: string) {
+		if (!system || savingReading) return;
+		const id = system.id;
+		savingReading = true;
+		try {
+			const updated = await api.systems.update(id, {
+				default_notation: picked === AUTOMATIC ? null : picked
+			});
+			if (page.params.id !== id) return;
+			system = updated;
+			toastSuccess('Reading saved.');
+		} catch (err) {
+			if (page.params.id === id) toastError(err instanceof ApiError ? err.message : String(err));
+		} finally {
+			savingReading = false;
+		}
+	}
+
 	// Publishing is one-way: a published system is frozen (this control only
 	// renders for drafts), so there's no unpublish path.
 	async function publish() {
@@ -246,6 +283,42 @@
 
 <svelte:head><title>{system ? `Edit ${system.name}` : 'Edit system'} — Edifyce</title></svelte:head>
 
+<!-- Offered to published and draft systems alike: it picks which stored spelling
+     a reader is shown a checked term in, so it cannot reach a verdict, and the
+     freeze exists to protect verdicts. -->
+{#snippet readingCard(sys: FormalSystemDetail)}
+	{#if sys.notations.length > 0}
+		<Card.Root>
+			<Card.Header>
+				<Card.Title>Reading</Card.Title>
+				<Card.Description>
+					Which of this system's notations a proof of it opens in. Readers can still switch to
+					any other, or to the source it was written in.
+				</Card.Description>
+			</Card.Header>
+			<Card.Content>
+				<div class="flex items-center gap-3">
+					<Combobox
+						options={readingOptions}
+						value={sys.default_notation ?? AUTOMATIC}
+						onSelect={saveReading}
+						disabled={savingReading}
+						ariaLabel="Opens in"
+						searchPlaceholder="Search readings…"
+						emptyText="No readings."
+						class="w-64"
+					/>
+					{#if savingReading}
+						<span class="inline-flex items-center gap-1 text-xs text-muted-foreground">
+							<LoaderCircle class="size-3 animate-spin" /> Saving…
+						</span>
+					{/if}
+				</div>
+			</Card.Content>
+		</Card.Root>
+	{/if}
+{/snippet}
+
 <PageContainer maxWidth="5xl" gap>
 	<BackLink href={`/systems/${page.params.id}`} label="Back to system" />
 
@@ -279,6 +352,8 @@
 				can't be edited or unpublished. <a class="underline" href={`/systems/${system.id}`}>View the system</a>.
 			</Alert.Description>
 		</Alert.Root>
+
+		{@render readingCard(system)}
 
 		<Card.Root class="border-destructive/40">
 			<Card.Header>
@@ -348,6 +423,8 @@
 				</form>
 			</Card.Content>
 		</Card.Root>
+
+		{@render readingCard(system)}
 
 		<!-- Wide screens get the outline and the compile status pinned beside the
 		     contents, so neither scrolls out of reach while editing a long system. -->

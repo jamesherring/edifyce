@@ -21,6 +21,22 @@ export function isTeX(notation: string | null): boolean {
 }
 
 /**
+ * The notation to open a proof of this system in, or null for its source.
+ *
+ * The system's own setting wins where it names a notation the system still has —
+ * a stored default outlives the notation it names, since the two are edited
+ * apart. Otherwise typeset mathematics is the friendlier read, so a system
+ * carrying a TeX notation opens in it; a system with none opens in its source.
+ */
+export function preferredNotation(
+	notations: string[],
+	defaultNotation: string | null
+): string | null {
+	if (defaultNotation && notations.includes(defaultNotation)) return defaultNotation;
+	return notations.find(isTeX) ?? null;
+}
+
+/**
  * `tex` as KaTeX markup, or null when KaTeX will not parse it.
  *
  * Null rather than KaTeX's own error rendering: a projection is derived per

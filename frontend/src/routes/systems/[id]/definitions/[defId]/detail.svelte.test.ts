@@ -49,7 +49,8 @@ function system(definitions: Definition[]): FormalSystemDetail {
 		definitions,
 		axioms: [],
 		rules: [],
-		notations: []
+		notations: [],
+		default_notation: null
 	};
 }
 

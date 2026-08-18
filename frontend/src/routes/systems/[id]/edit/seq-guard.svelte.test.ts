@@ -72,7 +72,9 @@ function makeSystem(id: string, name: string) {
 		lines: [],
 		definitions: [],
 		axioms: [],
-		rules: []
+		rules: [],
+		notations: [],
+		default_notation: null
 	};
 }
 

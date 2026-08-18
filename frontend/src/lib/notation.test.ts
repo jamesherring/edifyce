@@ -23,6 +23,7 @@ function system(parts: Partial<FormalSystemDetail> = {}): FormalSystemDetail {
 		axioms: [],
 		rules: [],
 		notations: [],
+		default_notation: null,
 		...parts
 	};
 }

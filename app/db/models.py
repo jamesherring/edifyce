@@ -199,6 +199,11 @@ class FormalSystem(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     token_separated: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
+    # The notation a reader is shown first, naming one of this system's stored
+    # notations. Presentation only — it re-spells terms a check has already
+    # accepted and reaches nothing the checker reads. Null leaves the choice to
+    # the client, which prefers a TeX reading where the system has one.
+    default_notation: Mapped[str | None] = mapped_column(String(64))
 
     owner: Mapped["User | None"] = relationship(back_populates="formal_systems")
     inherits_from: Mapped["FormalSystem | None"] = relationship(
