@@ -92,10 +92,20 @@ goals and one that ranks lemmas.
 Quotient by "propositional consequence of the library" and the algebra stops
 being a representation and starts being a *procedure*. The certifier abstracts a
 statement into a propositional formula over **atoms** — the maximal subterms not
-built from connectives — and certifies a goal when it is `+1` at the distinguished
-coordinate of the algebra earlier theorems generate: either at every coordinate
-(a tautology instance, no library needed) or at the all-true one relative to
-lemmas already proved.
+built from connectives — and certifies a goal when `⋀L → G` is a tautology for
+some set `L` of lemmas the corpus has already proved: the goal holds under
+**every** valuation of the atoms that satisfies the selected lemmas. `L` empty is
+the special case where the goal is a tautology instance on its own.
+
+The one-coordinate reading of that is a trap worth naming, because §1's framing
+invites it. When the generators *are* the atoms — the setting of §1, where each
+`Aᵢ` is opaque — "true at the all-true coordinate" is complete, since the all-true
+valuation is the only one satisfying every generator. As soon as a lemma has
+internal structure the two come apart: with `L = {P → Q}` the goal `P` is true
+wherever `P` is, including a valuation satisfying `L`, and yet `P → Q ⊭ P`. Only
+the every-model form is consequence checking. Both the certifier and the closer
+of §6 implement that form; nothing in the measurements below rests on the
+weaker one.
 
 Walking the corpus in declaration order, six seconds:
 
@@ -304,7 +314,16 @@ problem**, which is what makes `A ≠ B → ¬(A = B)` worth doing exactly when
 `A = B` is present and pointless when it is not. The second clause is a property
 of the problem rather than of the term, so abstraction becomes two passes: one to
 learn which atoms the goal and its hypotheses already have, one to rewrite under
-that knowledge. Both clauses are well-founded, so the walk terminates on its own.
+that knowledge.
+
+Only the first clause is a strict descent. The second is not — with `A ↔ B` where
+both sides are already atoms of the problem, it would licence `A → B` and `B → A`
+alike — so termination needs something else, and a reimplementation must not
+assume the productivity test supplies it. Two guards do: an expansion must be
+headed by a connective, which rules out swapping one bare atom for another; and
+the walk carries the terms it is already expanding and refuses to re-enter one,
+which bounds any longer cycle. The rewrite budget is then a safety net rather
+than the thing stopping a regress.
 
 It then fires on 16.8 % of held-out goals, and the rewrites it picks are the ones
 a person would: `eqss` (`A = B ↔ A ⊆ B ∧ B ⊆ A`), `sspss`, `df-f`, `elpwb`,
@@ -380,22 +399,36 @@ appeared in a real proof. That is a library expansion from ~10 000 facts to
 ### The algebra adjustment the search actually wants
 
 The closer asks a **binary** question: is `⋀H → G` equal to `⊤`? A search does not
-need that; it needs *how far from* `⊤`. Over the shared atoms, count the
-assignments that satisfy the assumptions and falsify the goal:
+need that; it needs *how far from* `⊤`. Over a **fixed** atom universe `U`, count
+the valuations that satisfy the assumptions and falsify the goal:
 
 ```
-remaining(H, G) = |{ω : ⋀H(ω) = 1 and G(ω) = 0}|
+remaining_U(H, G) = |{ω ∈ 2^U : ⋀H(ω) = 1 and G(ω) = 0}|
 ```
 
-It is zero exactly when the closer fires, it decreases monotonically as facts are
-added, and it is read off the truth table already being built. In the algebra's
-own terms: stop reading the top element and start reading the **measure of the
-interval**. That is what turns §6's decision procedure into a heuristic a
-best-first search can descend, and it is the natural next move from the framing
-in §1 — the same machinery also gives **subsumption** (a derived fact is
-redundant when the kept set entails it, which is what stops saturation drowning)
-and a **sound pruning rule** (if the hypotheses entail a subgoal's negation, that
-branch is dead).
+It is zero exactly when the closer fires, and over a fixed `U` it is monotone
+non-increasing as facts are added, because each fact can only shrink the
+admissible set. It is read off the truth table already being built. In the
+algebra's own terms: stop reading the top element and start reading the
+**measure of the interval**.
+
+`U` has to be fixed deliberately, and this is the part that is easy to get wrong.
+Sized to each state's own atoms, the count is **not** comparable across states: a
+fact mentioning a fresh atom doubles the valuation space, so `remaining` can rise
+while the state strictly improves. Either fix `U` once per search — the union of
+the goal's atoms and those of the candidate pool — or normalise before comparing.
+A raw count over a per-state universe is not a heuristic, it is a bug.
+
+The same machinery gives two more things. **Subsumption**: a derived fact is
+redundant when the kept set entails it, which is what stops a saturation loop
+drowning. And a **pruning rule**, which needs a guard: if the hypotheses entail a
+subgoal's negation the branch looks dead, but inconsistent hypotheses entail
+*everything*, including the subgoal — so such a goal is vacuously provable rather
+than hopeless. Prune only after establishing that the hypotheses are satisfiable,
+or equivalently only when the closer has already been asked for the goal itself
+and declined. The spike's certifier has the corresponding guard for the same
+reason: it refuses a certificate whose lemma set admits no valuation at all,
+rather than reporting the vacuous success that would follow from one.
 
 ### Evaluation protocol, which has to change first
 
