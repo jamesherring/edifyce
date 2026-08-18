@@ -144,6 +144,29 @@ lemmas (commutativity, associativity, …). Terms are normalised to a canonical
 class representative before hashing, giving a `theory_digest` that extends the
 `digest → alpha_digest` ladder one step further.
 
+**The design note is [search-phase2-theory-digest.md](search-phase2-theory-digest.md),
+and it disagrees with this section in three places worth reading before starting.**
+The two halves above are not one phase: the *definitional* half has its input
+structured, its termination already proven by the conservativity check and its
+binder canonicalisation already solved, while the *equational* half has no input
+at all — a system cannot declare which of its productions means equality, and
+nothing structural distinguishes `↔` from `→`. **Congruence is not free**: a
+congruence closure merges `f(a)` with `f(b)` by construction, but in a declared
+logic that is a theorem schema, and set.mm proves it one position at a time
+(`oveq1d`, `fveq2d`, …), so an e-graph would assume what a corpus spends its bulk
+establishing. And "oriented, terminating" is not enough: the definitional relation
+is acyclic but **not confluent**, since two definitions may share a defined form,
+so a term can have two normal forms and therefore two digests. The note's
+recommendation is to split the phase and build the definitional half first — which
+needs no equality declaration, since a definition already *is* an oriented
+equation, and needs nothing new for congruence either: `_rewrites_once` already
+descends through arbitrary constructors, licensed metatheoretically because
+notation is abbreviation and guarded by the conservativity checks. That makes the
+definitional half's soundness argument *settled* rather than merely available — it
+is sound iff the checker would accept the corresponding chain of definitional
+steps. For the equational half the note argues congruence should be **derived**, by
+harvesting congruence lemmas from proven theorems, rather than declared.
+
 **Unlocks**
 
 - Dedup and exact search **up to the known theory**: `a + b` and `b + a` merge
