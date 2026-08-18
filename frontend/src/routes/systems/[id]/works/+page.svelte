@@ -48,6 +48,8 @@
 	});
 </script>
 
+<svelte:head><title>{system ? `Works cited · ${system.name}` : 'Works cited'} — Edifyce</title></svelte:head>
+
 <PageContainer maxWidth="3xl" gap>
 	<BackLink href={`/systems/${page.params.id}`} label="Back to system" />
 

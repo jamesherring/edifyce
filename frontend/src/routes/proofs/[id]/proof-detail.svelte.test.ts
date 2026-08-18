@@ -340,13 +340,12 @@ describe('the proof detail page', () => {
 
 		// Switch back, with the source reading never arriving.
 		apiMock.proofs.structure.mockImplementation(() => new Promise(() => {}));
-		(await screen.findByRole('button', { name: 'Source' })).click();
+		const sourceButton = await screen.findByRole('button', { name: 'Source' });
+		sourceButton.click();
 
-		// The card's description follows the selection, so it marks the window the
-		// rows are still the previous reading's.
-		await waitFor(() =>
-			expect(screen.getByText('The proof source, checked line by line.')).toBeInTheDocument()
-		);
+		// The control follows the *selection*, so its active state marks the window
+		// the rows are still the previous reading's — while the latex stays typeset.
+		await waitFor(() => expect(sourceButton.className).toContain('bg-secondary'));
 		expect(document.querySelector('.katex-html')).not.toBeNull();
 	});
 

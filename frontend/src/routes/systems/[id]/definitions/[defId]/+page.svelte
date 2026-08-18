@@ -54,6 +54,8 @@
 	});
 </script>
 
+<svelte:head><title>{definition?.name ?? 'Definition'} — Edifyce</title></svelte:head>
+
 <PageContainer maxWidth="3xl" gap>
 	<BackLink href={`/systems/${page.params.id}/definitions`} label="All definitions" />
 

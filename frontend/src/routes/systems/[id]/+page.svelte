@@ -150,6 +150,8 @@
 	});
 </script>
 
+<svelte:head><title>{system?.name ?? 'System'} — Edifyce</title></svelte:head>
+
 <PageContainer maxWidth="5xl" gap>
 	<BackLink href="/systems" label="All systems" />
 

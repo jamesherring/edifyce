@@ -136,7 +136,7 @@
 		lines = null,
 		notation = null,
 		title = 'Verification',
-		description = 'Each proof line and its diagnostics.',
+		description = undefined,
 		actions,
 		controls,
 		verdicts = true,
@@ -165,7 +165,7 @@
 				{#if actions}{@render actions()}{/if}
 			</div>
 		</div>
-		<Card.Description>{description}</Card.Description>
+		{#if description}<Card.Description>{description}</Card.Description>{/if}
 		{#if controls}{@render controls()}{/if}
 	</Card.Header>
 	<Card.Content class="flex flex-col gap-4">

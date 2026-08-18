@@ -46,6 +46,8 @@
 	});
 </script>
 
+<svelte:head><title>{assumption?.label ?? 'Assumption'} — Edifyce</title></svelte:head>
+
 <PageContainer maxWidth="3xl" gap>
 	<BackLink href={`/systems/${page.params.id}/assumptions`} label="Back to assumptions" />
 

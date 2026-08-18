@@ -45,6 +45,8 @@
 	}
 </script>
 
+<svelte:head><title>New formal system — Edifyce</title></svelte:head>
+
 <PageContainer maxWidth="2xl" gap>
 	<BackLink href="/systems" label="All systems" />
 	<PageHeader title="New formal system" description="Start with a name; add notation, rules and definitions next." />

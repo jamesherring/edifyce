@@ -62,6 +62,8 @@
 	});
 </script>
 
+<svelte:head><title>Assumptions — Edifyce</title></svelte:head>
+
 <PageContainer maxWidth="3xl" gap>
 	<PageHeader
 		title="Assumptions"
