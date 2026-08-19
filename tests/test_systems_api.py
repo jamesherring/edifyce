@@ -921,3 +921,145 @@ def test_a_notation_the_system_does_not_have_is_refused(client, db):
     )
 
     assert res.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Which reading a proof opens in
+# ---------------------------------------------------------------------------
+
+
+def _store_horseshoe(db_path, system_id: str) -> None:
+    """Give the system one notation, so there is something to default to."""
+    engine = create_engine(db_path)
+    try:
+        with Session(engine) as session:
+            store_notation(
+                session,
+                uuid.UUID(system_id),
+                Projection(
+                    name="horseshoe",
+                    templates={
+                        "implication": (
+                            ("lit", "("),
+                            ("slot", "p"),
+                            ("lit", " ⊃ "),
+                            ("slot", "q"),
+                            ("lit", ")"),
+                        )
+                    },
+                ),
+            )
+            session.commit()
+    finally:
+        engine.dispose()
+
+
+def test_default_notation_round_trips_and_clears(client, db):
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_spec(db, owner, zfc_spec())
+    _store_horseshoe(db, system_id)
+
+    assert client.get(f"/api/formal-systems/{system_id}").json()["default_notation"] is None
+
+    set_it = client.patch(
+        f"/api/formal-systems/{system_id}", json={"default_notation": "horseshoe"}
+    )
+    assert set_it.status_code == 200
+    assert set_it.json()["default_notation"] == "horseshoe"
+
+    # Null is a value here, not an omission: it hands the choice back to the
+    # client, which is a different setting from naming a notation.
+    cleared = client.patch(f"/api/formal-systems/{system_id}", json={"default_notation": None})
+    assert cleared.status_code == 200
+    assert cleared.json()["default_notation"] is None
+
+
+def test_a_default_notation_the_system_does_not_have_is_refused(client, db):
+    # Storing it would earn an error on every proof of the system, since the
+    # reading it names can never be served.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_spec(db, owner, zfc_spec())
+
+    res = client.patch(f"/api/formal-systems/{system_id}", json={"default_notation": "latex"})
+
+    assert res.status_code == 400
+    assert "latex" in res.json()["detail"]
+
+
+def test_a_published_system_may_still_say_how_it_is_read(client, db):
+    # The freeze protects verdicts, and which spelling a checked term is *shown*
+    # in cannot reach one — so this is the one field it does not cover. Exactly
+    # the systems worth reading are published.
+    owner = _register_login(client, "ada@example.com")
+    system_id = _seed_spec(db, owner, zfc_spec(), published=True)
+    _store_horseshoe(db, system_id)
+
+    res = client.patch(
+        f"/api/formal-systems/{system_id}", json={"default_notation": "horseshoe"}
+    )
+    assert res.status_code == 200
+    assert res.json()["default_notation"] == "horseshoe"
+
+    # Everything else about a published system stays frozen, including a rename
+    # riding along in the same request as an allowed change.
+    assert client.patch(f"/api/formal-systems/{system_id}", json={"name": "Renamed"}).status_code == 409
+    assert (
+        client.patch(
+            f"/api/formal-systems/{system_id}",
+            json={"name": "Renamed", "default_notation": None},
+        ).status_code
+        == 409
+    )
+    assert client.get(f"/api/formal-systems/{system_id}").json()["default_notation"] == "horseshoe"
+
+
+def test_repointing_the_parent_clears_a_default_the_new_chain_cannot_serve(client, db):
+    # A notation is the chain's, so a new parent is a new set of readings — and a
+    # default chosen under the old one can end up naming nothing. Storing it
+    # anyway would leave the editor showing a reading that can never be served.
+    _register_login(client, "ada@example.com")
+    old_parent = client.post("/api/formal-systems", json={"name": "Old parent"}).json()
+    new_parent = client.post("/api/formal-systems", json={"name": "New parent"}).json()
+    _store_horseshoe(db, old_parent["id"])
+    for parent in (old_parent, new_parent):
+        client.patch(f"/api/formal-systems/{parent['id']}", json={"published": True})
+
+    child = client.post(
+        "/api/formal-systems", json={"name": "Child", "inherits_from_id": old_parent["id"]}
+    ).json()
+    # Inherited, so the child can be read through it and may default to it.
+    assert client.get(f"/api/formal-systems/{child['id']}").json()["notations"] == ["horseshoe"]
+    set_it = client.patch(
+        f"/api/formal-systems/{child['id']}", json={"default_notation": "horseshoe"}
+    )
+    assert set_it.json()["default_notation"] == "horseshoe"
+
+    moved = client.patch(
+        f"/api/formal-systems/{child['id']}", json={"inherits_from_id": new_parent["id"]}
+    )
+    assert moved.status_code == 200
+    assert moved.json()["notations"] == []
+    assert moved.json()["default_notation"] is None
+
+
+def test_repointing_the_parent_keeps_a_default_the_new_chain_still_offers(client, db):
+    # The clearing above is about what the chain can serve, not about the repoint
+    # itself: a default the new parent also offers is left alone.
+    _register_login(client, "ada@example.com")
+    old_parent = client.post("/api/formal-systems", json={"name": "Old parent"}).json()
+    new_parent = client.post("/api/formal-systems", json={"name": "New parent"}).json()
+    _store_horseshoe(db, old_parent["id"])
+    _store_horseshoe(db, new_parent["id"])
+    for parent in (old_parent, new_parent):
+        client.patch(f"/api/formal-systems/{parent['id']}", json={"published": True})
+
+    child = client.post(
+        "/api/formal-systems", json={"name": "Child", "inherits_from_id": old_parent["id"]}
+    ).json()
+    client.patch(f"/api/formal-systems/{child['id']}", json={"default_notation": "horseshoe"})
+
+    moved = client.patch(
+        f"/api/formal-systems/{child['id']}", json={"inherits_from_id": new_parent["id"]}
+    )
+    assert moved.status_code == 200
+    assert moved.json()["default_notation"] == "horseshoe"

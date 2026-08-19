@@ -311,6 +311,9 @@ class FormalSystemDetail(FormalSystemSummary):
     # grammar they are written in. Names only; the templates are served by
     # rendering a proof through one, not by handing the map to a client.
     notations: list[str] = Field(default_factory=list)
+    # Which of those a reader is shown first. Null leaves the choice to the
+    # client, which prefers a TeX reading where the system has one.
+    default_notation: str | None = None
 
 
 class FormalSystemCreate(BaseModel):
@@ -327,6 +330,10 @@ class FormalSystemUpdate(BaseModel):
     # production templates to it, so a system that means to be token-separated is
     # told where it is not.
     token_separated: bool | None = None
+    # Which stored notation a reader is shown first. Null is meaningful — it
+    # clears the setting and hands the choice back to the client — so absent and
+    # null differ here, and the route reads membership rather than truthiness.
+    default_notation: str | None = None
     # True sets published_at to now, False clears it. Absent leaves it unchanged.
     published: bool | None = None
 

@@ -745,6 +745,7 @@ def _detail(
         # notation is thousands of rows and a detail view wants none of them, so
         # the names come from a distinct query at the callers that serve a reader.
         notations=list(notations),
+        default_notation=system.default_notation,
     )
 
 
@@ -1352,7 +1353,13 @@ async def update_system(
     # verified against it stay valid (child-part edits are blocked the same way in
     # the system-parts router). Reject any change; an empty PATCH is a harmless
     # no-op. Publishing a *draft* is still allowed (handled below).
-    if system.published_at is not None and changes:
+    #
+    # `default_notation` is exempt, and the freeze's own rationale is why: it
+    # picks which stored spelling a reader is *shown* a checked term in, so it
+    # cannot reach a verdict. Freezing it would leave exactly the systems worth
+    # reading — a published corpus — unable to say how they are read.
+    frozen = {k: v for k, v in changes.items() if k != "default_notation"}
+    if system.published_at is not None and frozen:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "This system is published and can no longer be edited or unpublished. "
@@ -1386,6 +1393,29 @@ async def update_system(
         await session.run_sync(lambda sync: discard_system_checks(sync, system_id))
     if changes.get("token_separated") is not None:
         system.token_separated = changes["token_separated"]
+
+    # Membership, not truthiness: null clears the setting, and only a name the
+    # system can actually be read through may be stored — a default naming a
+    # notation nobody defined would render as an error on every proof of it.
+    if "default_notation" in changes:
+        chosen = changes["default_notation"]
+        if chosen is not None and chosen not in await notation_names(session, system_id):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"This system has no notation named {chosen!r} to be read through.",
+            )
+        system.default_notation = chosen
+
+    # Repointing the parent changes which notations the chain offers, so a
+    # default chosen under the old one can end up naming nothing. Clear it here
+    # rather than leave it stored: a reader falls back either way, but a name
+    # that can never be served would still sit in the editor looking chosen —
+    # and, where the new chain has no notations at all, with no control on
+    # screen to clear it from. Runs after the block above, so a PATCH setting
+    # both has already validated the new name against the new chain.
+    if "inherits_from_id" in changes and system.default_notation is not None:
+        if system.default_notation not in await notation_names(session, system_id):
+            system.default_notation = None
 
     # Publishing makes a system world-readable and is a one-way door — once set,
     # the freeze above rejects any later edit or unpublish. `published: false`

@@ -540,6 +540,9 @@ export interface FormalSystemDetail extends FormalSystemSummary {
 	 * grammar they are written in. Names only — the templates never leave the
 	 * server; a client asks for a rendering by passing one to `proofs.structure`. */
 	notations: string[];
+	/** Which of those a reader is shown first. Null leaves the choice here — see
+	 * `preferredNotation`, which prefers a TeX reading where the system has one. */
+	default_notation: string | null;
 }
 
 /** One bound variable of a definition's defining form, as the engine reads it.
@@ -592,6 +595,9 @@ export interface FormalSystemUpdate {
 	published?: boolean;
 	/** See declarative.SystemSpec.token_separated. */
 	token_separated?: boolean;
+	/** Which stored notation a reader is shown first; null clears the setting.
+	 * Unlike the rest, editable on a published system — it is presentation only. */
+	default_notation?: string | null;
 }
 
 // --- Relations between systems (the general edge) ---------------------------

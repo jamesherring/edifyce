@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/svelte';
+import userEvent from '@testing-library/user-event';
 import Page from './+page.svelte';
 import { auth } from '$lib/auth.svelte';
 import { api, ApiError } from '$lib/api';
@@ -96,10 +97,26 @@ function payloadLine(over: Partial<ProofLine> = {}): ProofLine {
 	};
 }
 
-/** A system whose only interesting features are its notations and where it came
- *  from — both of which the proof page reads off the system, not the proof. */
+/** A system whose only interesting features are its notations, which reading it
+ *  opens in, and where it came from — all of which the proof page reads off the
+ *  system, not the proof. `lines` is carried because the page reads the primary
+ *  line type off it, and a fixture without one throws where the real payload
+ *  never would. */
 function system(over: Record<string, unknown> = {}) {
-	return { name: 'set.mm', notations: [], provenance: null, ...over };
+	return {
+		name: 'set.mm',
+		notations: [],
+		default_notation: null,
+		lines: [],
+		provenance: null,
+		...over
+	};
+}
+
+/** Choose a reading from the notation picker, by the label the option carries. */
+async function pickReading(label: string) {
+	await userEvent.click(await screen.findByRole('combobox', { name: 'Reading' }));
+	await userEvent.click(await screen.findByText(label));
 }
 
 function detail(over: Partial<ProofDetail> = {}): ProofDetail {
@@ -142,20 +159,6 @@ function documentation(over: Partial<LabelDescription> = {}): LabelDescription {
 		claims: [],
 		...over
 	};
-}
-
-/** Sign a reader in. Verifying a proof needs an account — it rebuilds the whole
- *  system and re-checks against it — so a test that clicks Verify has to. */
-async function signIn() {
-	apiMock.me.mockResolvedValue({
-		id: 'u1',
-		email: 'a@b.c',
-		is_active: true,
-		is_superuser: false,
-		is_verified: true,
-		display_name: 'Ada'
-	});
-	await auth.refresh();
 }
 
 beforeEach(async () => {
@@ -274,7 +277,7 @@ describe('the proof detail page', () => {
 		await waitFor(() => expect(screen.getByText('( sqrt ` 2 ) e. RR')).toBeInTheDocument());
 		// One view, not a source pane beside a verification pane saying the same
 		// thing: the source block is the fallback for a proof with no structure.
-		expect(screen.queryByText('As written; verify it to see it line by line.')).toBeNull();
+		expect(screen.queryByText('As written. Checking it happens in the editor.')).toBeNull();
 		expect(screen.getByText('by HYP')).toBeInTheDocument();
 	});
 
@@ -295,8 +298,9 @@ describe('the proof detail page', () => {
 		);
 		render(Page);
 
+		// No TeX notation and no stored default, so it opens in the source.
 		await waitFor(() => expect(screen.getByText('( sqrt ` 2 ) e. RR')).toBeInTheDocument());
-		(await screen.findByRole('button', { name: 'unicode' })).click();
+		await pickReading('unicode');
 
 		// The same row, diagnostics and all — a notation re-spells the term, it
 		// does not fetch a second rendering of the line.
@@ -304,7 +308,9 @@ describe('the proof detail page', () => {
 		expect(screen.getByText('by HYP')).toBeInTheDocument();
 	});
 
-	it('typesets a latex reading instead of showing its source', async () => {
+	it('opens a system with a TeX notation typeset, without being asked', async () => {
+		// Typeset mathematics is the friendlier read, so a system carrying a TeX
+		// notation opens in it rather than in the source spelling.
 		apiMock.proofs.get.mockResolvedValue(detail());
 		apiMock.systems.get.mockResolvedValue(system({ notations: ['latex'] }));
 		apiMock.proofs.structure.mockImplementation(async (_id: string, name?: string) =>
@@ -314,11 +320,40 @@ describe('the proof detail page', () => {
 		);
 		render(Page);
 
-		(await screen.findByRole('button', { name: 'latex' })).click();
-
 		// `.katex-html` is the rendering; the TeX stays in the DOM beside it, in
 		// KaTeX's MathML annotation, which is what a screen reader reads.
 		await waitFor(() => expect(document.querySelector('.katex-html')).not.toBeNull());
+		// And the source was never rendered on the way there — one read, not two.
+		expect(apiMock.proofs.structure).toHaveBeenCalledTimes(1);
+	});
+
+	it('opens in the reading the system stores, over the TeX one', async () => {
+		apiMock.proofs.get.mockResolvedValue(detail());
+		apiMock.systems.get.mockResolvedValue(
+			system({ notations: ['unicode', 'latex'], default_notation: 'unicode' })
+		);
+		apiMock.proofs.structure.mockImplementation(async (_id: string, name?: string) =>
+			name === 'unicode'
+				? structure([structureLine({ rendered: '(√‘2) ∈ ℝ' })], 'unicode')
+				: structure([structureLine()])
+		);
+		render(Page);
+
+		await waitFor(() => expect(screen.getByText('(√‘2) ∈ ℝ')).toBeInTheDocument());
+	});
+
+	it('falls back to the source when the stored default names a notation that is gone', async () => {
+		// The setting and the notations are edited apart, so a default can outlive
+		// what it names; asking for it would only earn an error on every proof.
+		apiMock.proofs.get.mockResolvedValue(detail());
+		apiMock.systems.get.mockResolvedValue(
+			system({ notations: [], default_notation: 'unicode' })
+		);
+		apiMock.proofs.structure.mockResolvedValue(structure([structureLine()]));
+		render(Page);
+
+		await waitFor(() => expect(screen.getByText('( sqrt ` 2 ) e. RR')).toBeInTheDocument());
+		expect(apiMock.proofs.structure).toHaveBeenCalledWith('p1', undefined);
 	});
 
 	it('typesets by the reading on screen, not the one being fetched', async () => {
@@ -335,57 +370,19 @@ describe('the proof detail page', () => {
 		);
 		render(Page);
 
-		(await screen.findByRole('button', { name: 'latex' })).click();
+		// Opens typeset, being a system with a TeX notation.
 		await waitFor(() => expect(document.querySelector('.katex-html')).not.toBeNull());
 
 		// Switch back, with the source reading never arriving.
 		apiMock.proofs.structure.mockImplementation(() => new Promise(() => {}));
-		const sourceButton = await screen.findByRole('button', { name: 'Source' });
-		sourceButton.click();
+		await pickReading('Source');
 
-		// The control follows the *selection*, so its active state marks the window
-		// the rows are still the previous reading's — while the latex stays typeset.
-		await waitFor(() => expect(sourceButton.className).toContain('bg-secondary'));
-		expect(document.querySelector('.katex-html')).not.toBeNull();
-	});
-
-	it('offers a signed-out reader the sign-in rather than the check', async () => {
-		// Reading a published proof is open; re-checking one is not, since it rebuilds
-		// the whole system and checks against it. Better a missing button than a 401
-		// after the click.
-		apiMock.proofs.get.mockResolvedValue(detail());
-		render(Page);
-
+		// The picker follows the *selection*, so what it shows marks the window the
+		// rows are still the previous reading's — while the latex stays typeset.
 		await waitFor(() =>
-			expect(screen.getByRole('link', { name: /Sign in to verify/ })).toBeInTheDocument()
+			expect(screen.getByRole('combobox', { name: 'Reading' })).toHaveTextContent('Source')
 		);
-		expect(screen.queryByRole('button', { name: 'Verify' })).toBeNull();
-	});
-
-	it('drops the previous check’s lines when a new verdict arrives', async () => {
-		// The badge is `result`'s and the rows were the structure's, so leaving the
-		// structure up across a verify puts a fresh "Valid" over stale red rows.
-		apiMock.proofs.get.mockResolvedValue(detail());
-		apiMock.proofs.structure.mockResolvedValueOnce(
-			structure([structureLine({ valid: false, invalid_message: 'MP does not apply.' })])
-		);
-		apiMock.proofs.verify.mockResolvedValue({
-			success: true,
-			errors: [],
-			proof: { indicator: 'ok', lines: [payloadLine({ display: 'x = x' })] }
-		});
-		await signIn();
-		render(Page);
-
-		await waitFor(() => expect(screen.getByText('MP does not apply.')).toBeInTheDocument());
-
-		// The re-read never lands, so what is on screen is what the verify itself
-		// returned — which is the point: fresh, not stale.
-		apiMock.proofs.structure.mockImplementation(() => new Promise(() => {}));
-		screen.getByRole('button', { name: 'Verify' }).click();
-
-		await waitFor(() => expect(screen.getByText('x = x')).toBeInTheDocument());
-		expect(screen.queryByText('MP does not apply.')).toBeNull();
+		expect(document.querySelector('.katex-html')).not.toBeNull();
 	});
 
 	it('does not ask what a never-checked proof rests on', async () => {
@@ -398,61 +395,6 @@ describe('the proof detail page', () => {
 		expect(apiMock.proofs.provenance).not.toHaveBeenCalled();
 	});
 
-	it('lets the check’s provenance read win over the page load’s, however they land', async () => {
-		// Both reads are for the same proof, so a page-level sequence cannot tell
-		// them apart — and the pre-verify one resolving last would report the
-		// previous check's debts as this one's, or none at all.
-		const assumed = {
-			theorem_id: 't1',
-			formal_system_id: 'sys1',
-			label: 'riemann',
-			statement: 'RH',
-			reason: 'Open.',
-			source: null
-		};
-		let releaseFirst: (value: unknown) => void = () => {};
-		apiMock.proofs.get.mockResolvedValue(detail());
-		apiMock.proofs.verify.mockResolvedValue({
-			success: true,
-			errors: [],
-			proof: { indicator: 'ok', lines: [payloadLine()] }
-		});
-		// The page load's read hangs; the check's read answers immediately.
-		apiMock.proofs.provenance
-			.mockImplementationOnce(
-				() =>
-					new Promise((resolve) => {
-						releaseFirst = resolve;
-					})
-			)
-			.mockResolvedValueOnce({
-				proof_id: 'p1',
-				assumes: [assumed],
-				unresolved: [],
-				unread_lemmas: [],
-				complete: true
-			});
-		await signIn();
-		render(Page);
-
-		await waitFor(() => expect(screen.getByRole('button', { name: 'Verify' })).toBeEnabled());
-		screen.getByRole('button', { name: 'Verify' }).click();
-
-		expect(await screen.findByRole('link', { name: 'riemann' })).toBeInTheDocument();
-
-		// Now the stale one lands, claiming the proof rests on nothing.
-		releaseFirst({
-			proof_id: 'p1',
-			assumes: [],
-			unresolved: [],
-			unread_lemmas: [],
-			complete: true
-		});
-		await waitFor(() =>
-			expect(screen.getByRole('link', { name: 'riemann' })).toBeInTheDocument()
-		);
-	});
-
 	it('shows a cached verdict’s lines instead of the source beside them', async () => {
 		// A proof checked before the structure store existed has a payload and no
 		// rows to project. Falling back to it in *both* places would render the
@@ -463,7 +405,7 @@ describe('the proof detail page', () => {
 		render(Page);
 
 		await waitFor(() => expect(screen.getByText('( sqrt ` 2 ) e. RR')).toBeInTheDocument());
-		expect(screen.queryByText('As written; verify it to see it line by line.')).toBeNull();
+		expect(screen.queryByText('As written. Checking it happens in the editor.')).toBeNull();
 	});
 });
 

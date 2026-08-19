@@ -5,6 +5,8 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
 	import { Textarea } from '$lib/components/ui/textarea';
+	import { Combobox, type ComboboxOption } from '$lib/components/ui/combobox';
+	import { isTeX } from '$lib/math';
 	import * as Card from '$lib/components/ui/card';
 	import * as Alert from '$lib/components/ui/alert';
 	import PageContainer from '$lib/components/PageContainer.svelte';
@@ -49,6 +51,7 @@
 
 	let confirmOpen = $state(false);
 	let deleting = $state(false);
+	let savingReading = $state(false);
 
 	let validation = $state<SystemValidation | null>(null);
 	let validating = $state(false);
@@ -61,6 +64,26 @@
 	// the grammar reference shown beside it.
 	const symbols = $derived(systemSymbols(system));
 	const notation = $derived(notationReference(system));
+
+	// The picker's value for "no stored default", which is not a notation name — it
+	// hands the choice to the reader's client, which prefers a typeset reading.
+	// Real notations are prefixed rather than passed bare, so the sentinel cannot
+	// collide with a notation an author happened to name "automatic".
+	const AUTOMATIC = 'automatic';
+	const asOption = (name: string) => `n:${name}`;
+	const optionFor = (name: string | null) => (name === null ? AUTOMATIC : asOption(name));
+	const readingOptions = $derived<ComboboxOption[]>([
+		{ value: AUTOMATIC, label: 'Automatic', hint: 'typeset where there is one' },
+		...(system?.notations ?? []).map((n) => ({
+			value: asOption(n),
+			label: n,
+			hint: isTeX(n) ? 'typeset' : undefined
+		}))
+	]);
+	// What the picker displays. Bound, so the combobox owns it once the reader
+	// picks — which is why every path that settles the stored setting puts it
+	// back, and a rejected save does not leave its reading on screen as chosen.
+	let readingPick = $state<string>(AUTOMATIC);
 
 	// Only the details form defers its save — every part saves from its own sheet
 	// the moment you confirm it — so that's all this guards.
@@ -95,6 +118,7 @@
 			const detail = await api.systems.get(id);
 			if (seq !== loadSeq) return false;
 			system = detail;
+			readingPick = optionFor(detail.default_notation);
 			if (hydrateForm) {
 				name = detail.name;
 				description = detail.description ?? '';
@@ -185,6 +209,32 @@
 		}
 	}
 
+	// Which reading a proof of this system opens in. Saves on select rather than
+	// through the details form, which is the convention for everything that isn't
+	// name-and-description — and which is what lets it be offered on a *published*
+	// system, where that form is frozen and this setting is not.
+	async function saveReading(picked: string) {
+		if (!system || savingReading) return;
+		const id = system.id;
+		savingReading = true;
+		try {
+			const updated = await api.systems.update(id, {
+				default_notation: picked === AUTOMATIC ? null : picked.slice(asOption('').length)
+			});
+			if (page.params.id !== id) return;
+			system = updated;
+			toastSuccess('Reading saved.');
+		} catch (err) {
+			if (page.params.id === id) toastError(err instanceof ApiError ? err.message : String(err));
+		} finally {
+			savingReading = false;
+			// Back to whatever the server holds — on a refusal that is the setting
+			// *unchanged*, and the picker would otherwise keep showing the reading it
+			// rejected. On success this is the value already on screen.
+			if (page.params.id === id && system) readingPick = optionFor(system.default_notation);
+		}
+	}
+
 	// Publishing is one-way: a published system is frozen (this control only
 	// renders for drafts), so there's no unpublish path.
 	async function publish() {
@@ -246,6 +296,44 @@
 
 <svelte:head><title>{system ? `Edit ${system.name}` : 'Edit system'} — Edifyce</title></svelte:head>
 
+<!-- Offered to published and draft systems alike: it picks which stored spelling
+     a reader is shown a checked term in, so it cannot reach a verdict, and the
+     freeze exists to protect verdicts. -->
+{#snippet readingCard(sys: FormalSystemDetail)}
+	<!-- A stored default keeps the card up even with nothing to pick from, so a
+	     stale one is always clearable rather than stranded off-screen. -->
+	{#if sys.notations.length > 0 || sys.default_notation}
+		<Card.Root>
+			<Card.Header>
+				<Card.Title>Reading</Card.Title>
+				<Card.Description>
+					Which of this system's notations a proof of it opens in. Readers can still switch to
+					any other, or to the source it was written in.
+				</Card.Description>
+			</Card.Header>
+			<Card.Content>
+				<div class="flex items-center gap-3">
+					<Combobox
+						options={readingOptions}
+						bind:value={readingPick}
+						onSelect={saveReading}
+						disabled={savingReading}
+						ariaLabel="Opens in"
+						searchPlaceholder="Search readings…"
+						emptyText="No readings."
+						class="w-64"
+					/>
+					{#if savingReading}
+						<span class="inline-flex items-center gap-1 text-xs text-muted-foreground">
+							<LoaderCircle class="size-3 animate-spin" /> Saving…
+						</span>
+					{/if}
+				</div>
+			</Card.Content>
+		</Card.Root>
+	{/if}
+{/snippet}
+
 <PageContainer maxWidth="5xl" gap>
 	<BackLink href={`/systems/${page.params.id}`} label="Back to system" />
 
@@ -279,6 +367,8 @@
 				can't be edited or unpublished. <a class="underline" href={`/systems/${system.id}`}>View the system</a>.
 			</Alert.Description>
 		</Alert.Root>
+
+		{@render readingCard(system)}
 
 		<Card.Root class="border-destructive/40">
 			<Card.Header>
@@ -348,6 +438,8 @@
 				</form>
 			</Card.Content>
 		</Card.Root>
+
+		{@render readingCard(system)}
 
 		<!-- Wide screens get the outline and the compile status pinned beside the
 		     contents, so neither scrolls out of reach while editing a long system. -->

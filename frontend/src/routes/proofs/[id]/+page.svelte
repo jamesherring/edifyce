@@ -15,6 +15,8 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
 	import * as Alert from '$lib/components/ui/alert';
+	import { Combobox, type ComboboxOption } from '$lib/components/ui/combobox';
+	import { isTeX, preferredNotation } from '$lib/math';
 	import {
 		api,
 		ApiError,
@@ -27,8 +29,6 @@
 	import { readLines, resultLines } from '$lib/reading';
 	import { auth } from '$lib/auth.svelte';
 	import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
-	import Play from '@lucide/svelte/icons/play';
-	import LoaderCircle from '@lucide/svelte/icons/loader-circle';
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import Layers from '@lucide/svelte/icons/layers';
 	import CircleHelp from '@lucide/svelte/icons/circle-help';
@@ -44,9 +44,10 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 
-	let verifying = $state(false);
+	// The last check's verdict, read off the proof rather than run here: this page
+	// reads a proof, and checking one is the editor's job. It survives because the
+	// rows fall back to it for a proof checked before the structure store existed.
 	let result = $state<VerifyResponse | null>(null);
-	let requestError = $state<string | null>(null);
 
 	// How the proof is being read. `null` is the source it was written in; the
 	// rest are the parent system's stored notations. Either way the *rows* come
@@ -57,6 +58,21 @@
 	let structure = $state<ProofStructure | null>(null);
 	let notationError = $state<string | null>(null);
 	let reading = $state(false);
+
+	// The picker deals in strings, and the source spelling is `null` — a reading
+	// in its own right, not the absence of one — so it needs a value of its own.
+	// Real notations are prefixed rather than passed bare, so the sentinel cannot
+	// collide with a notation an author happened to name "source".
+	const SOURCE = 'source';
+	const asOption = (name: string) => `n:${name}`;
+	const readingOptions = $derived<ComboboxOption[]>([
+		{ value: SOURCE, label: 'Source', hint: 'as written' },
+		...notations.map((name) => ({
+			value: asOption(name),
+			label: name,
+			hint: isTeX(name) ? 'typeset' : undefined
+		}))
+	]);
 
 	// The citation graph, fetched beside the detail rather than in it: the detail
 	// read is served by every create and patch too, and none of those wants two
@@ -77,7 +93,6 @@
 
 	// Bumped on every load so late responses from a previous id are dropped.
 	let loadSeq = 0;
-	let verifySeq = 0;
 	// Per-read tokens for the two side panels a check re-reads: see `loadRestsOn`.
 	let citationsSeq = 0;
 	let restsOnSeq = 0;
@@ -87,18 +102,15 @@
 		const seq = ++loadSeq;
 		// Invalidate anything in flight for the previous proof: a late response
 		// would otherwise render its lines, or its error, inside this page.
-		verifySeq++;
 		notationSeq++;
 		// Bumped here as well as at each call site: a detail fetch that fails returns
 		// before those calls, and the previous proof's panel reads would land anyway.
 		citationsSeq++;
 		restsOnSeq++;
-		verifying = false;
 		reading = false;
 		loading = true;
 		error = null;
 		result = null;
-		requestError = null;
 		systemName = null;
 		provenance = null;
 		primaryLineType = null;
@@ -129,16 +141,20 @@
 		loading = false;
 		// Show the last cached verdict immediately, so a revisit isn't blank.
 		if (detail.result) result = { success: detail.valid ?? false, errors: [], proof: detail.result };
-		// The rows this page shows, in the source spelling to begin with.
-		void readIn(null);
-		// Best-effort system name for the header link (readable proofs reference a
-		// readable system, so this normally resolves).
-		void loadSystemName(detail.formal_system_id, seq);
+		// Which notation to open in is the system's to say, so the first structure
+		// read waits on it: one fetch in the reading the reader wanted, rather than
+		// a source render that flips to TeX the moment the system lands. Flagged as
+		// reading up front so the gap shows as loading rather than as "not checked".
+		// (Best-effort: an unreadable system falls back to the source spelling.)
+		reading = true;
+		void loadSystemName(detail.formal_system_id, seq).then((opening) => {
+			if (seq === loadSeq) void readIn(opening);
+		});
 		void loadCitations(id);
 		// Only for a proof that has been checked. `valid` is null until one has run,
 		// and the route reads the citations a check *resolved* — so for the rest this
 		// is a request that can only 409, and the report costs a chain load to
-		// produce. Verifying refetches it (see `verify`).
+		// produce.
 		if (detail.valid !== null) void loadRestsOn(id);
 	}
 
@@ -159,9 +175,9 @@
 			// report the *previous* check's debts as this one's.
 			restsOn = null;
 			// A proof that has never been verified has no resolved citations to read
-			// from, and the route says so with a 409 — nothing yet to report, and
-			// the verify button is right there. Anything else is a report that could
-			// not be produced, which silence would render as "rests on nothing".
+			// from, and the route says so with a 409 — nothing yet to report, rather
+			// than a failure. Anything else is a report that could not be produced,
+			// which silence would render as "rests on nothing".
 			const unverified = err instanceof ApiError && err.status === 409;
 			restsOnUnread = unverified
 				? null
@@ -184,19 +200,24 @@
 		}
 	}
 
-	async function loadSystemName(systemId: string, seq: number) {
+	// Returns the notation to open the proof in — the system's own choice, which
+	// is why the first structure read waits on this. Null (including on failure)
+	// is the source spelling, which is readable whatever the system says.
+	async function loadSystemName(systemId: string, seq: number): Promise<string | null> {
 		try {
 			const system = await api.systems.get(systemId);
-			if (seq !== loadSeq) return;
+			if (seq !== loadSeq) return null;
 			systemName = system.name;
 			notations = system.notations;
 			provenance = system.provenance;
 			// First-declared, which is what the parser tries first and what a system
 			// with one line type has only one of.
 			primaryLineType = system.lines[0]?.name ?? null;
+			return preferredNotation(system.notations, system.default_notation);
 		} catch {
 			// Leave the link labelled generically if the system can't be read, and
 			// offer no notations — the source spelling is always readable.
+			return null;
 		}
 	}
 
@@ -278,40 +299,6 @@
 			? proof.documentation
 			: null
 	);
-
-	async function verify() {
-		if (!proof) return;
-		const seq = ++verifySeq;
-		verifying = true;
-		result = null;
-		requestError = null;
-		try {
-			const res = await api.proofs.verify(proof.id);
-			if (seq !== verifySeq) return;
-			result = res;
-			// A check rewrites the structure the rows are read from, so what is on
-			// screen is the previous check's — and dropping it before the refetch is
-			// what stops a fresh verdict badge sitting over stale line verdicts. The
-			// rows fall back to this check's own payload meanwhile, which is right
-			// rather than merely blank.
-			structure = null;
-			void readIn(notation);
-			// The same staleness, one step further out: "Cites" is derived from the
-			// rules the stored lines resolved to, so a check that rewrote them
-			// rewrote it. Both of these carry their own read tokens rather than this
-			// check's — a read belongs to the proof, and outlives the check that
-			// started it.
-			void loadCitations(proof.id);
-			// A check resolves the citations this reads, so a proof verified for the
-			// first time goes from "nothing to report" to its actual debts.
-			void loadRestsOn(proof.id);
-		} catch (err) {
-			if (seq !== verifySeq) return;
-			requestError = err instanceof ApiError ? err.message : String(err);
-		} finally {
-			if (seq === verifySeq) verifying = false;
-		}
-	}
 
 	const isOwner = $derived(!!auth.user && !!proof && proof.owner?.id === auth.user.id);
 
@@ -412,7 +399,6 @@
 
 		<ProofResults
 			{result}
-			{requestError}
 			lines={rows}
 			notation={readAs}
 			proofId={proof.id}
@@ -420,45 +406,25 @@
 			systemId={proof.formal_system_id}
 			{primaryLineType}
 			verdicts={false}
+			indicator={false}
 			title="Proof"
-			idleMessage="Verify the proof to see it line by line."
+			idleMessage={reading ? 'Reading the proof…' : 'This proof has not been checked yet.'}
 		>
 			{#snippet actions()}
-				<!-- Reading a published proof is open; re-checking one is not, since it
-				     rebuilds the whole system and checks against it. Offered only to a
-				     signed-in reader, so the refusal is a missing button rather than a
-				     401 after the click. -->
-				{#if auth.user}
-					<Button onclick={verify} disabled={verifying} size="sm">
-						{#if verifying}
-							<LoaderCircle class="size-4 animate-spin" /> Verifying…
-						{:else}
-							<Play class="size-4" /> Verify
-						{/if}
-					</Button>
-				{:else}
-					<Button href="/login" variant="outline" size="sm">
-						<Play class="size-4" /> Sign in to verify
-					</Button>
+				{#if notations.length > 0}
+					<Combobox
+						options={readingOptions}
+						value={notation === null ? SOURCE : asOption(notation)}
+						onSelect={(picked) =>
+							readIn(picked === SOURCE ? null : picked.slice(asOption('').length))}
+						ariaLabel="Reading"
+						searchPlaceholder="Search readings…"
+						emptyText="No readings."
+						class="w-44"
+					/>
 				{/if}
 			{/snippet}
 			{#snippet controls()}
-				{#if notations.length > 0}
-					<div class="flex flex-wrap items-center gap-1 pt-1" role="group" aria-label="Notation">
-						<Button
-							variant={notation === null ? 'secondary' : 'ghost'}
-							size="sm"
-							onclick={() => readIn(null)}>Source</Button
-						>
-						{#each notations as name (name)}
-							<Button
-								variant={notation === name ? 'secondary' : 'ghost'}
-								size="sm"
-								onclick={() => readIn(name)}>{name}</Button
-							>
-						{/each}
-					</div>
-				{/if}
 				{#if notationError}
 					<Alert.Root variant="destructive" class="mt-2">
 						<TriangleAlert class="size-4" />
@@ -478,7 +444,7 @@
 			<Card.Root>
 				<Card.Header>
 					<Card.Title>Source</Card.Title>
-					<Card.Description>As written; verify it to see it line by line.</Card.Description>
+					<Card.Description>As written. Checking it happens in the editor.</Card.Description>
 				</Card.Header>
 				<Card.Content>
 					<pre class="overflow-x-auto rounded-md border bg-muted/30 p-4 font-mono text-xs leading-relaxed">{proof.source}</pre>

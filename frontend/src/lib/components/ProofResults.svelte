@@ -100,10 +100,15 @@
 		notation?: string | null;
 		title?: string;
 		description?: string;
-		/** Beside the verdict badge — the browse view's Verify button. */
+		/** Top-right of the header — the browse view's notation picker. */
 		actions?: Snippet;
-		/** Under the description — the browse view's notation switch. */
+		/** Under the description — the browse view's reading status and errors. */
 		controls?: Snippet;
+		/** The card-level verdict badge. On for the editor, where a check is the
+		 *  thing being run and its verdict is the answer. Off for a reader, whose
+		 *  page already carries the proof's status beside its title, and where a
+		 *  second copy over the lines only asks to be read as a fresh result. */
+		indicator?: boolean;
 		/** Mark every line, valid ones included. For the editor, where a tick
 		 *  appearing as you type is the feedback; a reader is shown only what is
 		 *  off. */
@@ -139,6 +144,7 @@
 		description = undefined,
 		actions,
 		controls,
+		indicator = true,
 		verdicts = true,
 		primaryLineType = null,
 		proofId = null,
@@ -157,7 +163,7 @@
 		<div class="flex items-center justify-between gap-2">
 			<Card.Title>{title}</Card.Title>
 			<div class="flex shrink-0 items-center gap-2">
-				{#if result?.proof}
+				{#if indicator && result?.proof}
 					{@const meta = TONE[indicatorTone(result.proof.indicator)]}
 					{@const Icon = meta.icon}
 					<Badge variant={meta.badge}><Icon /> {meta.text}</Badge>
