@@ -26,7 +26,7 @@ adapter over it, and the frontend is a thin client over the API.
 | `app/` | FastAPI application. `main.py` = routes (and static-SPA serving); `schemas.py` = Pydantic request/response models. Thin — it delegates to the engine. |
 | `app/auth/` | Authentication (fastapi-users): httponly-cookie + JWT backend, user manager, register/login/logout/`users` routers, and GitHub/Google social login (`oauth.py`, enabled per provider by env). Mounted in `main.py`; needs `DATABASE_URL`. |
 | `app/db/` | Persistence layer: SQLAlchemy 2.0 (async) models + session wiring. Beside the engine, not inside it. A system is normalised rows (`systems.py`), and a verified proof's lines are rows too — each formula interned into the shared term graph (`proof_lines.py` + `terms.py`). Only `theorems` is unused by routes. See `app/db/README.md`. |
-| `migrations/` | Atlas versioned SQL migrations (`atlas.sum`). Config in `atlas.hcl`; models loaded via `tools/atlas/schema.py`. |
+| `migrations/` | Alembic environment (`env.py`) and versioned revisions. Config in `alembic.ini`; the models are loaded straight from `app.db`. |
 | `website/logical/` | The proof engine. This is where the real logic is. |
 | `website/logical/declarative.py` | The `SystemSpec` dataclasses (grammar productions, lines, definitions, axioms, rules) and `build_spec`/`build_system`, which construct a `FormalSystem` straight from one. **This is how systems are built in production.** Also `layered_spec`: a system that inherits from another is built from its ancestors' parts concatenated in front of its own, so the builder and the kernel learn nothing about inheritance. |
 | `website/logical/kernel/` | The trusted checking core: `constructors` (a production projected to kernel data), `terms` (interned, shared-DAG formula trees), `unify` (first-order matching), `side_conditions` (the closed proviso vocabulary), `definitions` (a definitional unfold as a cited step, and the capture half of a definition's admissibility). Hard-codes no logic. |
@@ -200,37 +200,40 @@ API and the UI (see the static-frontend block at the bottom of `app/main.py`).
 ### Database migrations
 
 The database schema is **model-driven**: the SQLAlchemy models in `app/db/` are
-the source of truth, and Atlas diffs them against `migrations/` to plan new SQL.
-After changing a model, generate and commit the migration — don't hand-write it:
+the source of truth, and Alembic compares them against a database to plan a new
+revision. After changing a model, generate and commit the migration — don't
+hand-write it:
 
 ```bash
-atlas migrate diff <name> --env local    # plan a migration from the models
-atlas migrate validate --env local       # read-only: verify atlas.sum integrity
+alembic revision --autogenerate -m "what changed"   # plan a revision
+alembic upgrade head                                # apply it
+alembic check                                       # read-only: models applied?
 ```
 
-`atlas migrate diff` writes a new `migrations/*.sql` **only when the models have
-drifted** from the recorded migrations; on a clean tree it prints "synced" and
-writes nothing. It is *not* a read-only probe — don't run it with a throwaway
-name to "check" for drift, because a real drift leaves a stray migration (and a
-bumped `atlas.sum`) behind. That file-writing behavior is exactly how CI detects
-drift: it runs `atlas migrate diff drift_check` and fails if `migrations/` is
-then dirty (`.github/workflows/migrations.yml`). For a genuinely read-only check
-use `atlas migrate validate`. When you do generate a migration, commit **both**
-the new `migrations/*.sql` file and the updated `migrations/atlas.sum`.
+All three need a database, and `--autogenerate` needs one **at the current head**
+— it diffs the models against what is actually there, so pointed at an empty
+database it would regenerate the whole schema. `scripts/edifyce-dev db up &&
+scripts/edifyce-dev migrate` gives you one; in a web session the cluster on
+`:5433` is already provisioned (see below). The URL comes from `-x url=...`,
+`MIGRATE_URL`, or `DATABASE_URL`, whichever is set first —
+`migrations/env.py` normalises the driver, so the app's own `DATABASE_URL` works.
 
-Atlas needs a throwaway **dev database** (with pgvector) to diff against; how you
-supply it depends on where you're working — see `atlas.hcl` for the `ATLAS_DEV_URL`
-override (its default spins up `docker://pgvector/pg16/dev`). Two gotchas
-wherever you run it:
+`alembic check` is the read-only probe (it is what CI's drift gate runs);
+`revision --autogenerate` is the one that writes a file. Neither is a substitute
+for reading the result: autogenerate does not emit `CREATE EXTENSION`, and it
+silently omits a `use_alter` foreign key from `create_table`. Both are worked
+examples in the baseline revision, and `app/db/README.md` explains why.
 
-- **`psql` rejects a `search_path` query param** in `ATLAS_DEV_URL` — it's
-  Atlas-specific. Strip it (`sed -E 's/[?&]search_path=[^&]*//'`) for raw `psql`;
-  Atlas itself consumes the full URL fine.
-- **Never hand-merge `atlas.sum`.** It's a hash chain Atlas maintains; a manual
-  edit produces a checksum Atlas rejects. If a migration conflicts with `develop`
-  (usually only `atlas.sum` collides, since migration files have distinct
-  timestamps), roll back your migration commit, merge `develop`, then re-run
-  `atlas migrate diff` to regenerate the file and sum on the new base.
+Two things worth knowing when a migration meets `develop`:
+
+- **Revisions are a linked list, not a set.** If someone else's revision merged
+  first, your `down_revision` points at what used to be head — repoint it at the
+  new head and keep one linear chain. CI asserts there is exactly one head; two
+  means `alembic upgrade head` is ambiguous, and `alembic merge` is the fix.
+- **Dropping data has to be declared.** `scripts/check_destructive_migrations.py`
+  fails a PR whose `upgrade()` calls `drop_table`/`drop_column` unless the
+  revision's docstring says `allow-destructive` and why. That check is what
+  replaced `atlas migrate lint`; it is deliberately narrow.
 
 - **Run the tests before and after any change to the engine.** The engine is
   large, largely untyped in its internals, and interconnected — tests are the
@@ -333,14 +336,14 @@ containers and recurring triggers are not wanted here — do the work in the
 session and finish. If a task seems to call for polling or a delayed follow-up,
 surface it to the user instead of scheduling it.
 
-**The Atlas dev database is pre-provisioned in web sessions only.** The session
-setup script installs Atlas, logs it in via `ATLAS_TOKEN`, and starts a Postgres
-+ pgvector cluster on `127.0.0.1:5433` that `ATLAS_DEV_URL` already points at — so
-`atlas migrate diff --env local` works out of the box (this is not present in
-local checkouts, which supply their own dev DB per `atlas.hcl`). The setup runs
-**once at container init**, so after a worker/container restart the server is gone
-while its data dir at `/var/lib/postgresql/pgdev` persists. If `atlas` reports
-`connect: connection refused` on `:5433`, restart it:
+**A Postgres + pgvector cluster is pre-provisioned in web sessions only.** The
+session setup script starts it on `127.0.0.1:5433` — so
+`DATABASE_URL=postgresql://postgres@127.0.0.1:5433/postgres alembic upgrade head`
+works out of the box, and autogenerate has something to diff against (this is not
+present in local checkouts, which provision their own via `scripts/edifyce-dev db
+up`). The setup runs **once at container init**, so after a worker/container
+restart the server is gone while its data dir at `/var/lib/postgresql/pgdev`
+persists. On `connect: connection refused` on `:5433`, restart it:
 
 ```bash
 runuser -u postgres -- /usr/lib/postgresql/16/bin/pg_ctl \

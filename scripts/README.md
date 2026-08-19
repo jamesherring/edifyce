@@ -8,6 +8,7 @@
 | `check_boundary_provisos.py` | Assert that a `$d` still refuses a capture when the citation crosses a layer |
 | `check_provenance.py` | Report, per layer, how much of its mathematics actually comes from lower down |
 | `restore_proofs.py` | Blank a corpus proof's justifications and drive the authoring loop to restore them |
+| `check_destructive_migrations.py` | CI guard: refuse a migration whose `upgrade()` drops data without saying so |
 
 ## `edifyce-dev` — run the whole app with one command
 
@@ -33,7 +34,7 @@ are written to `.edifyce-dev/seed.env`.
 | Command | Does |
 |---|---|
 | `dev` | Hot-reload mode: FastAPI **and** the Vite dev server (`:5173`). |
-| `migrate` | Apply the Atlas migrations to the dev database. |
+| `migrate` | Apply the migrations (`alembic upgrade head`) to the dev database. |
 | `db up \| down \| status` | Manage just Postgres. |
 | `backend up \| down` | Manage just the API. |
 | `frontend build \| dev \| down` | Build the SPA, or run/stop the Vite dev server. |
@@ -52,8 +53,8 @@ Logs and pid files live in `.edifyce-dev/` (git-ignored): `backend.log`,
   local cluster), so `edifyce-dev` targets the same database a bare `uvicorn`
   would — the app reads `DATABASE_URL` first (`app/db/session.py`).
 - **`DATABASE_URL` unset** → the CLI self-provisions an isolated local Postgres
-  (its own data dir on `:5439`, separate from the Atlas dev cluster the web
-  session runs on `:5433` for `atlas migrate diff`).
+  (its own data dir on `:5439`, separate from the cluster a web session
+  provisions on `:5433`).
 
 `POSTGRES_URL` (e.g. a shared Neon dev DB the app would otherwise fall back to)
 is **not** adopted automatically — `seed` writes demo data, which shouldn't land

@@ -1,8 +1,8 @@
 """Engine and session wiring — async for the API, synchronous for batch work.
 
-Kept lazy on purpose: importing this module must not open a connection (the Atlas
-schema loader imports the package offline, and the API should boot without a
-database when `DATABASE_URL` is unset). The engine is created on first use.
+Kept lazy on purpose: importing this module must not open a connection (Alembic's
+`env.py` imports the package to read the models, and the API should boot without
+a database when `DATABASE_URL` is unset). The engine is created on first use.
 
 Both drivers are configured from the *same* environment variable and the same
 pair of URL rules, so a deployment describes its database once

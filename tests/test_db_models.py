@@ -2,7 +2,8 @@
 
 These assert the model metadata without touching a database, so they run in the
 same offline suite as everything else. They exist to catch accidental renames or
-dropped columns/indexes that would silently desync the schema from Atlas.
+dropped columns/indexes that would silently desync the schema from the
+migrations.
 """
 
 import pytest

@@ -1,5 +1,10 @@
 # Replacing Atlas with Alembic
 
+**Status: done.** This was the evaluation written before the switch; it is kept
+as the record of why, and of what was measured. The resulting setup is documented
+in `app/db/README.md`; the cutover runbook is the "Baseline strategy" section
+below, and its step 2 is the part that still has to be run by hand against Neon.
+
 Atlas's pgvector support is a **logged-in** feature, and the account's Atlas Pro
 plan has expired. That is not a partial degradation: with `ATLAS_TOKEN` set, the
 CLI refuses outright, and with it unset the *existing history* is unrunnable —
@@ -76,10 +81,18 @@ Cutover, in order:
 1. Land the `use_alter=True` model change and the Alembic scaffolding, with the
    baseline revision generated and hand-patched as above.
 2. **Before merging**, against both Neon branches (`main` and `develop`), on the
-   unpooled endpoint: `alembic stamp <baseline_rev>` then
-   `DROP TABLE atlas_schema_revisions`. Without the stamp the apply workflow
-   would try to `CREATE TABLE` on a populated database — it fails loudly rather
-   than destructively, but it fails.
+   unpooled endpoint:
+
+   ```bash
+   MIGRATE_URL="$NEON_UNPOOLED_URL" uv run alembic stamp 18fbd4863856
+   psql "$NEON_UNPOOLED_URL" -c 'DROP TABLE IF EXISTS atlas_schema_revisions'
+   ```
+
+   `18fbd4863856` is the baseline revision, and `alembic current` should print it
+   afterwards. Without the stamp the apply workflow would try to `CREATE TABLE`
+   on a populated database — it fails loudly rather than destructively, but it
+   fails. Dropping Atlas's bookkeeping table is not cosmetic: it lives in
+   `public`, so `alembic check` reads it as a table the models do not have.
 3. Merge. `alembic upgrade head` is then a no-op on both, and the next model
    change generates revision two.
 

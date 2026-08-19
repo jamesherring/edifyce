@@ -21,19 +21,22 @@ dependencies = [
 dev = [
     "pytest>=8.3",
     "httpx>=0.27",
-    "atlas-provider-sqlalchemy>=0.2",
     "aiosqlite>=0.20",
-    # A *synchronous* Postgres driver. Two callers, both off the request path:
+    # A *synchronous* Postgres driver. Three callers, all off the request path:
     # the API suites run against a real database instead of SQLite
-    # (tests/database.py), and the batch scripts drive synchronous work directly
+    # (tests/database.py), the batch scripts drive synchronous work directly
     # rather than through the event loop (`app.db.session.get_sync_engine`, which
-    # `scripts/import_metamath.py` and `scripts/restore_proofs.py` reach for).
+    # `scripts/import_metamath.py` and `scripts/restore_proofs.py` reach for), and
+    # Alembic runs its migrations on a plain Connection.
     # Not a runtime dependency: a deployment serves requests, which are async all
-    # the way down, and never runs a script.
+    # the way down, and never runs a script or a migration.
     "psycopg[binary]>=3.2",
     # The suite is a long tail of ~2,100 short tests, so wall-clock is a matter
     # of how many cores it uses. CI runs it with `-n auto --dist loadfile`.
     "pytest-xdist>=3.8.0",
+    # Schema migrations (see `alembic.ini` and `migrations/`). A dev/CI tool: the
+    # apply workflow installs this group, but a running deployment never migrates.
+    "alembic>=1.19.1",
 ]
 
 [tool.uv]

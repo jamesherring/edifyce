@@ -65,10 +65,12 @@ _JSON = JSON().with_variant(JSONB(), "postgresql")
 # OpenAI text-embedding-3-small = 1536). Changing it is a schema migration.
 EMBEDDING_DIMENSIONS = 1536
 
-# pgvector lives in an extension. Emitting its creation on `before_create` puts
-# it into the schema the Atlas provider dumps (which runs metadata.create_all on
-# a mock engine), so the `vector` type and HNSW index resolve. Guarded to
-# Postgres so a non-PG create_all (e.g. a future SQLite test) doesn't choke on it.
+# pgvector lives in an extension. Emitting its creation on `before_create` means
+# a `metadata.create_all` builds a working schema — the `vector` type and HNSW
+# index resolve — which is what the tests and the batch scripts rely on. Guarded
+# to Postgres so a non-PG create_all (a SQLite test database) doesn't choke on it.
+# A *migration* gets no benefit from this: the event fires for `create_all` and
+# not for Alembic, so a revision needing an extension issues its own CREATE.
 event.listen(
     Base.metadata,
     "before_create",

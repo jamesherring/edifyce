@@ -121,8 +121,13 @@ class PromotedTheoremRow(Base):
     # something else: *that* says which entry's hypotheses a proof may cite, and
     # an import sets it too. A promoted entry has both; an imported one only the
     # latter. CASCADE, because an entry cannot outlive its only warrant.
+    #
+    # `use_alter` because this and `proofs.theorem_id` form a reference cycle, and
+    # a tool that sorts tables by their foreign keys cannot order the two. It tells
+    # SQLAlchemy to add this one after both tables exist, which is what lets
+    # Alembic's autogenerate emit a runnable schema (`migrations/env.py`).
     proved_by_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("proofs.id", ondelete="CASCADE"), index=True
+        ForeignKey("proofs.id", ondelete="CASCADE", use_alter=True), index=True
     )
 
     system: Mapped[FormalSystem] = relationship(back_populates="promoted_theorems")
