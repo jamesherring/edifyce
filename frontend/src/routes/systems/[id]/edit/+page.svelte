@@ -65,17 +65,25 @@
 	const symbols = $derived(systemSymbols(system));
 	const notation = $derived(notationReference(system));
 
-	// The picker's value for "no stored default", which is not a notation name —
-	// it hands the choice to the reader's client, which prefers a typeset reading.
-	const AUTOMATIC = ' automatic';
+	// The picker's value for "no stored default", which is not a notation name — it
+	// hands the choice to the reader's client, which prefers a typeset reading.
+	// Real notations are prefixed rather than passed bare, so the sentinel cannot
+	// collide with a notation an author happened to name "automatic".
+	const AUTOMATIC = 'automatic';
+	const asOption = (name: string) => `n:${name}`;
+	const optionFor = (name: string | null) => (name === null ? AUTOMATIC : asOption(name));
 	const readingOptions = $derived<ComboboxOption[]>([
 		{ value: AUTOMATIC, label: 'Automatic', hint: 'typeset where there is one' },
 		...(system?.notations ?? []).map((n) => ({
-			value: n,
+			value: asOption(n),
 			label: n,
 			hint: isTeX(n) ? 'typeset' : undefined
 		}))
 	]);
+	// What the picker displays. Bound, so the combobox owns it once the reader
+	// picks — which is why every path that settles the stored setting puts it
+	// back, and a rejected save does not leave its reading on screen as chosen.
+	let readingPick = $state<string>(AUTOMATIC);
 
 	// Only the details form defers its save — every part saves from its own sheet
 	// the moment you confirm it — so that's all this guards.
@@ -110,6 +118,7 @@
 			const detail = await api.systems.get(id);
 			if (seq !== loadSeq) return false;
 			system = detail;
+			readingPick = optionFor(detail.default_notation);
 			if (hydrateForm) {
 				name = detail.name;
 				description = detail.description ?? '';
@@ -210,7 +219,7 @@
 		savingReading = true;
 		try {
 			const updated = await api.systems.update(id, {
-				default_notation: picked === AUTOMATIC ? null : picked
+				default_notation: picked === AUTOMATIC ? null : picked.slice(asOption('').length)
 			});
 			if (page.params.id !== id) return;
 			system = updated;
@@ -219,6 +228,10 @@
 			if (page.params.id === id) toastError(err instanceof ApiError ? err.message : String(err));
 		} finally {
 			savingReading = false;
+			// Back to whatever the server holds — on a refusal that is the setting
+			// *unchanged*, and the picker would otherwise keep showing the reading it
+			// rejected. On success this is the value already on screen.
+			if (page.params.id === id && system) readingPick = optionFor(system.default_notation);
 		}
 	}
 
@@ -287,7 +300,9 @@
      a reader is shown a checked term in, so it cannot reach a verdict, and the
      freeze exists to protect verdicts. -->
 {#snippet readingCard(sys: FormalSystemDetail)}
-	{#if sys.notations.length > 0}
+	<!-- A stored default keeps the card up even with nothing to pick from, so a
+	     stale one is always clearable rather than stranded off-screen. -->
+	{#if sys.notations.length > 0 || sys.default_notation}
 		<Card.Root>
 			<Card.Header>
 				<Card.Title>Reading</Card.Title>
@@ -300,7 +315,7 @@
 				<div class="flex items-center gap-3">
 					<Combobox
 						options={readingOptions}
-						value={sys.default_notation ?? AUTOMATIC}
+						bind:value={readingPick}
 						onSelect={saveReading}
 						disabled={savingReading}
 						ariaLabel="Opens in"

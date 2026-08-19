@@ -1406,6 +1406,17 @@ async def update_system(
             )
         system.default_notation = chosen
 
+    # Repointing the parent changes which notations the chain offers, so a
+    # default chosen under the old one can end up naming nothing. Clear it here
+    # rather than leave it stored: a reader falls back either way, but a name
+    # that can never be served would still sit in the editor looking chosen —
+    # and, where the new chain has no notations at all, with no control on
+    # screen to clear it from. Runs after the block above, so a PATCH setting
+    # both has already validated the new name against the new chain.
+    if "inherits_from_id" in changes and system.default_notation is not None:
+        if system.default_notation not in await notation_names(session, system_id):
+            system.default_notation = None
+
     # Publishing makes a system world-readable and is a one-way door — once set,
     # the freeze above rejects any later edit or unpublish. `published: false`
     # only reaches here for a draft (already unpublished), so it's a no-op.
