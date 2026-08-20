@@ -30,13 +30,17 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
-from app.db import Base
 from app.db.metamath_store import import_corpus
 from app.db.models import FormalSystem, Proof
 from app.db.proof_lines import ProofLineRow
 from app.db.promoted_theorems import PromotedTheoremRow
 from scripts.backfill_line_citations import backfill
-from tests.database import async_url, database_url, enable_foreign_keys
+from tests.database import (
+    async_url,
+    create_every_table,
+    database_url,
+    enable_foreign_keys,
+)
 from tests.test_metamath_persistence import PROPOSITIONAL
 from website.logical.metamath import parse
 
@@ -44,11 +48,9 @@ from website.logical.metamath import parse
 @pytest.fixture
 def db(tmp_path) -> Iterator[str]:
     url = database_url(tmp_path, "backfill")
-    # Every table, not the import's own list: the backfill loads each system the
-    # ordinary way, and `users` is on the far end of an FK it enforces.
-    engine = create_engine(url)
-    Base.metadata.create_all(engine)
-    engine.dispose()
+    # Every table, not this suite's own list: what it exercises loads a system the
+    # ordinary way, and that reaches most of the schema.
+    create_every_table(url)
     yield url
 
 
@@ -166,12 +168,19 @@ def test_a_system_that_no_longer_builds_is_left_unflagged(db):
     engine = create_engine(db)
     try:
         with Session(engine) as session:
-            # A parent that is not there. `load_chain` cannot walk to the top, and
+            # A chain with no top. `load_chain` cannot walk to one, and
             # `truncated_chain_errors` refuses the prefix rather than building a
             # different system from the one the rows declare — so there is no
             # library order to resolve against.
+            #
+            # A system inheriting from *itself* rather than from an id that is not
+            # there: both are cycles as far as the walk is concerned, and this one
+            # satisfies the foreign key, so it is a state the real database can
+            # actually hold. A dangling id is not — `inherits_from_id` is
+            # `ON DELETE SET NULL`, and Postgres refuses to store one in the first
+            # place.
             for system in session.scalars(select(FormalSystem)):
-                system.inherits_from_id = uuid.uuid4()
+                system.inherits_from_id = system.id
             session.commit()
     finally:
         engine.dispose()

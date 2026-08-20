@@ -23,11 +23,15 @@ from sqlalchemy import NullPool, create_engine, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
-from app.db import Base
 from app.db.descriptions import LabelDescriptionRow, LabelReferenceRow
 from app.db.metamath_store import import_corpus
 from scripts.rebuild_markup import rebuild
-from tests.database import async_url, database_url, enable_foreign_keys
+from tests.database import (
+    async_url,
+    create_every_table,
+    database_url,
+    enable_foreign_keys,
+)
 from tests.test_descriptions_store import MARKED, SOURCE
 from website.logical.metamath import parse
 
@@ -35,9 +39,9 @@ from website.logical.metamath import parse
 @pytest.fixture
 def db(tmp_path) -> Iterator[str]:
     url = database_url(tmp_path, "rebuild")
-    engine = create_engine(url)
-    Base.metadata.create_all(engine)
-    engine.dispose()
+    # Every table, not this suite's own list: what it exercises loads a system the
+    # ordinary way, and that reaches most of the schema.
+    create_every_table(url)
     yield url
 
 

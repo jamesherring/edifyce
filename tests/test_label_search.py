@@ -34,7 +34,13 @@ from app.db.metamath_store import import_corpus
 from app.db.models import Proof
 from app.db.session import get_session
 from app.main import app
-from tests.database import async_url, create_tables, database_url, enable_foreign_keys
+from tests.database import (
+    ON_POSTGRES,
+    async_url,
+    create_tables,
+    database_url,
+    enable_foreign_keys,
+)
 from app.db.label_search import EXCERPT_WIDTH, MAX_ALTERNATIVES, _excerpt
 from tests.test_descriptions_api import LAYERED
 from tests.test_descriptions_store import SOURCE
@@ -732,7 +738,15 @@ def test_the_credit_uses_the_database_case_rules_not_python_s(client, db):
     body = search_many(client, system_id, ["ω", "fallback"])
 
     (hit,) = [h for h in body["items"] if h["label"] == "Ω"]
-    # SQL never folded `Ω` to `ω`, so the second alternative is the only one that
-    # matched, and it matched the title.
-    assert hit["matched"] == "title"
-    assert hit["matched_query"] == 1
+    # Which alternative wins is the database's answer, and the two engines give
+    # different ones — which is the whole point. Postgres folds Unicode, so `ω`
+    # *is* an exact label match and takes the first alternative; SQLite's `lower`
+    # is ASCII-only, so it never matched and the credit falls to the title on the
+    # second. What is being pinned either way is that the credit agrees with the
+    # rank, rather than being recomputed in Python and disagreeing with it.
+    if ON_POSTGRES:
+        assert hit["matched"] == "label"
+        assert hit["matched_query"] == 0
+    else:
+        assert hit["matched"] == "title"
+        assert hit["matched_query"] == 1

@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 
 import app.auth.backend as backend
 from app.db import spec_to_system, system_to_spec
+from app.db.models import FormalSystem
 from app.db.notations_mapping import store_notation
 from app.db.session import get_session
 from app.db.systems import DefinitionRow, RuleRow
@@ -95,6 +96,24 @@ def seed(
             session.add(system)
             session.commit()
             return str(system.id)
+    finally:
+        engine.dispose()
+
+
+def _inherit_from(db_path, system_id: str, parent_id: str) -> None:
+    """Repoint a stored system's parent, without going through the routes.
+
+    The routes refuse what this is for — a chain that cannot be walked to the top
+    — so the row has to be written directly.
+    """
+    engine = create_engine(db_path)
+    try:
+        with Session(engine) as session:
+            system = session.get(FormalSystem, uuid.UUID(system_id))
+            if system is None:
+                raise LookupError(f"no system {system_id}")
+            system.inherits_from_id = uuid.UUID(parent_id)
+            session.commit()
     finally:
         engine.dispose()
 
@@ -600,13 +619,13 @@ def test_a_chain_may_not_be_built_from_part_of_itself(client, db):
     # Building the prefix would compile something the rows do not declare —
     # quietly, for a layer that adds only definitions.
     owner = _register_login(client, "truncated@example.com")
-    orphan = seed(
-        db,
-        first_order_logic_spec(),
-        owner,
-        parent_id=str(uuid.uuid4()),
-        published=False,
-    )
+    orphan = seed(db, first_order_logic_spec(), owner, published=False)
+    # Pointed at itself, which is the shortest chain the walk cannot reach the top
+    # of. A parent id that is simply *absent* would do the same to the walk, but
+    # it is not a state the database can hold: `inherits_from_id` is a foreign key
+    # with `ON DELETE SET NULL`, so a deleted parent leaves a null rather than a
+    # dangling id, and Postgres refuses to store one directly.
+    _inherit_from(db, orphan, orphan)
     body = client.post(f"/api/formal-systems/{orphan}/validate").json()
     assert body["success"] is False
     assert any("could not be loaded" in error for error in body["errors"])

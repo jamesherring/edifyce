@@ -60,6 +60,31 @@ def async_url(url: str) -> str:
     return parsed.set(drivername=driver).render_as_string(hide_password=False)
 
 
+def referenced_closure(tables: list[Table]) -> list[Table]:
+    """`tables` plus everything they point at, transitively.
+
+    A foreign key needs its target to *exist* at ``CREATE TABLE`` time, so a list
+    naming a table but not what it references is not a schema Postgres will
+    build. SQLite accepts one — it resolves a foreign key's target lazily — which
+    is why an incomplete list can sit in a suite for months and only surface when
+    the same tests are pointed at a real database.
+
+    Closing over the references here rather than asking each suite to list them
+    keeps a suite's own list about what that suite *uses*: naming
+    `promoted_theorems` because `proof_lines` has a column pointing at it is
+    bookkeeping the schema can do for itself.
+    """
+    found = list(dict.fromkeys(tables))
+    index = 0
+    while index < len(found):
+        for constraint in found[index].foreign_key_constraints:
+            referred = constraint.referred_table
+            if referred not in found:
+                found.append(referred)
+        index += 1
+    return found
+
+
 def create_tables(url: str, tables: list[Table]) -> None:
     """Give this test an empty schema.
 
@@ -72,7 +97,7 @@ def create_tables(url: str, tables: list[Table]) -> None:
     Deduped, because a suite naming one of the `_always` tables itself is not an
     error — it is a suite whose own list is honest about what it uses.
     """
-    wanted = list(dict.fromkeys([*tables, *_always()]))
+    wanted = referenced_closure([*tables, *_always()])
     if not ON_POSTGRES:
         _copy_empty_schema(url, wanted)
         return
@@ -84,6 +109,24 @@ def create_tables(url: str, tables: list[Table]) -> None:
         metadata.create_all(engine, tables=wanted)
     finally:
         engine.dispose()
+
+
+def create_every_table(url: str) -> None:
+    """Give this test an empty schema with the whole model in it.
+
+    For a suite that exercises something reading the database "the ordinary way"
+    and would have to name most of the schema to say so. It goes through
+    :func:`create_tables` rather than calling ``create_all`` directly, because
+    that is the only place that knows a Postgres run has to *drop* first — a
+    fixture that builds its schema itself leaves the previous test's rows sitting
+    there, and the tests that notice are the ones that count rows.
+    """
+    # Imported here rather than at module scope for the reason `_always` is: a
+    # suite that skips on a missing optional dependency imports this module
+    # first, and pulling in the models at import time would defeat the skip.
+    from app.db import Base
+
+    create_tables(url, list(Base.metadata.tables.values()))
 
 
 # One built schema per distinct table set, keyed by the names in it. Process-local,
