@@ -28,16 +28,18 @@ import pytest
 pytest.importorskip("sqlalchemy")
 pytest.importorskip("regex")
 
+from collections.abc import Iterator
+
 from sqlalchemy import create_engine, select, update
 from sqlalchemy.orm import Session
 
-from app.db import Base
 from app.db.assumptions import AssumptionRow
 from app.db.metamath_store import import_corpus
 from app.db.models import FormalSystem, Proof
 from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
 from app.db.provenance import Provenance, by_layer, provenance
 from app.db.systems import DefinitionRow, RuleRow, SymbolRow
+from tests.database import create_every_table, database_url
 from app.db.terms import TermRow
 from website.logical.metamath import parse
 from website.logical.metamath.setmm import LAYERS
@@ -103,11 +105,15 @@ zf-grammar-pinned $p |- ( A e. A -> ( ph -> A e. A ) ) $= ( wcel ax-1 ) BCAD $.
 
 
 @pytest.fixture
-def session() -> Session:
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine)
-    with Session(engine) as session:
-        yield session
+def session(tmp_path) -> Iterator[Session]:
+    url = database_url(tmp_path)
+    create_every_table(url)
+    engine = create_engine(url)
+    try:
+        with Session(engine) as session:
+            yield session
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture

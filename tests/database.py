@@ -22,11 +22,21 @@ the tables, so a Postgres run is serial by construction — it shares one databa
 rather than one file per test, and ``tests/conftest.py`` refuses to run one under
 xdist for that reason. On SQLite each test gets its own file, copied from a
 prebuilt empty one, and the suite parallelises freely — which is what CI does.
+
+So a suite should ask for its database here — :func:`create_tables`,
+:func:`create_every_table`, or :func:`throwaway_database` — rather than issuing
+``metadata.create_all`` against an engine of its own. Both halves of the above
+live in these functions: a suite that builds its own schema silently opts out of
+running against Postgres at all, and if it is pointed there anyway it never drops
+what the last test left behind. The one thing they cannot offer is *two*
+databases at once, which a Postgres run has no way to give; the two tests that
+need that say so and skip.
 """
 
 from __future__ import annotations
 
 import os
+from itertools import count
 from pathlib import Path
 from shutil import copyfile
 from tempfile import mkdtemp
@@ -127,6 +137,37 @@ def create_every_table(url: str) -> None:
     from app.db import Base
 
     create_tables(url, list(Base.metadata.tables.values()))
+
+
+# One directory for every database :func:`throwaway_database` hands out, and a
+# counter to keep their names apart. Process-local, so an xdist worker has its own.
+_THROWAWAY_DIRECTORY: Path | None = None
+_THROWAWAY_COUNT = count()
+
+
+def throwaway_database(tables: list[Table] | None = None) -> str:
+    """An empty database's URL, for a caller with no ``tmp_path`` to build it in.
+
+    :func:`create_tables` behind a directory this makes for itself. For the suites
+    whose database comes from a plain function rather than a fixture — pytest
+    hands ``tmp_path`` to fixtures and tests, and a module-level helper called
+    from inside a test has neither.
+
+    One directory for the whole process rather than one per call, since nothing
+    cleans these up the way pytest cleans ``tmp_path``. Each call still gets its
+    own database: a distinct file on SQLite, and on Postgres the one shared
+    database, emptied — which is what every other caller gets there too.
+    """
+    global _THROWAWAY_DIRECTORY
+    if _THROWAWAY_DIRECTORY is None:
+        _THROWAWAY_DIRECTORY = Path(mkdtemp(prefix="edifyce-db-"))
+
+    url = database_url(_THROWAWAY_DIRECTORY, f"throwaway-{next(_THROWAWAY_COUNT)}")
+    if tables is None:
+        create_every_table(url)
+    else:
+        create_tables(url, tables)
+    return url
 
 
 # One built schema per distinct table set, keyed by the names in it. Process-local,

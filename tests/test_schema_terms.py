@@ -22,6 +22,8 @@ one could cost correctness.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 from copy import copy
 from typing import TYPE_CHECKING
 
@@ -34,7 +36,8 @@ from sqlalchemy import create_engine, select, update
 from sqlalchemy import delete as sa_delete
 from sqlalchemy.orm import Session
 
-from app.db import Base, spec_to_system
+from app.db import spec_to_system
+from app.db.terms_mapping import delete_system_terms
 from app.db.promoted_theorems import (
     PromotedTheoremBindingRow,
     PromotedTheoremPremiseRow,
@@ -63,7 +66,7 @@ from app.db.systems import (
 from app.db.systems_mapping import system_to_spec
 from app.db.terms import TermChildRow, TermRow
 from app.db.terms_mapping import digest_term
-from tests.database import enable_foreign_keys
+from tests.database import create_tables, database_url, enable_foreign_keys
 from tests.miu_system import miu_spec
 from tests.zfc_systems import scoped_zfc_spec
 from website.logical.build_context import SchemaSlot
@@ -153,13 +156,17 @@ _SYSTEMS = {
 
 
 @pytest.fixture()
-def engine(tmp_path) -> Engine:
-    engine = create_engine(f"sqlite:///{tmp_path / 'schema-terms.db'}")
+def engine(tmp_path) -> Iterator[Engine]:
+    url = database_url(tmp_path, "schema-terms")
+    create_tables(url, _TABLES)
+    engine = create_engine(url)
     # Before the first connection is opened: SQLite takes the pragma per
-    # connection, and the pool hands out the one `create_all` made.
+    # connection, and the pool hands out the one the first caller made.
     enable_foreign_keys(engine)
-    Base.metadata.create_all(engine, tables=_TABLES)
-    return engine
+    try:
+        yield engine
+    finally:
+        engine.dispose()
 
 
 def _schemas(built: EngineSystem) -> list[tuple]:
@@ -647,8 +654,14 @@ def test_a_system_with_stored_schema_terms_can_still_be_deleted(engine: Engine) 
 
     with Session(engine) as session:
         row = session.scalars(select(FormalSystem)).one()
-        # A statement delete, not the ORM cascade: the point is the database's
-        # own referential actions, which is what the delete route relies on.
+        # In the delete route's order: the term graph by hand first, then one
+        # statement delete for the system and everything riding its cascades. Not
+        # the cascade alone — `term_children.child_id` is `NO ACTION`, and a
+        # cascade runs that check against a term before the sibling cascade that
+        # clears its edges, which is the whole reason the route does this itself
+        # (`terms_mapping.delete_system_terms`). What is under test is that the
+        # rules' four references into `terms` survive that order.
+        delete_system_terms(session, row.id)
         session.execute(sa_delete(FormalSystem).where(FormalSystem.id == row.id))
         session.commit()
 

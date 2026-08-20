@@ -20,7 +20,7 @@ pytest.importorskip("sqlalchemy")
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from app.db import Base, store_term
+from app.db import store_term
 from app.db.fingerprints import encode
 from app.db.models import FormalSystem
 from app.db.promoted_theorems import PromotedTheoremPremiseRow, PromotedTheoremRow
@@ -29,6 +29,7 @@ from app.db.retrieval import conclusion_candidates
 from app.db.terms import TermChildRow, TermRow
 from app.db.terms_mapping import alpha_digest
 from website.logical.fingerprint import Fingerprint, compatible, fingerprint
+from tests.database import create_tables, database_url
 from tests.spec_helpers import (
     brackets,
     hyp_rule,
@@ -71,11 +72,11 @@ def engine_context():
 
 
 @pytest.fixture
-def session():
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(
-        engine,
-        tables=[
+def session(tmp_path):
+    url = database_url(tmp_path)
+    create_tables(
+        url,
+        [
             FormalSystem.__table__,
             TermRow.__table__,
             TermChildRow.__table__,
@@ -83,8 +84,12 @@ def session():
             PromotedTheoremPremiseRow.__table__,
         ],
     )
-    with Session(engine) as session:
-        yield session
+    engine = create_engine(url)
+    try:
+        with Session(engine) as session:
+            yield session
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture
@@ -344,35 +349,26 @@ def test_a_label_a_nearer_layer_shadows_is_not_offered(session, engine_context):
     # ancestor entry is not the theorem anyone would reach by naming it. Offering
     # it would spend a `limit` slot on a name that means something else — and
     # could lend its α-digest to the theorem a caller actually gets.
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(
-        engine,
-        tables=[
-            FormalSystem.__table__,
-            TermRow.__table__,
-            TermChildRow.__table__,
-            PromotedTheoremRow.__table__,
-            PromotedTheoremPremiseRow.__table__,
-        ],
+    # The `session` fixture's schema is all this needs — two systems in one
+    # database. It used to build a second engine here and shadow the fixture
+    # with it, which left the fixture's own database open and unused.
+    child = FormalSystem(name="Child", slug="child")
+    parent = FormalSystem(name="Parent", slug="parent")
+    session.add_all([child, parent])
+    session.flush()
+    add_theorem(session, child, engine_context, "id", "(x ∈ y → x ∈ y)")
+    add_theorem(session, parent, engine_context, "id", "(a ∈ b → a ∈ c)")
+    add_theorem(session, parent, engine_context, "other", "(a ∈ b → a ∈ c)")
+    # Nearest first, as an inheritance chain is read.
+    chain = LibraryChain(
+        (LibraryLayer(child.id, "d"), LibraryLayer(parent.id, "d"))
     )
-    with Session(engine) as session:
-        child = FormalSystem(name="Child", slug="child")
-        parent = FormalSystem(name="Parent", slug="parent")
-        session.add_all([child, parent])
-        session.flush()
-        add_theorem(session, child, engine_context, "id", "(x ∈ y → x ∈ y)")
-        add_theorem(session, parent, engine_context, "id", "(a ∈ b → a ∈ c)")
-        add_theorem(session, parent, engine_context, "other", "(a ∈ b → a ∈ c)")
-        # Nearest first, as an inheritance chain is read.
-        chain = LibraryChain(
-            (LibraryLayer(child.id, "d"), LibraryLayer(parent.id, "d"))
-        )
 
-        found = conclusion_candidates(session, chain, "implication")
+    found = conclusion_candidates(session, chain, "implication")
 
-        labels = [(c.label, c.system_id) for c in found.candidates]
-        assert labels == [("id", child.id), ("other", parent.id)]
-        assert found.matched == 2
+    labels = [(c.label, c.system_id) for c in found.candidates]
+    assert labels == [("id", child.id), ("other", parent.id)]
+    assert found.matched == 2
 
 
 # ---------------------------------------------------------------------------

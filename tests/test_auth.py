@@ -15,29 +15,24 @@ pytest.importorskip("aiosqlite")
 from collections.abc import AsyncIterator, Iterator
 
 from fastapi.testclient import TestClient
-from sqlalchemy import NullPool, create_engine
+from sqlalchemy import NullPool
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 import app.auth.backend as backend
 from app.db.models import OAuthAccount, User
 from app.db.session import get_session
 from app.main import app
+from tests.database import async_url, create_tables, database_url
 
 
 @pytest.fixture
 def client(tmp_path, monkeypatch) -> Iterator[TestClient]:
-    db_path = tmp_path / "auth.db"
+    # The schema through the synchronous driver — trivial, and free of the async
+    # engine's event-loop affinity.
+    url = database_url(tmp_path, "auth")
+    create_tables(url, [User.__table__, OAuthAccount.__table__])
 
-    # DDL via a plain sync engine — trivial and free of async event-loop affinity.
-    sync_engine = create_engine(f"sqlite:///{db_path}")
-    User.metadata.create_all(
-        sync_engine, tables=[User.__table__, OAuthAccount.__table__]
-    )
-    sync_engine.dispose()
-
-    async_engine = create_async_engine(
-        f"sqlite+aiosqlite:///{db_path}", poolclass=NullPool
-    )
+    async_engine = create_async_engine(async_url(url), poolclass=NullPool)
     sessionmaker = async_sessionmaker(async_engine, expire_on_commit=False)
 
     async def override_get_session() -> AsyncIterator[AsyncSession]:

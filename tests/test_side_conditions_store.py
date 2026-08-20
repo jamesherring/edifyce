@@ -27,6 +27,7 @@ from app.db.promoted_theorems import (
 from app.db.terms import TermChildRow, TermRow
 from app.db.models import FormalSystem
 from app.db.side_conditions import SideConditionRow
+from tests.database import create_tables, database_url
 from app.db.side_conditions_mapping import (  # grammar under test
     _parse_lines,
     definition_provisos_list,
@@ -113,11 +114,15 @@ def zfc_spec() -> SystemSpec:
 
 
 @pytest.fixture
-def session():
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine, tables=_TABLES)
-    with Session(engine) as session:
-        yield session
+def session(tmp_path):
+    url = database_url(tmp_path)
+    create_tables(url, _TABLES)
+    engine = create_engine(url)
+    try:
+        with Session(engine) as session:
+            yield session
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture

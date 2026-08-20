@@ -14,7 +14,7 @@ pytest.importorskip("sqlalchemy")
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, aliased
 
-from app.db import Base, SideConditionRow, spec_to_system, system_to_spec
+from app.db import SideConditionRow, spec_to_system, system_to_spec
 from app.db.promoted_theorems import (
     PromotedTheoremBindingRow,
     PromotedTheoremPremiseRow,
@@ -22,6 +22,7 @@ from app.db.promoted_theorems import (
 )
 from app.db.terms import TermChildRow, TermRow
 from app.db.models import FormalSystem
+from tests.database import create_tables, database_url
 from app.db.systems import (
     AxiomBindingRow,
     AxiomRow,
@@ -116,11 +117,15 @@ def zfc_spec() -> SystemSpec:
 
 
 @pytest.fixture
-def session():
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine, tables=_SYSTEM_TABLES)
-    with Session(engine) as session:
-        yield session
+def session(tmp_path):
+    url = database_url(tmp_path)
+    create_tables(url, _SYSTEM_TABLES)
+    engine = create_engine(url)
+    try:
+        with Session(engine) as session:
+            yield session
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture

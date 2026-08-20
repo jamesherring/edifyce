@@ -23,10 +23,10 @@ from sqlalchemy.orm import Session
 
 from app.db import alpha_digest, digest_term, store_term, store_terms
 from app.db import terms_mapping
-from app.db.base import Base
 from app.db.models import FormalSystem
 from app.db.terms import TermChildRow, TermRow
 from app.db.terms_mapping import _free_identity, metavariables_only
+from tests.database import create_tables, database_url
 from tests.spec_helpers import (
     brackets,
     equality_prod,
@@ -278,14 +278,17 @@ def test_alpha_digest_handles_shared_dag_without_blowup(context):
 
 
 @pytest.fixture
-def session():
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(
-        engine,
-        tables=[FormalSystem.__table__, TermRow.__table__, TermChildRow.__table__],
+def session(tmp_path):
+    url = database_url(tmp_path)
+    create_tables(
+        url, [FormalSystem.__table__, TermRow.__table__, TermChildRow.__table__]
     )
-    with Session(engine) as session:
-        yield session
+    engine = create_engine(url)
+    try:
+        with Session(engine) as session:
+            yield session
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture

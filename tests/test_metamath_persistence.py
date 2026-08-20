@@ -34,7 +34,6 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
 from app.db import (
-    Base,
     PendingCitations,
     cited_labels,
     load_proof_for_check,
@@ -54,6 +53,7 @@ from app.db import metamath_store
 from app.db.metamath_store import import_corpus
 from app.db.models import FormalSystem, Proof, ProofFolder
 from app.db.claims import LabelClaimRow
+from tests.database import create_tables, database_url, throwaway_database
 from app.db.descriptions import (
     LabelAttributionRow,
     LabelDescriptionRow,
@@ -161,11 +161,15 @@ _TABLES = [
 
 
 @pytest.fixture
-def session():
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine, tables=_TABLES)
-    with Session(engine) as session:
-        yield session
+def session(tmp_path):
+    url = database_url(tmp_path)
+    create_tables(url, _TABLES)
+    engine = create_engine(url)
+    try:
+        with Session(engine) as session:
+            yield session
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture
@@ -881,8 +885,9 @@ def test_a_proof_s_lines_are_written_in_one_statement(database):
     `SELECT`, that `SELECT` autoflushed, and it ran *between* the rows being
     created. Interning every formula first is what lets them go together.
     """
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine, tables=_TABLES)
+    engine = create_engine(throwaway_database(_TABLES))
+    # After the schema exists, so the counter sees the import's statements and
+    # not the DDL.
     seen = _statements(engine)
     with Session(engine) as session:
         report = import_corpus(session, database, name="P")
@@ -898,8 +903,9 @@ def test_writing_a_proof_never_reads_back_the_edges_it_is_about_to_write(databas
     # A freshly created row's antecedent collection is empty by construction, but
     # assigning to it on a *persistent* row makes SQLAlchemy load the collection
     # it is about to replace. That was a wasted round trip per line.
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine, tables=_TABLES)
+    engine = create_engine(throwaway_database(_TABLES))
+    # After the schema exists, so the counter sees the import's statements and
+    # not the DDL.
     seen = _statements(engine)
     with Session(engine) as session:
         import_corpus(session, database, name="P")
@@ -914,8 +920,9 @@ def test_the_deferred_proof_writes_do_not_grow_with_the_corpus(database):
     # theorem promoted after it, publication because a batched run must not make a
     # partial corpus visible. Neither has to be issued a theorem at a time, and
     # this is what says so: a constant number of statements, whatever the corpus.
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine, tables=_TABLES)
+    engine = create_engine(throwaway_database(_TABLES))
+    # After the schema exists, so the counter sees the import's statements and
+    # not the DDL.
     seen = _statements(engine)
     with Session(engine) as session:
         import_corpus(session, database, name="P")

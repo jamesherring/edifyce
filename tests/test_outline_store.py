@@ -13,27 +13,36 @@ import pytest
 pytest.importorskip("regex")
 pytest.importorskip("sqlalchemy")
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from app.db import Base
 from app.db.metamath_store import import_corpus
 from app.db.models import Proof, ProofFolder
 from app.db.outline_mapping import store_outline
-from tests.database import enable_foreign_keys
+from tests.database import enable_foreign_keys, throwaway_database
 from tests.test_metamath_sections import SOURCE
 from website.logical.metamath import parse
 from website.logical.metamath.sections import Section, outline
 
 
-def database() -> Session:
-    engine = create_engine("sqlite://")
+@contextmanager
+def database() -> Iterator[Session]:
+    engine = create_engine(throwaway_database())
     # A folder's children go with it via `ON DELETE CASCADE`, which is the FK
     # doing the work: `store_outline` clears a system with one Core delete and
     # never loads the rows. Postgres honours that unasked; SQLite needs telling.
     enable_foreign_keys(engine)
-    Base.metadata.create_all(engine)
-    return Session(engine)
+    try:
+        with Session(engine) as session:
+            yield session
+    finally:
+        # A context manager rather than a bare `Session`, so the engine behind it
+        # is closed too. On SQLite that only tidied up; against a real database an
+        # engine left open per test holds a connection until the run ends.
+        engine.dispose()
 
 
 def folders(session: Session) -> dict[str, ProofFolder]:

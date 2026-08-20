@@ -15,7 +15,8 @@ pytest.importorskip("sqlalchemy")
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from app.db import Base, spec_to_system
+from app.db import spec_to_system
+from tests.database import create_tables, database_url
 from app.db.fingerprints import decode, encode, pattern_fingerprint
 from app.db.promoted_theorems import PromotedTheoremRow
 from app.db.promoted_theorems_mapping import store_theorem, theorem_digest
@@ -65,11 +66,15 @@ def test_pattern_fingerprint_is_none_without_a_composed_term():
 
 
 @pytest.fixture
-def session():
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine, tables=_TABLES)
-    with Session(engine) as session:
-        yield session
+def session(tmp_path):
+    url = database_url(tmp_path)
+    create_tables(url, _TABLES)
+    engine = create_engine(url)
+    try:
+        with Session(engine) as session:
+            yield session
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture

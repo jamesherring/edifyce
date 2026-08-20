@@ -21,6 +21,8 @@ tests below are what would catch that.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 from typing import TYPE_CHECKING
 
 import pytest
@@ -33,7 +35,8 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
-from app.db import Base, spec_to_system
+from app.db import spec_to_system
+from app.db.terms_mapping import delete_system_terms
 from app.db.definition_terms import load_definition_terms, store_definition_terms
 from app.db.models import FormalSystem, OAuthAccount, Proof, ProofFolder, Theorem, User
 from app.db.promoted_theorems import (
@@ -67,7 +70,7 @@ from app.db.systems import (
 from app.db.systems_mapping import system_to_spec
 from app.db.terms import TermChildRow, TermRow
 from app.db.terms_mapping import digest_term, store_term
-from tests.database import enable_foreign_keys
+from tests.database import create_tables, database_url, enable_foreign_keys
 from tests.spec_helpers import (
     axiom,
     brackets,
@@ -170,11 +173,15 @@ _SYSTEMS = {"declared": subset_spec, "scoped": scoped_spec}
 
 
 @pytest.fixture
-def engine() -> Engine:
-    engine = create_engine("sqlite://")
+def engine(tmp_path) -> Iterator[Engine]:
+    url = database_url(tmp_path)
+    create_tables(url, _TABLES)
+    engine = create_engine(url)
     enable_foreign_keys(engine)
-    Base.metadata.create_all(engine, tables=_TABLES)
-    return engine
+    try:
+        yield engine
+    finally:
+        engine.dispose()
 
 
 def _store(engine: Engine, spec: SystemSpec) -> None:
@@ -674,6 +681,13 @@ def test_a_system_with_stored_definition_terms_can_still_be_deleted(
     # over it; foreign keys are enforced on this engine, so this is a real check.
     _store(engine, subset_spec())
     with Session(engine) as session:
-        session.delete(session.scalars(select(FormalSystem)).one())
+        system = session.scalars(select(FormalSystem)).one()
+        # The term graph first and by hand, which is what the delete route does
+        # and for the reason `TermChildRow.child_id` records: an edge's foreign key
+        # to its *child* is `NO ACTION` on purpose, so that a shared subterm cannot
+        # vanish from under the rows naming it — and a cascade runs that check
+        # against a term before the sibling cascade that clears its edges.
+        delete_system_terms(session, system.id)
+        session.delete(system)
         session.commit()
         assert session.scalars(select(DefinitionRow)).all() == []

@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Awaitable, Callable, TypeVar
+from collections.abc import Awaitable, Callable, Iterator
+from typing import TypeVar
 
 import pytest
 
@@ -21,12 +22,13 @@ pytest.importorskip("regex")
 pytest.importorskip("sqlalchemy")
 pytest.importorskip("aiosqlite")
 
+from contextlib import contextmanager
+
 from sqlalchemy import create_engine, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import Session
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool
 
-from app.db import Base
 from app.db.metamath_store import import_corpus
 from app.db.models import FormalSystem
 from app.db.notations_mapping import (
@@ -43,6 +45,7 @@ from app.db.systems import (
     NotationRuleRow,
 )
 from app.db.terms_mapping import prefetch_terms
+from tests.database import async_url, throwaway_database
 from website.logical.declarative import build_system
 from website.logical.metamath import build_spec, parse
 from website.logical.metamath.definitions import statement_of
@@ -86,10 +89,17 @@ id $p |- ( ph -> ( ps -> ph ) ) $= ( ax-1 ) ABC $.
 T = TypeVar("T")
 
 
-def database() -> Session:
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine)
-    return Session(engine)
+@contextmanager
+def database() -> Iterator[Session]:
+    engine = create_engine(throwaway_database())
+    try:
+        with Session(engine) as session:
+            yield session
+    finally:
+        # A context manager rather than a bare `Session`, so the engine behind it
+        # is closed too. On SQLite that only tidied up; against a real database an
+        # engine left open per test holds a connection until the run ends.
+        engine.dispose()
 
 
 def run(work: Callable[[AsyncSession], Awaitable[T]]) -> T:
@@ -97,15 +107,15 @@ def run(work: Callable[[AsyncSession], Awaitable[T]]) -> T:
 
     Storing a notation is synchronous because the one thing that derives one is an
     import; reading it is async, beside the API that does the reading. So a test
-    covering both ends needs both, and the shared in-memory database is what
-    `StaticPool` is for.
+    covering both ends needs both, and the schema is built through the synchronous
+    driver before the async one connects to the same database.
     """
 
     async def go() -> T:
-        engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
+        engine = create_async_engine(
+            async_url(throwaway_database()), poolclass=NullPool
+        )
         try:
-            async with engine.begin() as connection:
-                await connection.run_sync(Base.metadata.create_all)
             async with AsyncSession(engine) as session:
                 return await work(session)
         finally:

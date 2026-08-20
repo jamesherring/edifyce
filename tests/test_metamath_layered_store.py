@@ -37,7 +37,7 @@ from sqlalchemy.orm import Session
 from app.db import Base
 from app.db.descriptions import LabelDescriptionRow
 from app.db.metamath_store import import_corpus, layered_systems
-from app.db.models import FormalSystem, Proof, ProofFolder
+from app.db.models import FormalSystem, Proof, ProofFolder, User
 from app.db.proof_lines import ProofLineRow
 from app.db.promoted_theorems import PromotedTheoremRow
 from app.db.definition_terms import load_definition_terms
@@ -65,6 +65,7 @@ from website.logical.metamath.setmm import LAYERS
 
 from scripts.check_layering import unreachable_citations
 
+from tests.database import ON_POSTGRES, create_tables, database_url
 from tests.test_metamath_layered_specs import CORPUS, SECTION
 from tests.test_metamath_persistence import _TABLES
 
@@ -85,11 +86,15 @@ _STORE_TABLES = _TABLES + [
 
 
 @pytest.fixture
-def session() -> Iterator[Session]:
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine, tables=_STORE_TABLES)
-    with Session(engine) as handle:
-        yield handle
+def session(tmp_path) -> Iterator[Session]:
+    url = database_url(tmp_path)
+    create_tables(url, _STORE_TABLES)
+    engine = create_engine(url)
+    try:
+        with Session(engine) as handle:
+            yield handle
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture
@@ -148,8 +153,9 @@ def test_an_interrupted_batched_import_publishes_nothing(tmp_path, database) -> 
     # pointed at the library entries they establish. A committed batch cannot be
     # rolled back, so the only defence is to publish nothing until there is
     # something whole to publish.
-    engine = create_engine(f"sqlite:///{tmp_path / 'interrupted.db'}")
-    Base.metadata.create_all(engine, tables=_STORE_TABLES)
+    url = database_url(tmp_path, "interrupted")
+    create_tables(url, _STORE_TABLES)
+    engine = create_engine(url)
 
     def die(report, _checked):
         if report.checked == 2:
@@ -169,8 +175,9 @@ def test_an_interrupted_batched_import_publishes_nothing(tmp_path, database) -> 
 
 
 def test_a_completed_batched_import_publishes_what_verified(tmp_path, database) -> None:
-    engine = create_engine(f"sqlite:///{tmp_path / 'completed.db'}")
-    Base.metadata.create_all(engine, tables=_STORE_TABLES)
+    url = database_url(tmp_path, "completed")
+    create_tables(url, _STORE_TABLES)
+    engine = create_engine(url)
 
     with Session(engine) as writing:
         import_corpus(writing, database, name="Corpus", batch=1)
@@ -191,7 +198,12 @@ def test_an_owned_import_hands_over_the_systems_and_the_proofs(
     # Every layer and every proof, since a spine half-owned would be half in the
     # owner's lists — and the folders deliberately not, because an owned folder
     # reads as a user's private one and an outline is the file's structure.
-    owner = uuid.uuid4()
+    # A real user row rather than a made-up id: `formal_systems.owner_id` is a
+    # foreign key into `users`, which a real database enforces.
+    user = User(email="owner@example.com", hashed_password="x")
+    session.add(user)
+    session.flush()
+    owner = user.id
     import_corpus(session, database, name="Corpus", plan=LAYERS, owner=owner)
 
     assert [system.owner_id for system in systems(session)] == [owner] * 3
@@ -268,6 +280,10 @@ def test_the_library_is_split_the_same_way(session, database) -> None:
     assert where["ax-ext"] == "ZF set theory"
 
 
+@pytest.mark.skipif(
+    ON_POSTGRES,
+    reason="needs two independent databases; a Postgres run shares one",
+)
 def test_layering_changes_nothing_about_what_was_checked(session, database) -> None:
     # **The headline**, and §7.2's "the emitted proof text does not change".
     # Same theorems, same verdicts, byte-identical sources — asserted against an
@@ -279,6 +295,7 @@ def test_layering_changes_nothing_about_what_was_checked(session, database) -> N
         for proof in session.scalars(select(Proof))
     }
 
+    # A second, independent database beside the fixture's — see the skip above.
     plain_engine = create_engine("sqlite://")
     Base.metadata.create_all(plain_engine, tables=_STORE_TABLES)
     with Session(plain_engine) as plain:
@@ -737,6 +754,10 @@ def test_a_stored_layered_proof_rechecks_to_the_verdict_the_import_gave_it(
     }
 
 
+@pytest.mark.skipif(
+    ON_POSTGRES,
+    reason="needs two independent databases; a Postgres run shares one",
+)
 def test_the_same_slice_imported_twice_gives_the_same_partition(
     session: Session, database: Database
 ) -> None:
@@ -755,6 +776,7 @@ def test_the_same_slice_imported_twice_gives_the_same_partition(
         for proof in session.scalars(select(Proof))
     }
 
+    # A second, independent database beside the fixture's — see the skip above.
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine, tables=_STORE_TABLES)
     try:

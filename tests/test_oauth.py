@@ -19,13 +19,14 @@ pytest.importorskip("aiosqlite")
 from fastapi.testclient import TestClient
 from fastapi_users import exceptions
 from fastapi_users_db_sqlalchemy import SQLAlchemyUserDatabase
-from sqlalchemy import NullPool, create_engine
+from sqlalchemy import NullPool
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.auth.oauth
 import app.main
 from app.auth.users import UserManager
 from app.db.models import OAuthAccount, User
+from tests.database import async_url, create_tables, database_url
 
 _CREDS = {
     "GOOGLE_OAUTH_CLIENT_ID": "gid",
@@ -108,15 +109,9 @@ def test_only_configured_providers_mount(monkeypatch, restore_modules):
 
 
 def _sessionmaker(tmp_path):
-    db_path = tmp_path / "oauth.db"
-    sync_engine = create_engine(f"sqlite:///{db_path}")
-    User.metadata.create_all(
-        sync_engine, tables=[User.__table__, OAuthAccount.__table__]
-    )
-    sync_engine.dispose()
-    async_engine = create_async_engine(
-        f"sqlite+aiosqlite:///{db_path}", poolclass=NullPool
-    )
+    url = database_url(tmp_path, "oauth")
+    create_tables(url, [User.__table__, OAuthAccount.__table__])
+    async_engine = create_async_engine(async_url(url), poolclass=NullPool)
     return async_sessionmaker(async_engine, expire_on_commit=False)
 
 

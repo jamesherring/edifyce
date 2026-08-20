@@ -1028,8 +1028,9 @@ def test_an_imported_grammar_survives_the_database_round_trip():
     from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
 
-    from app.db import Base, spec_to_system, system_to_spec
+    from app.db import spec_to_system, system_to_spec
     from app.db.models import FormalSystem as FormalSystemRow
+    from tests.database import throwaway_database
 
     database = parse(SQRT2RE_FRAGMENT)
     spec = build_spec(database, name="mm")
@@ -1041,8 +1042,7 @@ def test_an_imported_grammar_survives_the_database_round_trip():
             for p in candidate.productions
         )
 
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine)
+    engine = create_engine(throwaway_database())
     with Session(engine) as session:
         session.add(spec_to_system(spec))
         session.commit()

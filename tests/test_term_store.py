@@ -19,10 +19,11 @@ pytest.importorskip("sqlalchemy")
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, aliased
 
-from app.db import Base, digest_term, store_term
+from app.db import digest_term, store_term
 from app.db.terms_mapping import prefetch_terms
 from app.db.models import FormalSystem, Theorem
 from app.db.terms import TermChildRow, TermRow
+from tests.database import create_tables, database_url
 from tests.spec_helpers import (
     brackets,
     conjunction_prod,
@@ -64,19 +65,23 @@ def engine_context():
 
 
 @pytest.fixture
-def session():
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(
-        engine,
-        tables=[
+def session(tmp_path):
+    url = database_url(tmp_path)
+    create_tables(
+        url,
+        [
             FormalSystem.__table__,
             TermRow.__table__,
             TermChildRow.__table__,
             Theorem.__table__,
         ],
     )
-    with Session(engine) as session:
-        yield session
+    engine = create_engine(url)
+    try:
+        with Session(engine) as session:
+            yield session
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture

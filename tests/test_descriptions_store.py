@@ -18,10 +18,12 @@ import pytest
 pytest.importorskip("regex")
 pytest.importorskip("sqlalchemy")
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from app.db import Base
 from app.db.descriptions import (
     LabelAttributionRow,
     LabelDescriptionRow,
@@ -31,7 +33,7 @@ from app.db.descriptions import (
 from app.db.descriptions_mapping import store_descriptions
 from app.db.metamath_store import import_corpus
 from app.db.models import FormalSystem, Proof
-from tests.database import enable_foreign_keys
+from tests.database import enable_foreign_keys, throwaway_database
 from website.logical.metamath import parse
 from website.logical.metamath.comments import (
     KIND_MAX,
@@ -66,15 +68,22 @@ id $p |- ( ph -> ( ps -> ph ) ) $= ( ax-1 ) ABC $.
 """
 
 
-def database() -> Session:
-    engine = create_engine("sqlite://")
+@contextmanager
+def database() -> Iterator[Session]:
+    engine = create_engine(throwaway_database())
     # An attribution is removed by its parent's `ON DELETE CASCADE`, which is the
     # FK doing the work rather than the ORM: `store_descriptions` clears a system
     # with one Core delete and never loads the rows. Postgres honours that
     # unasked; SQLite needs telling, per connection.
     enable_foreign_keys(engine)
-    Base.metadata.create_all(engine)
-    return Session(engine)
+    try:
+        with Session(engine) as session:
+            yield session
+    finally:
+        # A context manager rather than a bare `Session`, so the engine behind it
+        # is closed too. On SQLite that only tidied up; against a real database an
+        # engine left open per test holds a connection until the run ends.
+        engine.dispose()
 
 
 def described(session: Session) -> dict[str, LabelDescriptionRow]:
@@ -288,11 +297,12 @@ id2 $p |- ( ph -> ( ps -> ph ) ) $= ( ax-1 ) ABC $.
 """
 
 
-def marked() -> Session:
-    session = database()
-    import_corpus(session, parse(MARKED), name="M")
-    session.commit()
-    return session
+@contextmanager
+def marked() -> Iterator[Session]:
+    with database() as session:
+        import_corpus(session, parse(MARKED), name="M")
+        session.commit()
+        yield session
 
 
 def test_a_reference_is_stored_with_the_span_it_occupies() -> None:

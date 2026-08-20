@@ -25,6 +25,8 @@ hundred proofs cost a second rather than a minute.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import itertools
 import uuid
 from copy import copy
@@ -38,7 +40,7 @@ pytest.importorskip("sqlalchemy")
 from sqlalchemy import create_engine, select, update
 from sqlalchemy.orm import Session
 
-from app.db import Base, spec_to_system, store_proof_lines
+from app.db import spec_to_system, store_proof_lines
 from app.db.promoted_theorems import (
     PromotedTheoremBindingRow,
     PromotedTheoremPremiseRow,
@@ -66,6 +68,7 @@ from app.db.systems import (
 )
 from app.db.systems_mapping import system_to_spec
 from app.db.terms import TermChildRow, TermRow
+from tests.database import create_tables, database_url
 from tests.zfc_systems import scoped_zfc_spec
 from website.logical.declarative import (
     LinePart,
@@ -121,10 +124,18 @@ _SHAPES = {
 
 
 @pytest.fixture(scope="module")
-def engine() -> Engine:
-    engine = create_engine("sqlite://")
-    Base.metadata.create_all(engine, tables=_TABLES)
-    return engine
+def engine(tmp_path_factory) -> Iterator[Engine]:
+    # `tmp_path_factory` rather than `tmp_path`: this schema is built once for the
+    # module (the system is compiled once and the proofs are what vary), and
+    # `tmp_path` is per-test. Nothing else in this module asks for a database, so
+    # there is no function-scoped rebuild to drop it out from under these tests.
+    url = database_url(tmp_path_factory.mktemp("round-trip"))
+    create_tables(url, _TABLES)
+    engine = create_engine(url)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture(scope="module")
