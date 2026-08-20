@@ -63,7 +63,7 @@ type theory rather than beside a first-order one.
 |---|---|---|---|
 | **kernel** | [`lean4export`](https://github.com/leanprover/lean4export) | NDJSON: an integer-indexed, hash-consed DAG of `Name`/`Level`/`Expr`, then declarations (`axiom`, `def`, `thm`, `opaque`, `quot`, `inductive` + constructors + recursors). A `thm` carries `value` — the **complete elaborated proof term**. | total, and unusable by us (§2) |
 | **tactic** | [LeanDojo](https://github.com/lean-dojo/LeanDojo) Benchmark 4 | 122,517 theorems/proofs, 259,580 tactics, 167,779 premises, with proof states and name-resolved premises. Built for ML. | none — a tactic is a program, not a derivation |
-| **statement** | doc-gen4 declaration data; HF mirrors | names, signatures, docstrings, dependency edges | none, but this is what Tier 0 and Tier 1 actually consume |
+| **statement** | doc-gen4 declaration data; HF mirrors | names, signatures, docstrings, and the *module* import graph | none, but this is what Tier 0 and Tier 1 actually consume |
 
 The kernel altitude is the only one that carries proof; the statement altitude is
 the only one we can act on. That inversion is the whole finding.
@@ -173,8 +173,22 @@ is *Lean's* verification, attested, not ours.
 
 ### Tier 0 — statements as a corpus
 
-Ingest declaration names, statements, docstrings and the dependency graph; index
+Ingest declaration names, statements, docstrings and the premise graph; index
 them for search and retrieval. No verification claimed, none implied.
+
+**The premise graph is not free, and it is not in the statement.** A `thm`'s
+`type` names only the constants its *proposition* mentions; the declarations its
+*proof* uses appear in `value` and nowhere else. So a reader that ignores `value`
+— which §4 otherwise recommends — cannot produce premise edges at all. Two ways
+to get them, neither of which is checking:
+
+- **traverse `value` for `Expr.const` occurrences.** Walking a proof term to
+  collect the names it references is a traversal, not a verification; nothing
+  about §2 forbids it, and it is the only route if the export is the source.
+- **take LeanDojo's**, which ships 167,779 name-resolved premises already.
+
+What *is* free without proof terms is the **module** import order, which is a
+coarser thing: it orders files, not declarations.
 
 Cheap, no engine reach, and it makes the search layer aware of the largest formal
 library in existence — useful on its own terms and useful as retrieval context
@@ -192,7 +206,7 @@ paper is:
 |---|---|---|
 | segmentation | hard | free — declarations are the segments |
 | ambiguous notation | severe (`informal-source-ingestion-roadmap.md` §1) | absent — everything is name-resolved |
-| dependency order | must be reconstructed | free — the import graph is the order |
+| dependency order | must be reconstructed | module order is free; declaration-level premises need a proof-term traversal (§3, Tier 0) |
 | "by Lemma 2.1 of [7]" | may not exist anywhere | always a resolvable name |
 | **fidelity** | unchecked | **still unchecked** |
 | **alignment** | unchecked | **still unchecked, and structurally harder** |
@@ -235,11 +249,31 @@ not a change to the kernel.
 | piece | shape | notes |
 |---|---|---|
 | **extraction** | `lake exe cache get` then `lean4export`, or take LeanDojo's prebuilt benchmark | building mathlib is hours of CPU and tens of GB; the prebuilt route avoids it and is sufficient for statements + premise graph |
-| **statement reader** | read a `thm`'s `type`, ignore its `value` | the export DAG's integer indices map onto `kernel.terms.intern`'s sharing; only the type is needed |
-| **target system** | either a new `SystemSpec` whose grammar spells Lean's surface syntax (statements parse and render; nothing is checked), or the imported ZFC base with translation on top | the first is mechanical; the second is the actual project |
+| **statement reader** | read a `thm`'s `type`; traverse `value` for its `const` references only | the export DAG's integer indices map onto `kernel.terms.intern`'s sharing. The type is all a *statement* needs — but the premise edges live in `value`, so it is traversed for names and never checked |
+| **target system** | either a new `SystemSpec` whose grammar spells Lean's surface syntax (statements parse and render; nothing is checked), or the imported ZFC base with each statement re-stated in its grammar | the first is mechanical; the second is the actual project, and the re-statement is the alignment judgement below |
 | **storage** | `TheoremSpec` + `promote_from_source` (`website/logical/promotion.py`) + `app/db/assumptions.py` | mirrors `scripts/import_metamath.py` / `metamath/corpus.py`'s `walk` |
-| **cross-foundation citation** | `website/logical/translation.py`, `wrapping.py` | already exists; a Lean-sourced statement need not live in the system its prerequisites do |
+| **cross-foundation alignment** | **nothing reusable** — see below | `translation.py` and `wrapping.py` do not do this, and would refuse to |
 | **licence compliance** | attribution + NOTICE | see §7 |
+
+**Why the last row says "nothing reusable".** It is tempting to reach for the
+cross-system machinery, and it does not reach this far. `Translation` is a
+*rename*: the source's stored term is rebuilt against the target's constructors,
+resolved by the translated name. `StatementTemplate` substitutes the source's
+**own term** into a hole in the target's, so the transferred statement keeps its
+structure and gains a judgement shape around it. Neither re-encodes a term, and
+re-encoding is exactly what Lean → ZFC is.
+
+Worse — better, really — `translation_errors` would **refuse** such a map. It
+requires the target's constructor to admit a *superset* of the source's, asked of
+`Constructor.admits`, and fails closed on a map that narrows. ZFC's grammar does
+not contain Lean's under any rename, so the honest answer is not "unimplemented"
+but "correctly rejected". The alignment step has no mechanical form here: the
+chosen ZFC reading is a judgement, and it is *stored as one* — the target
+assumption's own statement, with the formalization record
+(`informal-source-ingestion-roadmap.md` §4.3) carrying the source name, the
+glossary and who chose it. That is the same answer §3's Tier 1 table gives:
+alignment is unchecked, and pretending a rename could do it would be the one
+shortcut that quietly makes it look checked.
 
 ---
 
